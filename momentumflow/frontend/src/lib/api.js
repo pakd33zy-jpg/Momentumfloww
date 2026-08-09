@@ -28,11 +28,6 @@ export const api = {
   getTradingMode: () => request('/trading-mode'),
   setTradingMode: (mode) => request('/trading-mode', { method: 'POST', body: JSON.stringify({ mode }) }),
 
-  // Trading config (starting capital, etc.)
-  getTradingConfig: () => request('/trading-config'),
-  setStartingCapital: (startingCapital) =>
-    request('/trading-config', { method: 'POST', body: JSON.stringify({ startingCapital }) }),
-
   // Live Gate
   getLiveGate: () => request('/live-gate'),
   setLiveGateItem: (item, value) =>

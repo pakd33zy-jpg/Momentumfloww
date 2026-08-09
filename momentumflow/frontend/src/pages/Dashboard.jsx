@@ -13,19 +13,15 @@ export default function Dashboard() {
   const [gate, setGate] = useState(null);
   const [creds, setCreds] = useState(null);
   const [tradingMode, setTradingMode] = useState(null);
-  const [config, setConfig] = useState(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [s, g, c, m, cfg] = await Promise.all([
-      api.listSessions(), api.getLiveGate(), api.getCredentials(), api.getTradingMode(), api.getTradingConfig(),
-    ]);
+    const [s, g, c, m] = await Promise.all([api.listSessions(), api.getLiveGate(), api.getCredentials(), api.getTradingMode()]);
     setSessions(s);
     setGate(g);
     setCreds(c);
     setTradingMode(m);
-    setConfig(cfg);
     if (s[0]) {
       const trades = await api.getSessionTrades(s[0].id);
       setLastSessionTrades(trades);
@@ -34,8 +30,7 @@ export default function Dashboard() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const seed = config?.startingCapital ?? 100;
-  const totalAssets = seed + sessions.reduce((sum, s) => sum + (s.total_pnl || 0), 0);
+  const totalAssets = 100 + sessions.reduce((sum, s) => sum + (s.total_pnl || 0), 0);
   const lastSession = sessions[0];
   const mode = tradingMode?.mode ?? 'paper';
   const openLiveSession = sessions.find((s) => s.mode === 'live' && s.status === 'running');
@@ -44,7 +39,7 @@ export default function Dashboard() {
     setRunning(true);
     setError(null);
     try {
-      await api.runPaperSession(seed);
+      await api.runPaperSession(100);
       await refresh();
     } catch (err) {
       setError(err.message);
@@ -63,11 +58,11 @@ export default function Dashboard() {
         <div className="mono display" style={{ fontSize: 40, fontWeight: 700, marginTop: 4 }}>
           ${totalAssets.toFixed(2)}
         </div>
-        <div style={{ fontSize: 13, color: totalAssets >= seed ? 'var(--signal-up)' : 'var(--signal-down)', marginTop: 4 }}>
-          {totalAssets >= seed ? '▲' : '▼'} {(totalAssets - seed).toFixed(2)} since ${seed} seed
+        <div style={{ fontSize: 13, color: totalAssets >= 100 ? 'var(--signal-up)' : 'var(--signal-down)', marginTop: 4 }}>
+          {totalAssets >= 100 ? '▲' : '▼'} {(totalAssets - 100).toFixed(2)} since $100 seed
         </div>
         <div style={{ marginTop: 16 }}>
-          <SessionChart trades={lastSessionTrades} startingCapital={lastSession?.starting_capital ?? seed} />
+          <SessionChart trades={lastSessionTrades} startingCapital={lastSession?.starting_capital ?? 100} />
         </div>
       </div>
 

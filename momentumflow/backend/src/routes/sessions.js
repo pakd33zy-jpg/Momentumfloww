@@ -42,8 +42,7 @@ router.get('/:id/trades', (req, res) => {
 // mode available until the live gate is fully unlocked.
 router.post('/paper/run', async (req, res) => {
   try {
-    const config = store.getConfig('tradingConfig', { startingCapital: 100 });
-    const startingCapital = Number(req.body?.startingCapital) || config.startingCapital;
+    const startingCapital = Number(req.body?.startingCapital) || 100;
     const targetWinRate = 0.875; // ~87.5% target per spec; simulation only, not a promise of real returns
 
     const session = createSession({ mode: 'paper', startingCapital });

@@ -8,7 +8,6 @@ import liveGateRouter from './src/routes/liveGate.js';
 import marketRouter from './src/routes/market.js';
 import chatRouter from './src/routes/chat.js';
 import tradingModeRouter from './src/routes/tradingMode.js';
-import tradingConfigRouter from './src/routes/tradingConfig.js';
 import { store } from './src/store.js';
 
 const app = express();
@@ -47,7 +46,6 @@ app.use('/api/live-gate', liveGateRouter);
 app.use('/api/market', marketRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/trading-mode', tradingModeRouter);
-app.use('/api/trading-config', tradingConfigRouter);
 
 app.use((err, req, res, next) => {
   console.error('[error]', err);
