@@ -253,4 +253,4 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`MomentumFlow backend listening
+app.listen(PORT, () => console.log(`MomentumFlow backend listening on port ${PORT}`));
