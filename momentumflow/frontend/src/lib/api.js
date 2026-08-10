@@ -47,5 +47,4 @@ export const api = {
   sendCommand: (text) => request('/chat/command', { method: 'POST', body: JSON.stringify({ text }) }),
 };
 getTradingConfig: () => request('/trading-config'),
-setTradingConfig: (startingCapital) =>
-  request('/trading-config', { method: 'POST', body: JSON.stringify({ startingCapital }) }),
+setTradingConfig: (startingCapital) => request('/trading-config', { method: 'POST', body: JSON.stringify({ startingCapital }) }),
