@@ -1,6 +1,6 @@
 import express from 'express';
-import { getMarketGrid } from '../alpacaClient.js';
-import { MARKETS } from '../models.js';
+import { getMarketGrid } from './alpacaClient.js';
+import { MARKETS } from './models.js';
 
 const router = express.Router();
 

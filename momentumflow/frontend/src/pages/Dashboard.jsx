@@ -1,4 +1,4 @@
-<import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 
 export default function Dashboard() {
@@ -17,6 +17,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [liveBot, setLiveBot] = useState(null);
+  const [liveBusy, setLiveBusy] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -34,6 +36,9 @@ export default function Dashboard() {
       
       const marketGrid = await api.getMarketGrid();
       setMarketData(marketGrid);
+
+      const botStatus = await api.getLiveBotStatus();
+      setLiveBot(botStatus);
       setError('');
     } catch (err) {
       setError('Failed to load data');
@@ -67,12 +72,39 @@ export default function Dashboard() {
     }
   };
 
+  const handleStartLiveBot = async () => {
+    try {
+      setLiveBusy(true);
+      setError('');
+      const status = await api.startLiveBot();
+      setLiveBot(status);
+      await loadData();
+    } catch (err) {
+      setError(`Live bot not started: ${err.message}`);
+    } finally {
+      setLiveBusy(false);
+    }
+  };
+
+  const handleStopLiveBot = async () => {
+    try {
+      setLiveBusy(true);
+      const status = await api.stopLiveBot();
+      setLiveBot(status);
+      await loadData();
+    } catch (err) {
+      setError(`Failed to stop live bot: ${err.message}`);
+    } finally {
+      setLiveBusy(false);
+    }
+  };
+
   const lastSession = sessions[0];
-  const totalAssets = lastSession ? lastSession.current_capital : config.startingCapital;
-  const pnl = lastSession ? lastSession.pnl : 0;
-  const winRate = lastSession && (lastSession.win_count + lastSession.loss_count > 0)
-    ? ((lastSession.win_count / (lastSession.win_count + lastSession.loss_count)) * 100).toFixed(1)
-    : '-';
+  const totalAssets = lastSession ? Number(lastSession.ending_capital ?? lastSession.current_capital ?? lastSession.starting_capital ?? config.startingCapital) : config.startingCapital;
+  const pnl = lastSession ? Number(lastSession.total_pnl ?? lastSession.pnl ?? 0) : 0;
+  const wins = Number(lastSession?.wins ?? lastSession?.win_count ?? 0);
+  const losses = Number(lastSession?.losses ?? lastSession?.loss_count ?? 0);
+  const winRate = (wins + losses > 0) ? ((wins / (wins + losses)) * 100).toFixed(1) : '-';
 
   return (
     <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -338,6 +370,41 @@ export default function Dashboard() {
       </button>
 
       {error && <div style={{ color: '#f87171', marginBottom: '20px', fontSize: '14px' }}>{error}</div>}
+
+      {/* Live Bot */}
+      <div style={{ background: '#1e2139', padding: '18px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: 'bold', color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot</div>
+            <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>
+              Crypto-only live automation. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
+            </div>
+          </div>
+          <div style={{ fontSize: '12px', color: liveBot?.running ? '#4ade80' : '#888' }}>
+            {liveBot?.running ? 'RUNNING' : 'STOPPED'}
+          </div>
+        </div>
+        {liveBot?.lastError && <div style={{ marginTop: '8px', color: '#f87171', fontSize: '12px' }}>{liveBot.lastError}</div>}
+        <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+          <button
+            onClick={handleStartLiveBot}
+            disabled={liveBusy || liveBot?.running}
+            style={{ flex: 1, padding: '12px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', opacity: liveBusy || liveBot?.running ? 0.5 : 1 }}
+          >
+            {liveBusy ? 'Please wait…' : 'Start Live Bot'}
+          </button>
+          <button
+            onClick={handleStopLiveBot}
+            disabled={liveBusy || !liveBot?.running}
+            style={{ flex: 1, padding: '12px', background: '#111827', color: '#fff', border: '1px solid #4b5563', borderRadius: '6px', fontWeight: 'bold', opacity: liveBusy || !liveBot?.running ? 0.5 : 1 }}
+          >
+            Stop Live Bot
+          </button>
+        </div>
+        <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
+          Default live size is capped at $5 per entry. The bot will stop on safety halts or any live-order/data error.
+        </div>
+      </div>
 
       {/* Market Grid */}
       <h3 style={{ color: '#ccc', marginBottom: '15px', marginTop: '30px' }}>Live market grid</h3>

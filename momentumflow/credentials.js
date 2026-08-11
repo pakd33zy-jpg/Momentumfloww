@@ -1,6 +1,6 @@
 import express from 'express';
-import { encrypt, maskSecret } from '../crypto.js';
-import { store } from '../store.js';
+import { encrypt, maskSecret } from './crypto.js';
+import { store } from './store.js';
 
 const router = express.Router();
 

@@ -1,7 +1,7 @@
 import express from 'express';
-import { store } from '../store.js';
-import { evaluateLiveGate } from '../safetyEngine.js';
-import { hasCredentials } from '../alpacaClient.js';
+import { store } from './store.js';
+import { evaluateLiveGate } from './safetyEngine.js';
+import { hasCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 
@@ -32,7 +32,7 @@ router.post('/command', (req, res) => {
       });
     }
     return res.json({
-      reply: 'Live Gate is fully unlocked. Live trades still require you to confirm each order individually — go to Dashboard to place one.',
+      reply: 'Live Gate is fully unlocked. Switch Trading Mode to live, then use Start Live Bot on Dashboard. The bot remains stopped until you explicitly start it.',
       action: { type: 'SHOW_LIVE_GATE_UNLOCKED' },
     });
   }

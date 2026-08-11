@@ -1,118 +1,76 @@
-# MomentumFlow
+# MomentumFlow — updated live-bot build
 
-Trend-aligned momentum trading assistant. Paper-first by default; live trading is
-possible but sits behind multiple deliberate gates. Read the **Live trading safety**
-section before you ever set `LIVE_TRADING_ENABLED=true`.
+MomentumFlow is a paper-first Node/Express + React trading assistant. This build adds an explicit **Start Live Bot / Stop Live Bot** workflow while keeping live trading behind multiple server-side gates.
 
-## What's here
+## Important behavior
 
-```
-backend/    Node/Express API — sessions, safety engine, Alpaca client, encrypted credentials
-frontend/   React PWA — Dashboard, Sessions, Chat, Settings
-```
+- Every backend restart forces Trading Mode back to **paper** and clears all 5 Live Gate confirmations.
+- Live automation cannot start unless `LIVE_TRADING_ENABLED=true`, live Alpaca credentials are saved, all Live Gate items are checked, and Trading Mode is switched to live.
+- The automated loop is **crypto-only (BTC, ETH, SOL)** in this first live build. It uses live Coinbase spot prices for its signal and refuses to automate if that verified price feed is unavailable.
+- The bot opens **LONG positions only**. It will not attempt unsupported crypto short sales.
+- Default maximum entry size is **$5 notional per trade**.
+- Only one bot-managed position is allowed at a time.
+- Default exits: +0.6% take-profit, -0.4% stop-loss, or 15-minute maximum hold.
+- The existing 10% session-loss, 3-consecutive-loss, and trade-count safety halts remain server-enforced.
+- Pressing **Stop Live Bot** stops the loop and attempts to close any bot-managed open position.
+- The bot refuses to start if Alpaca already shows an open BTC/USD, ETH/USD, or SOL/USD position, or if the local trade log contains an unresolved open crypto trade.
 
-## 1. Run the backend
+These defaults are conservative operational guardrails, **not a claim of profitability**. The paper simulator's configured win rate is synthetic and must not be interpreted as expected live performance.
+
+## Backend
+
+Use the `momentumflow/` directory as the backend root. The older `momentumflow/Backend/` folder is legacy/demo code and should **not** be used for deployment.
 
 ```bash
-cd backend
+cd momentumflow
 npm install
 cp .env.example .env
-```
-
-Generate an encryption key and put it in `.env`:
-
-```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Paste the output into `CREDENTIAL_ENCRYPTION_KEY=` in `.env`. Leave
-`LIVE_TRADING_ENABLED=false` for now.
+Put the generated value into `CREDENTIAL_ENCRYPTION_KEY`.
+
+Keep this off until you have tested setup:
+
+```env
+LIVE_TRADING_ENABLED=false
+```
+
+Start the backend:
 
 ```bash
 npm start
 ```
 
-Backend runs on `http://localhost:4000`. Check `http://localhost:4000/api/health`.
+Health check: `GET /api/health`.
 
-## 2. Run the frontend
+## Frontend
 
 ```bash
-cd frontend
+cd momentumflow/frontend
 npm install
 npm run dev
 ```
 
-Opens on `http://localhost:5173` and proxies `/api` calls to the backend.
+For a deployed/mobile build, set `VITE_API_URL` to the HTTPS backend URL.
 
-## 3. Try it paper-first
+## Live setup sequence
 
-1. Open the app, go to **Dashboard**, tap **Run paper session**. This never touches
-   Alpaca or risks capital — it's a self-contained simulation.
-2. Check **Sessions** to see the trade log and equity curve.
-3. Try the **Chat** tab: "run the bot", "go live", "stop".
+1. Save Alpaca **live** credentials in Settings.
+2. On the backend host, set `LIVE_TRADING_ENABLED=true` and restart.
+3. Re-open Settings after restart and complete all five Live Gate items.
+4. Switch Trading Mode from Paper to Live.
+5. Go to Dashboard and press **Start Live Bot**.
+6. Watch Sessions and bot status. Press **Stop Live Bot** to stop automation and attempt to close its current position.
 
-## 4. Connecting Alpaca (paper trading via the real API)
+## API added in this build
 
-1. Create a free [Alpaca](https://alpaca.markets) account and generate **paper**
-   API keys from their dashboard.
-2. In the app, go to **Settings → Broker connection → Paper keys → Add keys**.
-   Keys are encrypted (AES-256-GCM) before they touch disk — see
-   `backend/src/crypto.js`.
+- `GET /api/live-bot/status`
+- `POST /api/live-bot/start`
+- `POST /api/live-bot/stop`
 
-At this point paper trading is real (calls Alpaca's paper endpoint), but the
-`/sessions/paper/run` route in this build still uses the built-in simulator, not
-live Alpaca paper order placement — see "What's simulated vs. real" below.
+The old one-order endpoint `POST /api/sessions/live/trade` remains available behind the same Live Gate.
 
-## 5. Live trading — read this before you touch it
+## Deployment note
 
-Live trading requires **all** of the following simultaneously; missing any one of
-them blocks it entirely, and this is enforced server-side, not just in the UI:
-
-1. **All 5 Live Gate checklist items** confirmed in Settings.
-2. **`LIVE_TRADING_ENABLED=true`** set in the backend's `.env` — a deliberate
-   operator-level switch that a UI click can't flip. Restarting the server does
-   **not** re-enable this even if it was true before; it does reset the 5
-   checklist consents to unchecked (see `server.js`, `resetToPaperModeOnBoot`),
-   so you always have to re-confirm the checklist after any restart.
-3. **Real Alpaca live API keys** saved under Settings → Broker connection → Live keys.
-
-Even fully unlocked, live trades are placed **one at a time** via
-`POST /api/sessions/live/trade` — there is intentionally no autonomous loop that
-fires off a live session's worth of trades unattended. Every live order is a
-distinct API call your frontend (or you, via curl/Postman) makes.
-
-Server-enforced safety rules apply to live sessions the same as paper:
-- 10% daily loss → auto-halt
-- 3 consecutive losses → auto-halt
-- 12 trades per market, 24 per session (soft cap you'll want to lower for real capital)
-
-**This is a reference implementation, not a production trading system.** Before
-risking real money, you should at minimum:
-- Replace the simplistic momentum signal with a strategy you've actually backtested
-- Add position-closing logic and P&L reconciliation against Alpaca's fills, not
-  just the locally estimated `pnl` field
-- Add logging/alerting outside the process itself (a crash mid-session with an
-  open live position won't page you)
-- Consider lowering the trade caps significantly for your first real sessions
-
-## What's simulated vs. real right now
-
-| Feature | Status |
-|---|---|
-| Paper session simulator (Dashboard "Run paper session") | Fully simulated locally, no Alpaca calls |
-| Crypto prices (BTC/ETH/SOL) | Live, from Coinbase's public spot price API |
-| Equity prices (SPY/QQQ/GLD/GBTC) | Static fallback values — not live |
-| Live order placement (`/api/sessions/live/trade`) | Real Alpaca API call, behind the full gate described above |
-| Credential storage | Real AES-256-GCM encryption at rest |
-
-## Deploying
-
-- **Backend**: any Node host that supports environment variables and a persistent
-  disk for `backend/data/*.json` (Railway, Render, Fly.io). Set `CORS_ORIGIN` to
-  your deployed frontend's URL.
-- **Frontend**: any static host (Vercel, Netlify, Cloudflare Pages). Set the build
-  command to `npm run build`, output directory `dist`, and point `/api` at your
-  deployed backend (edit the proxy or add a full URL in `src/lib/api.js`).
-
-I can't host or deploy this for you directly — no persistent hosting on my end —
-but this is ready to push to a repo and deploy through any of the above.
+For Render/Railway/Fly, point the service root at **`momentumflow`**, run `npm install`, and start with `npm start`. Set a persistent `DATA_DIR` if you want sessions/credentials to survive redeployments. Set `CORS_ORIGIN` to the deployed frontend origin.

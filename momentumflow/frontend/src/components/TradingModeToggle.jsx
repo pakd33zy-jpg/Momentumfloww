@@ -60,7 +60,7 @@ export default function TradingModeToggle({ mode, liveUnlocked, onChanged }) {
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.4 }}>
             The Dashboard's session runner will place real orders against your Alpaca live
-            account instead of simulating. Each trade still requires individual confirmation.
+            account instead of simulating. Automated trading remains stopped until you explicitly press Start Live Bot on Dashboard.
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             <button onClick={() => switchTo('live')} disabled={busy} style={confirmBtn}>

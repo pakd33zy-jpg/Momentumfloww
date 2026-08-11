@@ -1,7 +1,7 @@
 import express from 'express';
-import { store } from '../store.js';
-import { evaluateLiveGate } from '../safetyEngine.js';
-import { hasCredentials } from '../alpacaClient.js';
+import { store } from './store.js';
+import { evaluateLiveGate } from './safetyEngine.js';
+import { hasCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 

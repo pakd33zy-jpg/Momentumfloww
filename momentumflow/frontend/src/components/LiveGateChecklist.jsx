@@ -59,7 +59,7 @@ export default function LiveGateChecklist({ gate, onChange }) {
       )}
       {gate.unlocked && (
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--signal-live)', fontWeight: 600 }}>
-          Live trading is armed. Every trade still requires individual confirmation.
+          Live trading is armed. Starting the automated live bot is a separate explicit action on Dashboard.
         </div>
       )}
     </div>
