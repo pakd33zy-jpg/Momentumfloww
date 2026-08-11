@@ -31,31 +31,17 @@ export default function Dashboard() {
   }, []);
 
   const loadData = async () => {
-    try {
-      const cfg = await api.getTradingConfig();
-      setConfig(prev => ({ ...prev, ...cfg }));
-      
-      const sessionsData = await api.listSessions();
-      setSessions(sessionsData);
-
-      const paperAccountData = await api.getPaperAccount();
-      setPaperAccount(paperAccountData);
-
-      const modeData = await api.getTradingMode();
-      setTradingMode(modeData?.mode || 'paper');
-
-      const accountsData = await api.getBrokerAccounts();
-      setBrokerAccounts(accountsData || { paper: null, live: null });
-      
-      const marketGrid = await api.getMarketGrid();
-      setMarketData(marketGrid);
-
-      const botStatus = await api.getLiveBotStatus();
-      setLiveBot(botStatus);
-      setError('');
-    } catch (err) {
-      setError('Failed to load data');
-    }
+    const results = await Promise.allSettled([api.getTradingConfig(),api.listSessions(),api.getPaperAccount(),api.getTradingMode(),api.getBrokerAccounts(),api.getMarketGrid(),api.getLiveBotStatus()]);
+    const [cfg,sr,pr,mr,ar,gr,br]=results;
+    if(cfg.status==='fulfilled') setConfig(prev=>({...prev,...cfg.value}));
+    if(sr.status==='fulfilled') setSessions(sr.value||[]);
+    if(pr.status==='fulfilled') setPaperAccount(pr.value);
+    if(mr.status==='fulfilled') setTradingMode(mr.value?.mode||'paper');
+    if(ar.status==='fulfilled') setBrokerAccounts(ar.value||{paper:null,live:null});
+    if(gr.status==='fulfilled') setMarketData(gr.value||[]);
+    if(br.status==='fulfilled') setLiveBot(br.value);
+    const bad=results.filter(r=>r.status==='rejected');
+    setError(bad.length?`Some data failed to load: ${bad.map(x=>x.reason?.message||'request failed').join(' · ')}`:'');
   };
 
   const handleConfigChange = (key, value) => {
@@ -188,10 +174,12 @@ export default function Dashboard() {
       {/* Broker Status */}
       <div style={{ background: '#1e2139', padding: '15px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '8px', height: '8px', background: '#4ade80', borderRadius: '50%' }}></div>
+          <div style={{ width: '8px', height: '8px', background: (paperBrokerConnected || liveConnected) ? '#4ade80' : '#f87171', borderRadius: '50%' }}></div>
           <span style={{ fontSize: '14px', color: '#ccc' }}>
             Alpaca paper: {paperBrokerConnected ? 'connected' : 'not connected'} · live: {liveConnected ? 'connected' : 'not connected'}
             {isLiveMode && liveConnected ? ` · live equity $${Number(liveAccount.equity || 0).toFixed(2)} · cash $${Number(liveAccount.cash || 0).toFixed(2)}` : ''}
+            {!paperBrokerConnected && brokerAccounts?.paper?.error ? ` · paper error: ${brokerAccounts.paper.error}` : ''}
+            {!liveConnected && brokerAccounts?.live?.error ? ` · live error: ${brokerAccounts.live.error}` : ''}
           </span>
         </div>
       </div>
@@ -447,7 +435,7 @@ export default function Dashboard() {
           <div>
             <div style={{ fontWeight: 'bold', color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot</div>
             <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>
-              Crypto-only live automation. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
+              Scans Alpaca's active tradable US equities/ETFs plus crypto. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
             </div>
           </div>
           <div style={{ fontSize: '12px', color: liveBot?.running ? '#4ade80' : '#888' }}>
@@ -458,13 +446,8 @@ export default function Dashboard() {
         {liveBot?.running && (
           <div style={{ marginTop: '10px', padding: '10px', background: '#0f1419', borderRadius: '6px', fontSize: '12px', color: '#bbb' }}>
             <div><strong>Scanner:</strong> every {liveBot?.config?.pollSeconds ?? 5}s · {liveBot?.lastDecision || 'starting'}</div>
-            <div style={{ marginTop: '6px', display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-              {Object.entries(liveBot?.signalSnapshot || {}).map(([market, sig]) => (
-                <span key={market}>
-                  {market}: {sig?.momentumPct == null ? `${sig?.samples || 0}/${sig?.needed || '?'} samples` : `${Number(sig.momentumPct).toFixed(3)}% / ${Number(sig.thresholdPct || 0).toFixed(3)}%`}
-                </span>
-              ))}
-            </div>
+            <div style={{ marginTop: '5px' }}>Universe: {Number(liveBot?.universe?.totalCount || 0).toLocaleString()} tradable assets ({Number(liveBot?.universe?.equityCount || 0).toLocaleString()} equities/ETFs + {Number(liveBot?.universe?.cryptoCount || 0).toLocaleString()} crypto) · US market {liveBot?.marketOpen == null ? 'checking' : liveBot.marketOpen ? 'OPEN' : 'CLOSED'}</div>
+            {Array.isArray(liveBot?.topCandidates) && liveBot.topCandidates.length > 0 && (<div style={{ marginTop: '7px' }}><strong>Top signals:</strong> {liveBot.topCandidates.slice(0,5).map(c => `${c.symbol} ${Number(c.momentumPct).toFixed(3)}%`).join(' · ')}</div>)}
           </div>
         )}
         <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
@@ -484,7 +467,7 @@ export default function Dashboard() {
           </button>
         </div>
         <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
-          Live scanner checks every 5 seconds by default but still waits for a real momentum signal before placing an order. Default live size is capped at $5 per entry.
+          Live scanner checks every 5 seconds, rotates through the full Alpaca tradable universe, and only places an order when a qualifying momentum signal appears. Default live size is capped at $5 per entry.
         </div>
       </div>
 

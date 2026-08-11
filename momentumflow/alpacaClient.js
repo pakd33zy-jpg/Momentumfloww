@@ -122,6 +122,56 @@ export async function getMarketGrid(markets) {
 }
 
 
+
+const DATA_BASE_URL = process.env.ALPACA_DATA_BASE_URL || 'https://data.alpaca.markets';
+async function alpacaDataRequest(mode, path) {
+  const creds = getCredentials(mode);
+  if (!creds) throw new Error(`No ${mode} Alpaca credentials configured.`);
+  const res = await fetch(`${DATA_BASE_URL}${path}`, { headers: { 'APCA-API-KEY-ID': creds.keyId, 'APCA-API-SECRET-KEY': creds.secretKey } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Alpaca market data failed (${res.status}): ${data.message || res.statusText}`);
+  return data;
+}
+export async function getTradableAssets(mode = 'live') {
+  const [equities, crypto] = await Promise.all([
+    alpacaRequest(mode, '/v2/assets?status=active&asset_class=us_equity'),
+    alpacaRequest(mode, '/v2/assets?status=active&asset_class=crypto'),
+  ]);
+  return {
+    equities: (Array.isArray(equities) ? equities : []).filter(a => a.tradable && a.status === 'active' && a.fractionable),
+    crypto: (Array.isArray(crypto) ? crypto : []).filter(a => a.tradable && a.status === 'active'),
+  };
+}
+export async function getMarketClock(mode = 'live') { return alpacaRequest(mode, '/v2/clock'); }
+function chunks(symbols, n=75) { const out=[]; for(let i=0;i<symbols.length;i+=n) out.push(symbols.slice(i,i+n)); return out; }
+export async function getStockSnapshots(mode, symbols, { feed='iex' } = {}) {
+  const out={};
+  for (const batch of chunks(symbols || [])) {
+    const q = new URLSearchParams({ symbols: batch.join(','), feed });
+    Object.assign(out, await alpacaDataRequest(mode, `/v2/stocks/snapshots?${q}`));
+  }
+  return out;
+}
+export async function getCryptoSnapshots(mode, symbols) {
+  const out={};
+  for (const batch of chunks(symbols || [])) {
+    const q = new URLSearchParams({ symbols: batch.join(',') });
+    const data = await alpacaDataRequest(mode, `/v1beta3/crypto/us/snapshots?${q}`);
+    Object.assign(out, data?.snapshots || data || {});
+  }
+  return out;
+}
+export async function getLatestTradablePrice(mode, symbol, assetClass) {
+  if (assetClass === 'crypto') {
+    const d=await getCryptoSnapshots(mode,[symbol]); const x=d[symbol] || d[symbol.replace('/','')];
+    const p=Number(x?.latestTrade?.p ?? x?.minuteBar?.c ?? x?.dailyBar?.c);
+    if (!Number.isFinite(p)) throw new Error(`No Alpaca crypto price for ${symbol}.`); return p;
+  }
+  const d=await getStockSnapshots(mode,[symbol]); const x=d[symbol];
+  const p=Number(x?.latestTrade?.p ?? x?.minuteBar?.c ?? x?.dailyBar?.c);
+  if (!Number.isFinite(p)) throw new Error(`No Alpaca stock price for ${symbol}.`); return p;
+}
+
 export async function getAccountSummary(mode) {
   const account = await getAccount(mode);
   return {
