@@ -1,4 +1,8 @@
-import { useState, useEffect } from 'react';
+<div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+  <a href="/settings" style={{ padding: '10px 15px', background: '#3b82f6', color: 'white', textDecoration: 'none', borderRadius: '4px' }}>
+    Settings
+  </a>
+</div>port { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 
 export default function Dashboard() {
