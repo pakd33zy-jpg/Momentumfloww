@@ -123,6 +123,8 @@ export default function Dashboard() {
   const liveConnected = Boolean(liveAccount?.connected);
   const paperBrokerConnected = Boolean(brokerAccounts?.paper?.connected);
   const isLiveMode = tradingMode === 'live';
+  const currentBrokerConnected = isLiveMode ? liveConnected : paperBrokerConnected;
+  const currentBroker = isLiveMode ? liveAccount : brokerAccounts?.paper;
   // In LIVE mode the dashboard is broker-authoritative: Alpaca equity is the source of truth.
   // In PAPER mode this app continues to show the resettable compounded simulator balance.
   const totalAssets = isLiveMode && liveConnected
@@ -174,12 +176,13 @@ export default function Dashboard() {
       {/* Broker Status */}
       <div style={{ background: '#1e2139', padding: '15px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '8px', height: '8px', background: (paperBrokerConnected || liveConnected) ? '#4ade80' : '#f87171', borderRadius: '50%' }}></div>
+          <div style={{ width: '8px', height: '8px', background: currentBrokerConnected ? '#4ade80' : '#f87171', borderRadius: '50%' }}></div>
           <span style={{ fontSize: '14px', color: '#ccc' }}>
-            Alpaca paper: {paperBrokerConnected ? 'connected' : 'not connected'} · live: {liveConnected ? 'connected' : 'not connected'}
-            {isLiveMode && liveConnected ? ` · live equity $${Number(liveAccount.equity || 0).toFixed(2)} · cash $${Number(liveAccount.cash || 0).toFixed(2)}` : ''}
-            {!paperBrokerConnected && brokerAccounts?.paper?.error ? ` · paper error: ${brokerAccounts.paper.error}` : ''}
-            {!liveConnected && brokerAccounts?.live?.error ? ` · live error: ${brokerAccounts.live.error}` : ''}
+            Alpaca {isLiveMode ? 'LIVE' : 'PAPER'}: {currentBrokerConnected ? 'connected' : 'not connected'}
+            {isLiveMode && liveConnected ? ` · equity $${Number(liveAccount.equity || 0).toFixed(2)} · cash $${Number(liveAccount.cash || 0).toFixed(2)}` : ''}
+            {!isLiveMode && paperBrokerConnected && currentBroker?.equity != null ? ` · paper equity $${Number(currentBroker.equity || 0).toFixed(2)}` : ''}
+            {!currentBrokerConnected && currentBroker?.error ? ` · ${currentBroker.error}` : ''}
+            {currentBrokerConnected ? ` · other account: ${isLiveMode ? (paperBrokerConnected ? 'paper connected' : 'paper not configured') : (liveConnected ? 'live connected' : 'live not configured')}` : ''}
           </span>
         </div>
       </div>
