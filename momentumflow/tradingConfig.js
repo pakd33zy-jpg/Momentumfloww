@@ -3,47 +3,59 @@ import { store } from './store.js';
 
 const router = express.Router();
 
-const DEFAULTS = {
+export const TRADING_DEFAULTS = {
   startingCapital: 100,
-  // Fraction of account equity used as order notional for a new live position.
-  // 0.02 = 2% of equity.
-  riskPerTrade: 0.02,
+  riskPerTrade: 0.02,          // fraction: 0.02 = 2%
   maxTradesPerSession: 24,
   maxTradesPerMarket: 12,
+  winRateTarget: 0.875,        // paper simulator only
+  dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
+  consecutiveStopLoss: 3,
 };
 
-router.get('/', (req, res) => {
-  const stored = store.getConfig('tradingConfig', DEFAULTS);
-  // Backward compatibility with older config key.
-  if (stored.riskPerTrade == null && stored.riskPerTradePct != null) {
-    stored.riskPerTrade = Number(stored.riskPerTradePct) / 100;
+function normalize(raw = {}) {
+  const out = { ...TRADING_DEFAULTS, ...raw };
+
+  // Backward compatibility with older field names.
+  if (raw.tradesPerSession != null && raw.maxTradesPerSession == null) {
+    out.maxTradesPerSession = Number(raw.tradesPerSession);
   }
-  res.json({ ...DEFAULTS, ...stored });
+  if (raw.tradesPerMarket != null && raw.maxTradesPerMarket == null) {
+    out.maxTradesPerMarket = Number(raw.tradesPerMarket);
+  }
+  if (raw.riskPerTradePct != null && raw.riskPerTrade == null) {
+    out.riskPerTrade = Number(raw.riskPerTradePct) / 100;
+  }
+
+  for (const k of Object.keys(TRADING_DEFAULTS)) out[k] = Number(out[k]);
+  return out;
+}
+
+function validate(c) {
+  if (!Number.isFinite(c.startingCapital) || c.startingCapital <= 0) return 'Starting capital must be greater than 0.';
+  if (!Number.isFinite(c.riskPerTrade) || c.riskPerTrade <= 0 || c.riskPerTrade > 1) return 'Risk per trade must be greater than 0 and no more than 100%.';
+  if (!Number.isInteger(c.maxTradesPerSession) || c.maxTradesPerSession < 1 || c.maxTradesPerSession > 1000) return 'Max trades per session must be an integer from 1 to 1000.';
+  if (!Number.isInteger(c.maxTradesPerMarket) || c.maxTradesPerMarket < 1 || c.maxTradesPerMarket > 1000) return 'Max trades per market must be an integer from 1 to 1000.';
+  if (!Number.isFinite(c.winRateTarget) || c.winRateTarget < 0 || c.winRateTarget > 1) return 'Paper win-rate target must be between 0% and 100%.';
+  if (!Number.isFinite(c.dailyLossLimit) || c.dailyLossLimit <= 0 || c.dailyLossLimit > 1) return 'Daily loss limit must be greater than 0 and no more than 100%.';
+  if (!Number.isInteger(c.consecutiveStopLoss) || c.consecutiveStopLoss < 1 || c.consecutiveStopLoss > 100) return 'Consecutive-loss halt must be an integer from 1 to 100.';
+  return null;
+}
+
+router.get('/', (req, res) => {
+  const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
+  res.json(current);
 });
 
 router.post('/', (req, res) => {
-  const body = req.body || {};
-  const current = store.getConfig('tradingConfig', DEFAULTS);
-  const updated = { ...DEFAULTS, ...current };
+  const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
+  const incoming = req.body || {};
+  const merged = normalize({ ...current, ...incoming });
+  const error = validate(merged);
+  if (error) return res.status(400).json({ error });
 
-  if (body.startingCapital != null) {
-    const startingCapital = Number(body.startingCapital);
-    if (!Number.isFinite(startingCapital) || startingCapital <= 0) {
-      return res.status(400).json({ error: 'startingCapital must be a positive number' });
-    }
-    updated.startingCapital = startingCapital;
-  }
-
-  if (body.riskPerTrade != null) {
-    const riskPerTrade = Number(body.riskPerTrade);
-    if (!Number.isFinite(riskPerTrade) || riskPerTrade <= 0 || riskPerTrade > 1) {
-      return res.status(400).json({ error: 'riskPerTrade must be a fraction greater than 0 and no more than 1 (0.02 = 2%)' });
-    }
-    updated.riskPerTrade = riskPerTrade;
-  }
-
-  store.setConfig('tradingConfig', updated);
-  res.json(updated);
+  store.setConfig('tradingConfig', merged);
+  res.json(merged);
 });
 
 export default router;

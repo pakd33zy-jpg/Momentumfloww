@@ -92,7 +92,7 @@ router.post('/paper/run', async (req, res) => {
     const config = store.getConfig('tradingConfig', { startingCapital: 100 });
     const paperAccount = getPaperAccount();
     const startingCapital = Number(paperAccount.currentCapital) || Number(config.startingCapital) || 100;
-    const targetWinRate = 0.875; // ~87.5% target per spec; simulation only, not a promise of real returns
+    const targetWinRate = Number(store.getConfig('tradingConfig', {}).winRateTarget ?? 0.875); // ~87.5% target per spec; simulation only, not a promise of real returns
 
     const session = createSession({ mode: 'paper', startingCapital });
     store.insert('sessions', session);
@@ -105,7 +105,7 @@ router.post('/paper/run', async (req, res) => {
     let halted = false;
     let haltReason = null;
 
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < Number(store.getConfig('tradingConfig', {}).maxTradesPerSession ?? 24); i++) {
       const haltCheck = checkHaltConditions(session);
       if (haltCheck.halt) { halted = true; haltReason = haltCheck.reason; break; }
 
