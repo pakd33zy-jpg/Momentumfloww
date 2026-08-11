@@ -105,3 +105,13 @@ const card = {
   borderRadius: 'var(--radius)',
   padding: '14px 16px',
 };
+
+const [config, setConfig] = useState({
+  startingCapital: 100,
+  riskPerTrade: 0.02,
+  tradesPerSession: 24,
+  tradesPerMarket: 12,
+  winRateTarget: 0.875,
+  dailyLossLimit: 0.10,
+  consecutiveStopLoss: 3,
+});
