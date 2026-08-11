@@ -1,17 +1,43 @@
 import express from 'express';
 import { encrypt, maskSecret } from './crypto.js';
 import { store } from './store.js';
+import { getAccountSummary, getCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 
-// GET /api/credentials — returns masked previews only, never plaintext or ciphertext
+// GET /api/credentials — returns masked/configured status only, never plaintext secrets
 router.get('/', (req, res) => {
-  const creds = store.getConfig('credentials', {});
+  const saved = store.getConfig('credentials', {});
   const result = {};
   for (const mode of ['paper', 'live']) {
-    result[mode] = creds[mode]
-      ? { configured: true, keyIdMasked: creds[mode].keyIdMasked, savedAt: creds[mode].savedAt }
+    const effective = getCredentials(mode);
+    const entry = saved[mode];
+    result[mode] = effective
+      ? {
+          configured: true,
+          source: effective.source || (entry ? 'saved' : 'environment'),
+          keyIdMasked: entry?.keyIdMasked || maskSecret(effective.keyId),
+          savedAt: entry?.savedAt || null,
+        }
       : { configured: false };
+  }
+  res.json(result);
+});
+
+// GET /api/credentials/accounts — verifies Alpaca and returns current account values.
+// The frontend polls this endpoint so LIVE dashboard values mirror Alpaca.
+router.get('/accounts', async (req, res) => {
+  const result = {};
+  for (const mode of ['paper', 'live']) {
+    if (!getCredentials(mode)) {
+      result[mode] = { mode, connected: false, error: 'No credentials configured.' };
+      continue;
+    }
+    try {
+      result[mode] = await getAccountSummary(mode);
+    } catch (err) {
+      result[mode] = { mode, connected: false, error: err.message };
+    }
   }
   res.json(result);
 });

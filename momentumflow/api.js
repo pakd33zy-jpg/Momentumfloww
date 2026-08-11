@@ -21,6 +21,7 @@ export const api = {
   setLiveGateItem: (item, value) => request('/live-gate', { method: 'POST', body: JSON.stringify({ item, value }) }),
   resetLiveGate: () => request('/live-gate/reset', { method: 'POST' }),
   getCredentials: () => request('/credentials'),
+  getBrokerAccounts: () => request('/credentials/accounts'),
   saveCredentials: (mode, keyId, secretKey) => request('/credentials', { method: 'POST', body: JSON.stringify({ mode, keyId, secretKey }) }),
   deleteCredentials: (mode) => request(`/credentials/${mode}`, { method: 'DELETE' }),
   getMarketGrid: () => request('/market/grid'),

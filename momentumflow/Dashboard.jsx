@@ -19,6 +19,8 @@ export default function Dashboard() {
   const [saved, setSaved] = useState(false);
   const [liveBot, setLiveBot] = useState(null);
   const [paperAccount, setPaperAccount] = useState(null);
+  const [tradingMode, setTradingMode] = useState('paper');
+  const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
   const [resettingPaper, setResettingPaper] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
 
@@ -38,6 +40,12 @@ export default function Dashboard() {
 
       const paperAccountData = await api.getPaperAccount();
       setPaperAccount(paperAccountData);
+
+      const modeData = await api.getTradingMode();
+      setTradingMode(modeData?.mode || 'paper');
+
+      const accountsData = await api.getBrokerAccounts();
+      setBrokerAccounts(accountsData || { paper: null, live: null });
       
       const marketGrid = await api.getMarketGrid();
       setMarketData(marketGrid);
@@ -123,8 +131,20 @@ export default function Dashboard() {
 
   const lastSession = sessions.find((session) => session.mode === 'paper');
   const seedCapital = Number(paperAccount?.seedCapital ?? config.startingCapital ?? 100);
-  const totalAssets = Number(paperAccount?.currentCapital ?? seedCapital);
-  const cumulativePnl = Number(paperAccount?.cumulativePnl ?? (totalAssets - seedCapital));
+  const simulatedPaperAssets = Number(paperAccount?.currentCapital ?? seedCapital);
+  const simulatedPaperPnl = Number(paperAccount?.cumulativePnl ?? (simulatedPaperAssets - seedCapital));
+  const liveAccount = brokerAccounts?.live;
+  const liveConnected = Boolean(liveAccount?.connected);
+  const paperBrokerConnected = Boolean(brokerAccounts?.paper?.connected);
+  const isLiveMode = tradingMode === 'live';
+  // In LIVE mode the dashboard is broker-authoritative: Alpaca equity is the source of truth.
+  // In PAPER mode this app continues to show the resettable compounded simulator balance.
+  const totalAssets = isLiveMode && liveConnected
+    ? Number(liveAccount.equity ?? liveAccount.portfolioValue ?? 0)
+    : simulatedPaperAssets;
+  const cumulativePnl = isLiveMode && liveConnected
+    ? Number(totalAssets - Number(liveAccount.lastEquity || totalAssets))
+    : simulatedPaperPnl;
   const pnl = lastSession ? Number(lastSession.total_pnl ?? lastSession.pnl ?? 0) : 0;
   const wins = Number(lastSession?.wins ?? lastSession?.win_count ?? 0);
   const losses = Number(lastSession?.losses ?? lastSession?.loss_count ?? 0);
@@ -138,10 +158,12 @@ export default function Dashboard() {
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px', marginBottom: '30px' }}>
         <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>TOTAL ASSETS</div>
+          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>{isLiveMode ? 'LIVE ALPACA EQUITY' : 'TOTAL ASSETS'}</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>${totalAssets.toFixed(2)}</div>
           <div style={{ fontSize: '11px', color: pnl >= 0 ? '#4ade80' : '#f87171', marginTop: '5px' }}>
-            {cumulativePnl >= 0 ? '+' : ''}{cumulativePnl.toFixed(2)} since ${seedCapital.toFixed(2)} reset
+            {isLiveMode && liveConnected
+              ? `${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl.toFixed(2)} vs Alpaca previous equity · BP $${Number(liveAccount.buyingPower || 0).toFixed(2)}`
+              : `${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl.toFixed(2)} since $${seedCapital.toFixed(2)} reset`}
           </div>
         </div>
 
@@ -167,7 +189,10 @@ export default function Dashboard() {
       <div style={{ background: '#1e2139', padding: '15px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ width: '8px', height: '8px', background: '#4ade80', borderRadius: '50%' }}></div>
-          <span style={{ fontSize: '14px', color: '#ccc' }}>Alpaca paper: not connected · live: not connected</span>
+          <span style={{ fontSize: '14px', color: '#ccc' }}>
+            Alpaca paper: {paperBrokerConnected ? 'connected' : 'not connected'} · live: {liveConnected ? 'connected' : 'not connected'}
+            {isLiveMode && liveConnected ? ` · live equity $${Number(liveAccount.equity || 0).toFixed(2)} · cash $${Number(liveAccount.cash || 0).toFixed(2)}` : ''}
+          </span>
         </div>
       </div>
 

@@ -5,17 +5,28 @@ import { store } from './store.js';
 export function getCredentials(mode) {
   const creds = store.getConfig('credentials', {});
   const entry = creds[mode];
-  if (!entry) return null;
-  try {
-    return { keyId: decrypt(entry.keyIdEnc), secretKey: decrypt(entry.secretKeyEnc) };
-  } catch (err) {
-    console.error(`[alpaca] Failed to decrypt ${mode} credentials:`, err.message);
-    return null;
+  if (entry) {
+    try {
+      return { keyId: decrypt(entry.keyIdEnc), secretKey: decrypt(entry.secretKeyEnc), source: 'saved' };
+    } catch (err) {
+      console.error(`[alpaca] Failed to decrypt ${mode} credentials:`, err.message);
+    }
   }
+
+  // Railway/environment fallback. Generic ALPACA_API_KEY/ALPACA_SECRET_KEY are
+  // intentionally treated as LIVE credentials only for backward compatibility.
+  const keyId = mode === 'live'
+    ? (process.env.ALPACA_LIVE_API_KEY || process.env.ALPACA_API_KEY)
+    : process.env.ALPACA_PAPER_API_KEY;
+  const secretKey = mode === 'live'
+    ? (process.env.ALPACA_LIVE_SECRET_KEY || process.env.ALPACA_SECRET_KEY)
+    : process.env.ALPACA_PAPER_SECRET_KEY;
+  if (keyId && secretKey) return { keyId, secretKey, source: 'environment' };
+  return null;
 }
 
 export function hasCredentials(mode) {
-  return Boolean(store.getConfig('credentials', {})[mode]);
+  return Boolean(getCredentials(mode));
 }
 
 function baseUrlFor(mode) {
@@ -108,4 +119,27 @@ export async function getMarketGrid(markets) {
     const spot = await getSpotPrice(market);
     return { ...spot, change: null };
   }));
+}
+
+
+export async function getAccountSummary(mode) {
+  const account = await getAccount(mode);
+  return {
+    mode,
+    connected: true,
+    status: account.status ?? null,
+    accountNumber: account.account_number ?? null,
+    currency: account.currency ?? 'USD',
+    cash: Number(account.cash ?? 0),
+    equity: Number(account.equity ?? account.portfolio_value ?? 0),
+    portfolioValue: Number(account.portfolio_value ?? account.equity ?? 0),
+    buyingPower: Number(account.buying_power ?? 0),
+    lastEquity: Number(account.last_equity ?? 0),
+    longMarketValue: Number(account.long_market_value ?? 0),
+    shortMarketValue: Number(account.short_market_value ?? 0),
+    tradingBlocked: Boolean(account.trading_blocked),
+    transfersBlocked: Boolean(account.transfers_blocked),
+    accountBlocked: Boolean(account.account_blocked),
+    patternDayTrader: Boolean(account.pattern_day_trader),
+  };
 }
