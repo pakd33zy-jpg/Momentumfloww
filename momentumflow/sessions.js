@@ -13,6 +13,29 @@ const MARKET_NAMES = {
 
 const ALL_MARKETS = [...MARKETS.crypto, ...MARKETS.equity];
 
+function getPaperAccount() {
+  const config = store.getConfig('tradingConfig', { startingCapital: 100 });
+  const seedCapital = Number(config.startingCapital) || 100;
+  return store.getConfig('paperAccount', {
+    seedCapital,
+    currentCapital: seedCapital,
+    cumulativePnl: 0,
+    sessionsSinceReset: 0,
+    resetAt: new Date().toISOString(),
+  });
+}
+
+function savePaperAccount(account) {
+  return store.setConfig('paperAccount', {
+    ...account,
+    seedCapital: Number(account.seedCapital),
+    currentCapital: Number(account.currentCapital),
+    cumulativePnl: Number(account.cumulativePnl),
+    sessionsSinceReset: Number(account.sessionsSinceReset),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 function pickConviction() {
   const roll = Math.random();
   if (roll < 0.5) return 'standard';
@@ -37,13 +60,38 @@ router.get('/:id/trades', (req, res) => {
   res.json(trades);
 });
 
+
+// Paper account state: this is the cumulative simulated balance since the last reset.
+router.get('/paper/account', (req, res) => {
+  res.json(getPaperAccount());
+});
+
+router.post('/paper/reset', (req, res) => {
+  const config = store.getConfig('tradingConfig', { startingCapital: 100 });
+  const requestedSeed = Number(req.body?.startingCapital);
+  const seedCapital = Number.isFinite(requestedSeed) && requestedSeed > 0
+    ? requestedSeed
+    : Number(config.startingCapital) || 100;
+
+  const account = savePaperAccount({
+    seedCapital,
+    currentCapital: seedCapital,
+    cumulativePnl: 0,
+    sessionsSinceReset: 0,
+    resetAt: new Date().toISOString(),
+  });
+
+  res.json(account);
+});
+
 // --- PAPER: runs a full simulated session synchronously and returns the result ---
 // This never touches Alpaca and risks no capital. It's the default and the only
 // mode available until the live gate is fully unlocked.
 router.post('/paper/run', async (req, res) => {
   try {
     const config = store.getConfig('tradingConfig', { startingCapital: 100 });
-    const startingCapital = Number(req.body?.startingCapital) || config.startingCapital;
+    const paperAccount = getPaperAccount();
+    const startingCapital = Number(paperAccount.currentCapital) || Number(config.startingCapital) || 100;
     const targetWinRate = 0.875; // ~87.5% target per spec; simulation only, not a promise of real returns
 
     const session = createSession({ mode: 'paper', startingCapital });
@@ -90,7 +138,15 @@ router.post('/paper/run', async (req, res) => {
     session.completed_at = new Date().toISOString();
     store.update('sessions', session.id, session);
 
-    res.json({ session, trades: sessionTrades });
+    const updatedPaperAccount = savePaperAccount({
+      ...paperAccount,
+      currentCapital: session.ending_capital,
+      cumulativePnl: Number((Number(paperAccount.cumulativePnl || 0) + Number(session.total_pnl || 0)).toFixed(2)),
+      sessionsSinceReset: Number(paperAccount.sessionsSinceReset || 0) + 1,
+      lastSessionId: session.id,
+    });
+
+    res.json({ session, trades: sessionTrades, paperAccount: updatedPaperAccount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -18,6 +18,8 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [liveBot, setLiveBot] = useState(null);
+  const [paperAccount, setPaperAccount] = useState(null);
+  const [resettingPaper, setResettingPaper] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
 
   useEffect(() => {
@@ -33,6 +35,9 @@ export default function Dashboard() {
       
       const sessionsData = await api.listSessions();
       setSessions(sessionsData);
+
+      const paperAccountData = await api.getPaperAccount();
+      setPaperAccount(paperAccountData);
       
       const marketGrid = await api.getMarketGrid();
       setMarketData(marketGrid);
@@ -63,12 +68,29 @@ export default function Dashboard() {
     try {
       setLoading(true);
       setError('');
-      await api.runPaperSession(config.startingCapital);
+      await api.runPaperSession();
       await loadData();
     } catch (err) {
       setError(`Failed to run session: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+
+  const handleResetPaperAccount = async () => {
+    const confirmed = window.confirm(`Reset the simulated paper balance to $${Number(config.startingCapital).toFixed(2)}? This starts a new cumulative run.`);
+    if (!confirmed) return;
+    try {
+      setResettingPaper(true);
+      setError('');
+      const account = await api.resetPaperAccount(config.startingCapital);
+      setPaperAccount(account);
+      await loadData();
+    } catch (err) {
+      setError(`Failed to reset paper balance: ${err.message}`);
+    } finally {
+      setResettingPaper(false);
     }
   };
 
@@ -99,12 +121,15 @@ export default function Dashboard() {
     }
   };
 
-  const lastSession = sessions[0];
-  const totalAssets = lastSession ? Number(lastSession.ending_capital ?? lastSession.current_capital ?? lastSession.starting_capital ?? config.startingCapital) : config.startingCapital;
+  const lastSession = sessions.find((session) => session.mode === 'paper');
+  const seedCapital = Number(paperAccount?.seedCapital ?? config.startingCapital ?? 100);
+  const totalAssets = Number(paperAccount?.currentCapital ?? seedCapital);
+  const cumulativePnl = Number(paperAccount?.cumulativePnl ?? (totalAssets - seedCapital));
   const pnl = lastSession ? Number(lastSession.total_pnl ?? lastSession.pnl ?? 0) : 0;
   const wins = Number(lastSession?.wins ?? lastSession?.win_count ?? 0);
   const losses = Number(lastSession?.losses ?? lastSession?.loss_count ?? 0);
   const winRate = (wins + losses > 0) ? ((wins / (wins + losses)) * 100).toFixed(1) : '-';
+  const sessionsSinceReset = Number(paperAccount?.sessionsSinceReset ?? 0);
 
   return (
     <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -116,7 +141,7 @@ export default function Dashboard() {
           <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>TOTAL ASSETS</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>${totalAssets.toFixed(2)}</div>
           <div style={{ fontSize: '11px', color: pnl >= 0 ? '#4ade80' : '#f87171', marginTop: '5px' }}>
-            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} since $100 seed
+            {cumulativePnl >= 0 ? '+' : ''}{cumulativePnl.toFixed(2)} since ${seedCapital.toFixed(2)} reset
           </div>
         </div>
 
@@ -134,7 +159,7 @@ export default function Dashboard() {
 
         <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
           <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>SESSIONS RUN</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{sessions.length}</div>
+          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{sessionsSinceReset}</div>
         </div>
       </div>
 
@@ -337,6 +362,26 @@ export default function Dashboard() {
           </button>
 
           {saved && <span style={{ marginLeft: '10px', color: '#4ade80' }}>✓ Saved</span>}
+
+
+          <button
+            onClick={handleResetPaperAccount}
+            disabled={resettingPaper}
+            style={{
+              marginTop: '15px',
+              marginLeft: '10px',
+              padding: '10px 20px',
+              background: '#7f1d1d',
+              color: 'white',
+              border: '1px solid #991b1b',
+              borderRadius: '4px',
+              cursor: resettingPaper ? 'not-allowed' : 'pointer',
+              fontSize: '14px',
+              opacity: resettingPaper ? 0.6 : 1,
+            }}
+          >
+            {resettingPaper ? 'Resetting…' : 'Reset Paper Balance'}
+          </button>
         </div>
       )}
 
