@@ -16,10 +16,12 @@ const state = {
   lastError: null,
   priceHistory: Object.fromEntries(CRYPTO.map((m) => [m, []])),
   openTradeId: null,
+  lastDecision: 'stopped',
+  signalSnapshot: {},
 };
 
 const DEFAULTS = {
-  pollSeconds: 30,
+  pollSeconds: 5,
   lookbackSamples: 4,
   entryMomentumPct: 0.15,
   takeProfitPct: 0.6,
@@ -45,6 +47,8 @@ function publicState() {
     lastTickAt: state.lastTickAt,
     lastError: state.lastError,
     openTradeId: state.openTradeId,
+    lastDecision: state.lastDecision,
+    signalSnapshot: state.signalSnapshot,
     config: config(),
   };
 }
@@ -60,7 +64,7 @@ function stopLoop(reason = null) {
 
 function scheduleNext() {
   if (!state.running) return;
-  const delay = Math.max(10, Number(config().pollSeconds)) * 1000;
+  const delay = Math.max(2, Number(config().pollSeconds)) * 1000;
   state.timer = setTimeout(runTick, delay);
 }
 
@@ -103,6 +107,7 @@ async function closeOpenTrade(trade, currentPrice, reason) {
 
 async function maybeManageOpenTrade(prices) {
   if (!state.openTradeId) return false;
+  state.lastDecision = 'managing open position';
   const trade = store.getOne('trades', state.openTradeId);
   if (!trade || trade.result !== null) { state.openTradeId = null; return false; }
 
@@ -137,17 +142,35 @@ async function maybeEnter(prices) {
 
   const cfg = config();
   let best = null;
+  const snapshot = {};
   for (const market of CRYPTO) {
     const history = state.priceHistory[market];
-    if (history.length < cfg.lookbackSamples || !canTradeMarket(sessionTrades, market)) continue;
+    const eligible = canTradeMarket(sessionTrades, market);
+    if (history.length < cfg.lookbackSamples) {
+      snapshot[market] = { samples: history.length, needed: cfg.lookbackSamples, eligible, momentumPct: null };
+      continue;
+    }
     const oldPrice = history[history.length - cfg.lookbackSamples].price;
     const currentPrice = prices[market];
     const momentumPct = ((currentPrice - oldPrice) / oldPrice) * 100;
-    if (momentumPct >= cfg.entryMomentumPct && (!best || momentumPct > best.momentumPct)) {
+    snapshot[market] = {
+      samples: history.length,
+      needed: cfg.lookbackSamples,
+      eligible,
+      momentumPct: Number(momentumPct.toFixed(4)),
+      thresholdPct: cfg.entryMomentumPct,
+    };
+    if (eligible && momentumPct >= cfg.entryMomentumPct && (!best || momentumPct > best.momentumPct)) {
       best = { market, currentPrice, momentumPct };
     }
   }
-  if (!best) return;
+  state.signalSnapshot = snapshot;
+  if (!best) {
+    const warming = Object.values(snapshot).some((x) => x.momentumPct === null);
+    state.lastDecision = warming ? 'warming up price history' : 'scanning — waiting for momentum signal';
+    return;
+  }
+  state.lastDecision = `entry signal ${best.market} +${best.momentumPct.toFixed(4)}%`;
 
   const account = await getAccount('live');
   const buyingPower = Number(account.buying_power || account.cash || 0);
@@ -166,6 +189,7 @@ async function maybeEnter(prices) {
   trade.entry_signal = { momentum_pct: Number(best.momentumPct.toFixed(4)), lookback_samples: cfg.lookbackSamples };
   store.insert('trades', trade);
   state.openTradeId = trade.id;
+  state.lastDecision = `entered ${best.market} at ${entryPrice}`;
 }
 
 async function runTick() {
@@ -193,6 +217,7 @@ async function runTick() {
   } catch (err) {
     console.error('[live-bot]', err);
     state.lastError = err.message;
+    state.lastDecision = `stopped on error: ${err.message}`;
     stopLoop(err.message);
   } finally {
     scheduleNext();
@@ -232,6 +257,8 @@ router.post('/start', async (req, res) => {
     state.lastTickAt = null;
     state.lastError = null;
     state.openTradeId = null;
+    state.lastDecision = 'starting — collecting live prices';
+    state.signalSnapshot = {};
     state.priceHistory = Object.fromEntries(CRYPTO.map((m) => [m, []]));
     setImmediate(runTick);
     res.json(publicState());
@@ -242,6 +269,7 @@ router.post('/start', async (req, res) => {
 
 router.post('/stop', async (req, res) => {
   stopLoop();
+  state.lastDecision = 'stopped by user';
   try {
     if (state.openTradeId) {
       const trade = store.getOne('trades', state.openTradeId);

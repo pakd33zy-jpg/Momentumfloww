@@ -455,6 +455,18 @@ export default function Dashboard() {
           </div>
         </div>
         {liveBot?.lastError && <div style={{ marginTop: '8px', color: '#f87171', fontSize: '12px' }}>{liveBot.lastError}</div>}
+        {liveBot?.running && (
+          <div style={{ marginTop: '10px', padding: '10px', background: '#0f1419', borderRadius: '6px', fontSize: '12px', color: '#bbb' }}>
+            <div><strong>Scanner:</strong> every {liveBot?.config?.pollSeconds ?? 5}s · {liveBot?.lastDecision || 'starting'}</div>
+            <div style={{ marginTop: '6px', display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+              {Object.entries(liveBot?.signalSnapshot || {}).map(([market, sig]) => (
+                <span key={market}>
+                  {market}: {sig?.momentumPct == null ? `${sig?.samples || 0}/${sig?.needed || '?'} samples` : `${Number(sig.momentumPct).toFixed(3)}% / ${Number(sig.thresholdPct || 0).toFixed(3)}%`}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
           <button
             onClick={handleStartLiveBot}
@@ -472,7 +484,7 @@ export default function Dashboard() {
           </button>
         </div>
         <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
-          Default live size is capped at $5 per entry. The bot will stop on safety halts or any live-order/data error.
+          Live scanner checks every 5 seconds by default but still waits for a real momentum signal before placing an order. Default live size is capped at $5 per entry.
         </div>
       </div>
 
