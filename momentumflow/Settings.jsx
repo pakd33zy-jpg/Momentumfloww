@@ -18,20 +18,24 @@ export default function Settings() {
   const [creds, setCreds] = useState(null);
   const [gate, setGate] = useState(null);
   const [tradingMode, setTradingModeState] = useState(null);
+  const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [savedConfig, setSavedConfig] = useState(DEFAULT_CONFIG);
   const [saveState, setSaveState] = useState('');
   const [error, setError] = useState('');
+  const [configDirty, setConfigDirty] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     const results = await Promise.allSettled([
       api.getCredentials(),
       api.getLiveGate(),
       api.getTradingMode(),
+      api.getBrokerAccounts(),
     ]);
     if (results[0].status === 'fulfilled') setCreds(results[0].value);
     if (results[1].status === 'fulfilled') setGate(results[1].value);
     if (results[2].status === 'fulfilled') setTradingModeState(results[2].value);
+    if (results[3].status === 'fulfilled') setBrokerAccounts(results[3].value || { paper: null, live: null });
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -52,8 +56,14 @@ export default function Settings() {
   }, [refreshStatus, loadConfig]);
 
   const change = (key, raw) => {
-    // Keep a local draft. Do not reload from the server when another field receives focus.
-    setConfig((prev) => ({ ...prev, [key]: raw }));
+    // Keep a durable local draft on every keystroke. Do not reload from the server when
+    // another field receives focus.
+    setConfig((prev) => {
+      const next = { ...prev, [key]: raw };
+      api.cacheTradingConfigDraft(next);
+      return next;
+    });
+    setConfigDirty(true);
     setSaveState('');
   };
 
@@ -75,6 +85,7 @@ export default function Settings() {
       const normalized = { ...DEFAULT_CONFIG, ...result };
       setConfig(normalized);
       setSavedConfig(normalized);
+      setConfigDirty(false);
       setSaveState('Saved ✓');
     } catch (e) {
       setSaveState('');
@@ -87,6 +98,24 @@ export default function Settings() {
     setSaveState('Changes discarded');
     setError('');
   };
+
+  // Auto-save after the user pauses. This makes tabbing/clicking into the next field safe.
+  useEffect(() => {
+    if (!configDirty) return;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api.setTradingConfig(numberPayload());
+        const normalized = { ...DEFAULT_CONFIG, ...result };
+        setConfig(normalized);
+        setSavedConfig(normalized);
+        setConfigDirty(false);
+        setSaveState('Saved ✓');
+      } catch (e) {
+        setError(`Could not save trading settings: ${e.message}`);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [config, configDirty]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -101,8 +130,22 @@ export default function Settings() {
         <h2 style={h2}>Broker connection</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {creds && <>
-            <ApiKeyCard mode="paper" configured={creds.paper.configured} keyIdMasked={creds.paper.keyIdMasked} onSaved={refreshStatus} />
-            <ApiKeyCard mode="live" configured={creds.live.configured} keyIdMasked={creds.live.keyIdMasked} onSaved={refreshStatus} />
+            <ApiKeyCard
+              mode="paper"
+              configured={creds.paper.configured}
+              keyIdMasked={creds.paper.keyIdMasked}
+              connected={Boolean(brokerAccounts?.paper?.connected)}
+              connectionError={brokerAccounts?.paper?.error}
+              onSaved={refreshStatus}
+            />
+            <ApiKeyCard
+              mode="live"
+              configured={creds.live.configured}
+              keyIdMasked={creds.live.keyIdMasked}
+              connected={Boolean(brokerAccounts?.live?.connected)}
+              connectionError={brokerAccounts?.live?.error}
+              onSaved={refreshStatus}
+            />
           </>}
         </div>
       </section>

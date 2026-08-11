@@ -8,7 +8,7 @@ export const TRADING_DEFAULTS = {
   riskPerTrade: 0.02,          // fraction: 0.02 = 2%
   maxTradesPerSession: 24,
   maxTradesPerMarket: 12,
-  winRateTarget: 0.875,        // paper simulator only
+  winRateTarget: 0.875,        // legacy paper simulator only
   dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
   consecutiveStopLoss: 3,
 };
@@ -28,6 +28,7 @@ function normalize(raw = {}) {
   }
 
   for (const k of Object.keys(TRADING_DEFAULTS)) out[k] = Number(out[k]);
+  if (raw.updatedAt) out.updatedAt = String(raw.updatedAt);
   return out;
 }
 
@@ -54,6 +55,8 @@ router.post('/', (req, res) => {
   const error = validate(merged);
   if (error) return res.status(400).json({ error });
 
+  // Server timestamp lets the frontend decide which copy is newest after a Railway restart.
+  merged.updatedAt = new Date().toISOString();
   store.setConfig('tradingConfig', merged);
   res.json(merged);
 });

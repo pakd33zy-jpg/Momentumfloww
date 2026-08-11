@@ -49,19 +49,8 @@ router.get('/', (req, res) => {
   res.json(store.getAll('sessions').sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
 });
 
-router.get('/:id', (req, res) => {
-  const session = store.getOne('sessions', req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-  res.json(session);
-});
-
-router.get('/:id/trades', (req, res) => {
-  const trades = store.getAll('trades').filter((t) => t.session_id === req.params.id);
-  res.json(trades);
-});
-
-
 // Paper account state: this is the cumulative simulated balance since the last reset.
+// Keep specific /paper routes BEFORE /:id so Express does not treat "paper" as a session id.
 router.get('/paper/account', (req, res) => {
   res.json(getPaperAccount());
 });
@@ -117,7 +106,8 @@ router.post('/paper/run', async (req, res) => {
       const entryPrice = priceMap[market] ?? 100;
       const isWin = Math.random() < targetWinRate;
       const multiplier = CONVICTION_MULTIPLIERS[conviction];
-      const riskUnit = session.starting_capital * 0.02 * multiplier; // simulated risk sizing
+      const riskFraction = Number(config.riskPerTrade ?? 0.02);
+      const riskUnit = session.starting_capital * riskFraction * multiplier; // uses saved Risk Per Trade
       const pnl = isWin ? riskUnit * (0.8 + Math.random() * 1.4) : -riskUnit * (0.6 + Math.random() * 0.8);
 
       const trade = createTrade({ sessionId: session.id, market, marketName: MARKET_NAMES[market], direction, conviction, entryPrice });
@@ -152,8 +142,20 @@ router.post('/paper/run', async (req, res) => {
   }
 });
 
-// --- LIVE: places ONE real order per call, behind the full hard gate ---
-// Deliberately not an autonomous loop: every live trade requires a fresh request,
+router.get('/:id', (req, res) => {
+  const session = store.getOne('sessions', req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  res.json(session);
+});
+
+router.get('/:id/trades', (req, res) => {
+  const trades = store.getAll('trades').filter((t) => t.session_id === req.params.id);
+  res.json(trades);
+});
+
+// --- MANUAL LIVE ORDER ENDPOINT ---
+// This endpoint places one explicit live order per request. Automated live scanning is
+// handled separately by liveBot.js; both paths remain behind the same live safety gate.
 // so a human (or an explicit, deliberate automation the user builds on top of this)
 // is in the loop for every real-money order, not just at session start.
 router.post('/live/trade', async (req, res) => {

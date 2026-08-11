@@ -7,8 +7,8 @@ export default function Dashboard() {
   const [config, setConfig] = useState({
     startingCapital: 100,
     riskPerTrade: 0.02,
-    tradesPerSession: 24,
-    tradesPerMarket: 12,
+    maxTradesPerSession: 24,
+    maxTradesPerMarket: 12,
     winRateTarget: 0.875,
     dailyLossLimit: 0.10,
     consecutiveStopLoss: 3,
@@ -23,40 +23,81 @@ export default function Dashboard() {
   const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
   const [resettingPaper, setResettingPaper] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
+  const [configDirty, setConfigDirty] = useState(false);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 5000);
+    // Load configuration once on page entry. The 5-second dashboard refresh deliberately
+    // does NOT reload configuration, otherwise an in-progress edit gets overwritten.
+    loadData(true);
+    const interval = setInterval(() => loadData(false), 5000);
     return () => clearInterval(interval);
   }, []);
 
-  const loadData = async () => {
-    const results = await Promise.allSettled([api.getTradingConfig(),api.listSessions(),api.getPaperAccount(),api.getTradingMode(),api.getBrokerAccounts(),api.getMarketGrid(),api.getLiveBotStatus()]);
-    const [cfg,sr,pr,mr,ar,gr,br]=results;
-    if(cfg.status==='fulfilled') setConfig(prev=>({...prev,...cfg.value}));
-    if(sr.status==='fulfilled') setSessions(sr.value||[]);
-    if(pr.status==='fulfilled') setPaperAccount(pr.value);
-    if(mr.status==='fulfilled') setTradingMode(mr.value?.mode||'paper');
-    if(ar.status==='fulfilled') setBrokerAccounts(ar.value||{paper:null,live:null});
-    if(gr.status==='fulfilled') setMarketData(gr.value||[]);
-    if(br.status==='fulfilled') setLiveBot(br.value);
-    const bad=results.filter(r=>r.status==='rejected');
-    setError(bad.length?`Some data failed to load: ${bad.map(x=>x.reason?.message||'request failed').join(' · ')}`:'');
+  const loadData = async (includeConfig = false) => {
+    const calls = [
+      api.listSessions(),
+      api.getPaperAccount(),
+      api.getTradingMode(),
+      api.getBrokerAccounts(),
+      api.getMarketGrid(),
+      api.getLiveBotStatus(),
+    ];
+    if (includeConfig) calls.unshift(api.getTradingConfig());
+
+    const results = await Promise.allSettled(calls);
+    let offset = 0;
+    if (includeConfig) {
+      const cfg = results[0];
+      if (cfg.status === 'fulfilled') {
+        setConfig(prev => ({ ...prev, ...cfg.value }));
+      }
+      offset = 1;
+    }
+
+    const [sr, pr, mr, ar, gr, br] = results.slice(offset);
+    if (sr.status === 'fulfilled') setSessions(sr.value || []);
+    if (pr.status === 'fulfilled') setPaperAccount(pr.value);
+    if (mr.status === 'fulfilled') setTradingMode(mr.value?.mode || 'paper');
+    if (ar.status === 'fulfilled') setBrokerAccounts(ar.value || { paper: null, live: null });
+    if (gr.status === 'fulfilled') setMarketData(gr.value || []);
+    if (br.status === 'fulfilled') setLiveBot(br.value);
+
+    const bad = results.filter(r => r.status === 'rejected');
+    setError(bad.length ? `Some data failed to load: ${bad.map(x => x.reason?.message || 'request failed').join(' · ')}` : '');
   };
 
   const handleConfigChange = (key, value) => {
-    setConfig(prev => ({ ...prev, [key]: value }));
+    setConfig(prev => {
+      const next = { ...prev, [key]: value };
+      api.cacheTradingConfigDraft(next);
+      return next;
+    });
+    setConfigDirty(true);
+    setSaved(false);
   };
 
-  const handleSaveConfig = async () => {
+  const handleSaveConfig = async ({ quiet = false } = {}) => {
     try {
-      await api.setTradingConfig(config);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      if (!quiet) setError('');
+      const savedConfig = await api.setTradingConfig(config);
+      setConfig(prev => ({ ...prev, ...savedConfig }));
+      setConfigDirty(false);
+      if (!quiet) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+      }
     } catch (err) {
-      setError('Failed to save config');
+      setError(`Failed to save config: ${err.message}`);
     }
   };
+
+  // Auto-save shortly after the user stops typing. A local browser draft is written on
+  // every keystroke, so moving to another field cannot restore a preset value.
+  useEffect(() => {
+    if (!configDirty) return;
+    const timer = setTimeout(() => handleSaveConfig({ quiet: true }), 800);
+    return () => clearTimeout(timer);
+  }, [config, configDirty]);
 
   const handleRunSession = async () => {
     try {
@@ -218,7 +259,7 @@ export default function Dashboard() {
               <input
                 type="number"
                 value={config.startingCapital}
-                onChange={(e) => handleConfigChange('startingCapital', Number(e.target.value))}
+                onChange={(e) => handleConfigChange('startingCapital', e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -238,9 +279,11 @@ export default function Dashboard() {
               </label>
               <input
                 type="number"
-                step="0.01"
-                value={config.riskPerTrade}
-                onChange={(e) => handleConfigChange('riskPerTrade', Number(e.target.value))}
+                step="0.1"
+                min="0.1"
+                max="100"
+                value={config.riskPerTrade === '' ? '' : Number(config.riskPerTrade) * 100}
+                onChange={(e) => handleConfigChange('riskPerTrade', e.target.value === '' ? '' : Number(e.target.value) / 100)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -253,15 +296,15 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* Trades Per Session */}
+            {/* Max Trades Per Session */}
             <div>
               <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Trades Per Session
+                Max Trades Per Session
               </label>
               <input
                 type="number"
-                value={config.tradesPerSession}
-                onChange={(e) => handleConfigChange('tradesPerSession', Number(e.target.value))}
+                value={config.maxTradesPerSession}
+                onChange={(e) => handleConfigChange('maxTradesPerSession', e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -281,8 +324,8 @@ export default function Dashboard() {
               </label>
               <input
                 type="number"
-                value={config.tradesPerMarket}
-                onChange={(e) => handleConfigChange('tradesPerMarket', Number(e.target.value))}
+                value={config.maxTradesPerMarket}
+                onChange={(e) => handleConfigChange('maxTradesPerMarket', e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -298,13 +341,13 @@ export default function Dashboard() {
             {/* Win Rate Target */}
             <div>
               <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Win Rate Target (%)
+                Paper Win Rate Target (%)
               </label>
               <input
                 type="number"
                 step="0.1"
                 value={config.winRateTarget * 100}
-                onChange={(e) => handleConfigChange('winRateTarget', Number(e.target.value) / 100)}
+                onChange={(e) => handleConfigChange('winRateTarget', e.target.value === '' ? '' : Number(e.target.value) / 100)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -324,9 +367,11 @@ export default function Dashboard() {
               </label>
               <input
                 type="number"
-                step="0.01"
-                value={config.dailyLossLimit}
-                onChange={(e) => handleConfigChange('dailyLossLimit', Number(e.target.value))}
+                step="0.1"
+                min="0.1"
+                max="100"
+                value={config.dailyLossLimit === '' ? '' : Number(config.dailyLossLimit) * 100}
+                onChange={(e) => handleConfigChange('dailyLossLimit', e.target.value === '' ? '' : Number(e.target.value) / 100)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -347,7 +392,7 @@ export default function Dashboard() {
               <input
                 type="number"
                 value={config.consecutiveStopLoss}
-                onChange={(e) => handleConfigChange('consecutiveStopLoss', Number(e.target.value))}
+                onChange={(e) => handleConfigChange('consecutiveStopLoss', e.target.value)}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -405,7 +450,7 @@ export default function Dashboard() {
       <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
         <h3 style={{ margin: '0 0 10px 0', color: '#4ade80', fontSize: '14px' }}>TREND-ALIGNED MOMENTUM</h3>
         <p style={{ margin: '0 0 15px 0', color: '#aaa', fontSize: '13px' }}>
-          Sizes positions by conviction tier and trades across crypto and equity momentum names. Every session runs paper-first with hard safety halts.
+          Momentum strategy across Alpaca tradable equities/ETFs and crypto. Live entries use Alpaca account equity for risk-based sizing and remain subject to server-side safety halts.
         </p>
       </div>
 
@@ -436,9 +481,9 @@ export default function Dashboard() {
       <div style={{ background: '#1e2139', padding: '18px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
           <div>
-            <div style={{ fontWeight: 'bold', color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot</div>
+            <div style={{ fontWeight: 'bold', color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot — Alpaca Equities/ETFs + Crypto</div>
             <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>
-              Scans Alpaca's active tradable US equities/ETFs plus crypto. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
+              Scans Alpaca's active tradable equities/ETFs plus crypto. Options are excluded until options-specific permissions and risk controls are added. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
             </div>
           </div>
           <div style={{ fontSize: '12px', color: liveBot?.running ? '#4ade80' : '#888' }}>
@@ -470,7 +515,7 @@ export default function Dashboard() {
           </button>
         </div>
         <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
-          Live scanner checks every 5 seconds, rotates through the full Alpaca tradable universe, and only places an order when a qualifying momentum signal appears. Default live size is capped at $5 per entry.
+          Live scanner checks every 5 seconds, rotates through the supported Alpaca tradable universe, and only places an order when a qualifying momentum signal appears. Entry size uses the saved Risk Per Trade percentage of current Alpaca live equity, limited by available buying power.
         </div>
       </div>
 
