@@ -180,7 +180,8 @@ app.post('/api/sessions/paper/run', async (req, res) => {
 
 app.post('/api/sessions/live/trade', (req, res) => {
   const consents = store.getConfig('liveGateConsents', {});
-  const gate = evaluateLiveGate({ consents, hasLiveCredentials: false });
+  const hasLiveKeys = !!process.env.ALPACA_API_KEY && !!process.env.ALPACA_SECRET_KEY;
+const gate = evaluateLiveGate({ consents, hasLiveCredentials: hasLiveKeys });
   if (!gate.allowed) return res.status(403).json({ error: `Live trading blocked: ${gate.reason}` });
   res.status(403).json({ error: 'Live trading not configured in demo mode' });
 });
