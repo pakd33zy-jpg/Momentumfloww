@@ -1,18 +1,10 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
+import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 
 export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [marketData, setMarketData] = useState([]);
-  const [config, setConfig] = useState({
-    startingCapital: 100,
-    riskPerTrade: 0.02,
-    maxTradesPerSession: 24,
-    maxTradesPerMarket: 12,
-    winRateTarget: 0.875,
-    dailyLossLimit: 0.10,
-    consecutiveStopLoss: 3,
-  });
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -23,38 +15,23 @@ export default function Dashboard() {
   const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
   const [resettingPaper, setResettingPaper] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
-  const [configDirty, setConfigDirty] = useState(false);
 
   useEffect(() => {
-    // Load configuration once on page entry. The 5-second dashboard refresh deliberately
-    // does NOT reload configuration, otherwise an in-progress edit gets overwritten.
-    loadData(true);
-    const interval = setInterval(() => loadData(false), 5000);
+    loadData();
+    const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  const loadData = async (includeConfig = false) => {
-    const calls = [
+  const loadData = async () => {
+    const results = await Promise.allSettled([
       api.listSessions(),
       api.getPaperAccount(),
       api.getTradingMode(),
       api.getBrokerAccounts(),
       api.getMarketGrid(),
       api.getLiveBotStatus(),
-    ];
-    if (includeConfig) calls.unshift(api.getTradingConfig());
-
-    const results = await Promise.allSettled(calls);
-    let offset = 0;
-    if (includeConfig) {
-      const cfg = results[0];
-      if (cfg.status === 'fulfilled') {
-        setConfig(prev => ({ ...prev, ...cfg.value }));
-      }
-      offset = 1;
-    }
-
-    const [sr, pr, mr, ar, gr, br] = results.slice(offset);
+    ]);
+    const [sr, pr, mr, ar, gr, br] = results;
     if (sr.status === 'fulfilled') setSessions(sr.value || []);
     if (pr.status === 'fulfilled') setPaperAccount(pr.value);
     if (mr.status === 'fulfilled') setTradingMode(mr.value?.mode || 'paper');
@@ -65,39 +42,6 @@ export default function Dashboard() {
     const bad = results.filter(r => r.status === 'rejected');
     setError(bad.length ? `Some data failed to load: ${bad.map(x => x.reason?.message || 'request failed').join(' · ')}` : '');
   };
-
-  const handleConfigChange = (key, value) => {
-    setConfig(prev => {
-      const next = { ...prev, [key]: value };
-      api.cacheTradingConfigDraft(next);
-      return next;
-    });
-    setConfigDirty(true);
-    setSaved(false);
-  };
-
-  const handleSaveConfig = async ({ quiet = false } = {}) => {
-    try {
-      if (!quiet) setError('');
-      const savedConfig = await api.setTradingConfig(config);
-      setConfig(prev => ({ ...prev, ...savedConfig }));
-      setConfigDirty(false);
-      if (!quiet) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2500);
-      }
-    } catch (err) {
-      setError(`Failed to save config: ${err.message}`);
-    }
-  };
-
-  // Auto-save shortly after the user stops typing. A local browser draft is written on
-  // every keystroke, so moving to another field cannot restore a preset value.
-  useEffect(() => {
-    if (!configDirty) return;
-    const timer = setTimeout(() => handleSaveConfig({ quiet: true }), 800);
-    return () => clearTimeout(timer);
-  }, [config, configDirty]);
 
   const handleRunSession = async () => {
     try {
@@ -114,12 +58,14 @@ export default function Dashboard() {
 
 
   const handleResetPaperAccount = async () => {
-    const confirmed = window.confirm(`Reset the simulated paper balance to $${Number(config.startingCapital).toFixed(2)}? This starts a new cumulative run.`);
+    const cfg = await api.getTradingConfig();
+    const startingCapital = Number(cfg.startingCapital || 100);
+    const confirmed = window.confirm(`Reset the simulated paper balance to $${startingCapital.toFixed(2)}? This starts a new cumulative run.`);
     if (!confirmed) return;
     try {
       setResettingPaper(true);
       setError('');
-      const account = await api.resetPaperAccount(config.startingCapital);
+      const account = await api.resetPaperAccount(startingCapital);
       setPaperAccount(account);
       await loadData();
     } catch (err) {
@@ -157,7 +103,7 @@ export default function Dashboard() {
   };
 
   const lastSession = sessions.find((session) => session.mode === 'paper');
-  const seedCapital = Number(paperAccount?.seedCapital ?? config.startingCapital ?? 100);
+  const seedCapital = Number(paperAccount?.seedCapital ?? 100);
   const simulatedPaperAssets = Number(paperAccount?.currentCapital ?? seedCapital);
   const simulatedPaperPnl = Number(paperAccount?.cumulativePnl ?? (simulatedPaperAssets - seedCapital));
   const liveAccount = brokerAccounts?.live;

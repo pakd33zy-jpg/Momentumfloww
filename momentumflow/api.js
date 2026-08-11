@@ -1,101 +1,96 @@
 const storedBase = typeof localStorage !== 'undefined' ? localStorage.getItem('momentumflow_api_url') : null;
 const BASE = (import.meta.env.VITE_API_URL || storedBase || '/api').replace(/\/$/, '');
-const CONFIG_CACHE_KEY = 'momentumflow_trading_config_v3';
+const CONFIG_CACHE_KEY = 'momentumflow_trading_config_v4';
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
-  return data;
+const CONFIG_DEFAULTS = {
+  startingCapital: 100,
+  riskPerTrade: 0.02,
+  maxTradesPerSession: 24,
+  maxTradesPerMarket: 12,
+  winRateTarget: 0.875,
+  dailyLossLimit: 0.10,
+  consecutiveStopLoss: 3,
+};
+
+function normalizeConfig(cfg = {}) {
+  return {
+    startingCapital: Number(cfg.startingCapital ?? CONFIG_DEFAULTS.startingCapital),
+    riskPerTrade: Number(cfg.riskPerTrade ?? CONFIG_DEFAULTS.riskPerTrade),
+    maxTradesPerSession: Number(cfg.maxTradesPerSession ?? cfg.tradesPerSession ?? CONFIG_DEFAULTS.maxTradesPerSession),
+    maxTradesPerMarket: Number(cfg.maxTradesPerMarket ?? cfg.tradesPerMarket ?? CONFIG_DEFAULTS.maxTradesPerMarket),
+    winRateTarget: Number(cfg.winRateTarget ?? CONFIG_DEFAULTS.winRateTarget),
+    dailyLossLimit: Number(cfg.dailyLossLimit ?? CONFIG_DEFAULTS.dailyLossLimit),
+    consecutiveStopLoss: Number(cfg.consecutiveStopLoss ?? CONFIG_DEFAULTS.consecutiveStopLoss),
+    ...(cfg.updatedAt ? { updatedAt: cfg.updatedAt } : {}),
+  };
 }
 
-function readCachedConfig() {
+function readTradingConfigCache() {
   if (typeof localStorage === 'undefined') return null;
   try {
     const raw = localStorage.getItem(CONFIG_CACHE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.config ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function writeCachedConfig(config, { dirty = false, updatedAt } = {}) {
-  if (typeof localStorage === 'undefined') return config;
-  const record = {
-    config: { ...config },
-    dirty,
-    updatedAt: updatedAt || config?.updatedAt || new Date().toISOString(),
-  };
-  try { localStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify(record)); } catch {}
-  return record.config;
+function writeTradingConfigCache(config, status = 'draft') {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify({
+      config: { ...config },
+      status,
+      savedAt: status === 'saved' ? new Date().toISOString() : null,
+      editedAt: new Date().toISOString(),
+    }));
+  } catch {}
 }
 
-function canonicalConfig(cfg = {}) {
-  return {
-    startingCapital: Number(cfg.startingCapital),
-    riskPerTrade: Number(cfg.riskPerTrade),
-    maxTradesPerSession: Number(cfg.maxTradesPerSession),
-    maxTradesPerMarket: Number(cfg.maxTradesPerMarket),
-    winRateTarget: Number(cfg.winRateTarget),
-    dailyLossLimit: Number(cfg.dailyLossLimit),
-    consecutiveStopLoss: Number(cfg.consecutiveStopLoss),
-  };
+function cacheTradingConfigDraft(config) {
+  // Deliberately store the raw input strings too. This prevents "250" from being replaced
+  // by a server/default value merely because the user clicked into another field.
+  writeTradingConfigCache(config, 'draft');
+  return config;
 }
 
 async function getTradingConfig() {
-  let remote = null;
-  try {
-    remote = await request('/trading-config');
-  } catch (err) {
-    const cached = readCachedConfig();
-    if (cached?.config) return cached.config;
-    throw err;
-  }
+  const cached = readTradingConfigCache();
 
-  const cached = readCachedConfig();
-  if (!cached?.config) {
-    writeCachedConfig(remote, { dirty: false, updatedAt: remote.updatedAt });
-    return remote;
-  }
+  // If there is any browser draft/saved copy, it is the UI source of truth on this device.
+  // We still fetch the server copy for first-run/no-cache cases only.
+  if (cached?.config) return cached.config;
 
-  const localTime = Date.parse(cached.updatedAt || 0) || 0;
-  const remoteTime = Date.parse(remote.updatedAt || 0) || 0;
-
-  // If the browser copy is newer (including unsaved draft edits), keep it and sync it
-  // back to Railway. This prevents a backend restart/default file from resetting the UI.
-  if (cached.dirty || localTime > remoteTime) {
-    const localConfig = canonicalConfig(cached.config);
-    try {
-      const saved = await request('/trading-config', {
-        method: 'POST',
-        body: JSON.stringify(localConfig),
-      });
-      writeCachedConfig(saved, { dirty: false, updatedAt: saved.updatedAt });
-      return saved;
-    } catch {
-      return cached.config;
-    }
-  }
-
-  writeCachedConfig(remote, { dirty: false, updatedAt: remote.updatedAt });
+  const remote = normalizeConfig(await request('/trading-config'));
+  writeTradingConfigCache(remote, 'saved');
   return remote;
 }
 
-function cacheTradingConfigDraft(cfg) {
-  writeCachedConfig(cfg, { dirty: true, updatedAt: new Date().toISOString() });
-  return cfg;
+async function getServerTradingConfig() {
+  return normalizeConfig(await request('/trading-config'));
 }
 
 async function setTradingConfig(cfg) {
-  const payload = canonicalConfig(cfg);
-  // Store locally first so a failed request can never bounce the inputs back to presets.
-  writeCachedConfig(payload, { dirty: true, updatedAt: new Date().toISOString() });
-  const saved = await request('/trading-config', {
+  const payload = normalizeConfig(cfg);
+
+  // Keep the local draft BEFORE the network request. If Railway rejects/fails,
+  // the user's typed values remain visible and are not replaced by presets.
+  writeTradingConfigCache(cfg, 'draft');
+
+  const saved = normalizeConfig(await request('/trading-config', {
     method: 'POST',
     body: JSON.stringify(payload),
-  });
-  writeCachedConfig(saved, { dirty: false, updatedAt: saved.updatedAt });
+  }));
+  writeTradingConfigCache(saved, 'saved');
   return saved;
+}
+
+function clearTradingConfigCache() {
+  if (typeof localStorage !== 'undefined') {
+    try { localStorage.removeItem(CONFIG_CACHE_KEY); } catch {}
+  }
 }
 
 export const api = {
@@ -119,8 +114,10 @@ export const api = {
   getMarketGrid: () => request('/market/grid'),
   sendCommand: (text) => request('/chat/command', { method: 'POST', body: JSON.stringify({ text }) }),
   getTradingConfig,
+  getServerTradingConfig,
   cacheTradingConfigDraft,
   setTradingConfig,
+  clearTradingConfigCache,
   getLiveBotStatus: () => request('/live-bot/status'),
   startLiveBot: () => request('/live-bot/start', { method: 'POST' }),
   stopLiveBot: () => request('/live-bot/stop', { method: 'POST' }),

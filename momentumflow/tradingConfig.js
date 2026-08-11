@@ -45,7 +45,7 @@ function validate(c) {
 
 router.get('/', (req, res) => {
   const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
-  res.json(current);
+  res.json({ ...current, source: 'railway-store' });
 });
 
 router.post('/', (req, res) => {
@@ -58,7 +58,7 @@ router.post('/', (req, res) => {
   // Server timestamp lets the frontend decide which copy is newest after a Railway restart.
   merged.updatedAt = new Date().toISOString();
   store.setConfig('tradingConfig', merged);
-  res.json(merged);
+  res.json({ ...merged, source: 'railway-store' });
 });
 
 export default router;
