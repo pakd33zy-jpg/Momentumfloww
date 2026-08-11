@@ -123,7 +123,7 @@ export default function Dashboard() {
         <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
           <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>LAST SESSION P&L</div>
           <div style={{ fontSize: '24px', fontWeight: 'bold', color: lastSession?.pnl >= 0 ? '#4ade80' : '#f87171' }}>
-            {lastSession ? (lastSession.pnl >= 0 ? '+' : '') + lastSession.pnl.toFixed(2) : '-'}
+            {lastSession ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-'}
           </div>
         </div>
 
@@ -421,10 +421,10 @@ export default function Dashboard() {
           >
             <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>{market.market}</div>
             <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff', marginBottom: '5px' }}>
-              ${market.price?.toFixed(2) || 'N/A'}
+              ${Number.isFinite(Number(market.price)) ? Number(market.price).toFixed(2) : 'N/A'}
             </div>
             <div style={{ fontSize: '11px', color: market.change >= 0 ? '#4ade80' : '#f87171' }}>
-              {market.change >= 0 ? '+' : ''}{market.change?.toFixed(2)}%
+              {Number.isFinite(Number(market.change)) ? `${Number(market.change) >= 0 ? '+' : ''}${Number(market.change).toFixed(2)}%` : '—'}
             </div>
           </div>
         ))}
