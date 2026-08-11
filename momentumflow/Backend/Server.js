@@ -209,7 +209,18 @@ app.post('/api/live-gate/reset', (req, res) => {
   res.json(store.getConfig('liveGateConsents', {}));
 });
 
-app.get('/api/trading-mode', (req, res) => res.json(store.getConfig('tradingMode', { mode: 'paper' })));
+app.get('/api/trading-config', (req, res) => {
+  const defaults = {
+    startingCapital: 100,
+    riskPerTrade: 0.02,
+    tradesPerSession: 24,
+    tradesPerMarket: 12,
+    winRateTarget: 0.875,
+    dailyLossLimit: 0.10,
+    consecutiveStopLoss: 3,
+  };
+  res.json(store.getConfig('tradingConfig', defaults));
+});
 app.post('/api/trading-mode', (req, res) => {
   const { mode } = req.body || {};
   if (!['paper', 'live'].includes(mode)) return res.status(400).json({ error: 'mode must be paper or live' });
