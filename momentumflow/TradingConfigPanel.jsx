@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 
+const FIELD_NAMES = [
+  'startingCapital',
+  'riskPerTradePct',
+  'maxTradesPerSession',
+  'maxTradesPerMarket',
+  'winRateTargetPct',
+  'dailyLossLimitPct',
+  'consecutiveStopLoss',
+];
+
 function fromServer(cfg = {}) {
   return {
     startingCapital: String(cfg.startingCapital ?? 100),
@@ -28,15 +38,7 @@ function toServer(raw) {
 function readForm(form) {
   if (!form) return null;
   const out = {};
-  for (const name of [
-    'startingCapital',
-    'riskPerTradePct',
-    'maxTradesPerSession',
-    'maxTradesPerMarket',
-    'winRateTargetPct',
-    'dailyLossLimitPct',
-    'consecutiveStopLoss',
-  ]) {
+  for (const name of FIELD_NAMES) {
     out[name] = form.elements[name]?.value ?? '';
   }
   return out;
@@ -44,9 +46,9 @@ function readForm(form) {
 
 function writeForm(form, values) {
   if (!form || !values) return;
-  Object.entries(values).forEach(([name, value]) => {
+  for (const [name, value] of Object.entries(values)) {
     if (form.elements[name]) form.elements[name].value = value ?? '';
-  });
+  }
 }
 
 export default function TradingConfigPanel({ compact = false, onSaved }) {
@@ -59,8 +61,6 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
     let alive = true;
 
     (async () => {
-      // v7 uses uncontrolled inputs. Once a value is typed, React cannot overwrite it
-      // during a parent refresh/re-render. The raw field values are also persisted locally.
       const local = api.readTradingConfigDraft();
       if (local) {
         if (alive) {
@@ -74,23 +74,21 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
         const remote = await api.getTradingConfig();
         if (!alive) return;
         const values = fromServer(remote);
-        api.writeTradingConfigDraft(values);
         setInitial(values);
         setStatus('');
       } catch (e) {
         if (!alive) return;
         const fallback = fromServer({});
-        api.writeTradingConfigDraft(fallback);
         setInitial(fallback);
-        setStatus('Using local defaults');
         setError(`Could not load Railway configuration: ${e.message}`);
+        setStatus('Using first-run defaults');
       }
     })();
 
     return () => { alive = false; };
   }, []);
 
-  const preserveNow = () => {
+  const preserve = () => {
     const values = readForm(formRef.current);
     if (!values) return;
     api.writeTradingConfigDraft(values);
@@ -102,7 +100,6 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
     const raw = readForm(formRef.current);
     if (!raw) return;
 
-    // Preserve before making any network request.
     api.writeTradingConfigDraft(raw);
     setStatus('Saving…');
     setError('');
@@ -110,35 +107,30 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
     try {
       const saved = await api.setTradingConfig(toServer(raw));
       const canonical = fromServer(saved);
-
-      // Saving should not unexpectedly change a field the user just typed.
-      // Only normalize the browser cache. The visible inputs remain untouched.
-      api.writeTradingConfigDraft(canonical);
+      api.clearTradingConfigDraft();
+      writeForm(formRef.current, canonical);
       setStatus('Saved ✓');
       onSaved?.(saved);
     } catch (e) {
       setStatus('Not saved');
-      setError(`Save failed: ${e.message}. Your typed values are still preserved locally.`);
+      setError(`Save failed: ${e.message}. Your typed values were not replaced.`);
     }
   };
 
-  const reloadSaved = async () => {
+  const reload = async () => {
     const ok = window.confirm(
-      'Reload the values stored on Railway? This will intentionally replace the values currently shown in these fields.'
+      'Replace the values shown here with the configuration currently stored on Railway?'
     );
     if (!ok) return;
-
-    setStatus('Reloading…');
-    setError('');
 
     try {
       const remote = await api.getTradingConfig();
       const values = fromServer(remote);
-      api.writeTradingConfigDraft(values);
+      api.clearTradingConfigDraft();
       writeForm(formRef.current, values);
       setStatus('Reloaded from Railway');
+      setError('');
     } catch (e) {
-      setStatus('');
       setError(`Could not reload Railway configuration: ${e.message}`);
     }
   };
@@ -152,37 +144,36 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
       <form
         ref={formRef}
         onSubmit={(e) => { e.preventDefault(); save(); }}
-        onInput={preserveNow}
-        onChange={preserveNow}
+        onInput={preserve}
       >
         <div style={{
           display: 'grid',
           gridTemplateColumns: compact ? 'repeat(2, minmax(0, 1fr))' : '1fr',
           gap: compact ? 14 : 4,
         }}>
-          <Field name="startingCapital" label="Starting Capital ($)" defaultValue={initial.startingCapital}
-            min="0.01" step="0.01"
-            note={!compact ? 'Paper seed after Reset Paper Balance. Live equity always comes from Alpaca.' : null} />
+          <Field name="startingCapital" label="Starting Capital ($)"
+            defaultValue={initial.startingCapital} min="0.01" step="0.01"
+            note={!compact ? 'Paper seed after Reset Paper Balance. Live equity comes from Alpaca.' : null} />
 
-          <Field name="riskPerTradePct" label="Risk Per Trade (%)" defaultValue={initial.riskPerTradePct}
-            min="0.1" max="100" step="0.1"
-            note={!compact ? 'Live position sizing as a percentage of current Alpaca equity.' : null} />
+          <Field name="riskPerTradePct" label="Risk Per Trade (%)"
+            defaultValue={initial.riskPerTradePct} min="0.1" max="100" step="0.1"
+            note={!compact ? 'Existing live sizing control: percent of current Alpaca equity per entry.' : null} />
 
-          <Field name="maxTradesPerSession" label="Max Trades Per Session" defaultValue={initial.maxTradesPerSession}
-            min="1" max="1000" step="1" />
+          <Field name="maxTradesPerSession" label="Max Trades Per Session"
+            defaultValue={initial.maxTradesPerSession} min="1" max="1000" step="1" />
 
-          <Field name="maxTradesPerMarket" label="Max Trades Per Market / Symbol" defaultValue={initial.maxTradesPerMarket}
-            min="1" max="1000" step="1" />
+          <Field name="maxTradesPerMarket" label="Max Trades Per Market / Symbol"
+            defaultValue={initial.maxTradesPerMarket} min="1" max="1000" step="1" />
 
-          <Field name="winRateTargetPct" label="Paper Win Rate Target (%)" defaultValue={initial.winRateTargetPct}
-            min="0" max="100" step="0.1"
-            note={!compact ? 'Legacy paper-simulator setting only; it does not guarantee live results.' : null} />
+          <Field name="winRateTargetPct" label="Paper Win Rate Target (%)"
+            defaultValue={initial.winRateTargetPct} min="0" max="100" step="0.1"
+            note={!compact ? 'Legacy simulator setting only; not a live-performance guarantee.' : null} />
 
-          <Field name="dailyLossLimitPct" label="Daily Loss Halt (%)" defaultValue={initial.dailyLossLimitPct}
-            min="0.1" max="100" step="0.1" />
+          <Field name="dailyLossLimitPct" label="Daily Loss Halt (%)"
+            defaultValue={initial.dailyLossLimitPct} min="0.1" max="100" step="0.1" />
 
-          <Field name="consecutiveStopLoss" label="Consecutive Losses Before Halt" defaultValue={initial.consecutiveStopLoss}
-            min="1" max="100" step="1" />
+          <Field name="consecutiveStopLoss" label="Consecutive Losses Before Halt"
+            defaultValue={initial.consecutiveStopLoss} min="1" max="100" step="1" />
         </div>
 
         {error && (
@@ -193,7 +184,7 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 16 }}>
           <button type="submit" style={primaryButton}>Save Configuration</button>
-          <button type="button" onClick={reloadSaved} style={secondaryButton}>Reload Saved Values</button>
+          <button type="button" onClick={reload} style={secondaryButton}>Reload Saved Values</button>
           {status && (
             <span style={{ fontSize: 12, color: status === 'Saved ✓' ? '#4ade80' : '#fbbf24' }}>
               {status}
@@ -201,8 +192,8 @@ export default function TradingConfigPanel({ compact = false, onSaved }) {
           )}
         </div>
 
-        <div style={{ marginTop: 10, color: '#64748b', fontSize: 10 }}>
-          SETTINGS ENGINE v7
+        <div style={{ marginTop: 10, color: '#60a5fa', fontSize: 10, fontWeight: 700 }}>
+          SETTINGS ENGINE v9
         </div>
       </form>
     </div>

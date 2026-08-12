@@ -127,7 +127,10 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      <h1>MomentumFlow</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <h1>MomentumFlow</h1>
+        <span style={{ color: '#60a5fa', fontSize: 11, fontWeight: 700 }}>MOMENTUMFLOW UI v9</span>
+      </div>
 
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px', marginBottom: '30px' }}>
