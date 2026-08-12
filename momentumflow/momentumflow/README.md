@@ -1,42 +1,76 @@
-# MomentumFlow
+# MomentumFlow — updated live-bot build
 
-MomentumFlow is a paper simulator plus an automated Alpaca live momentum scanner.
+MomentumFlow is a paper-first Node/Express + React trading assistant. This build adds an explicit **Start Live Bot / Stop Live Bot** workflow while keeping live trading behind multiple server-side gates.
 
-## Live bot scope
+## Important behavior
 
-The automated live bot dynamically loads Alpaca active tradable **US equities/ETFs plus crypto**. It is not crypto-only. Options are not included in the automated scanner yet because options require separate contract-selection and risk controls.
+- Every backend restart forces Trading Mode back to **paper** and clears all 5 Live Gate confirmations.
+- Live automation cannot start unless `LIVE_TRADING_ENABLED=true`, live Alpaca credentials are saved, all Live Gate items are checked, and Trading Mode is switched to live.
+- The automated loop is **crypto-only (BTC, ETH, SOL)** in this first live build. It uses live Coinbase spot prices for its signal and refuses to automate if that verified price feed is unavailable.
+- The bot opens **LONG positions only**. It will not attempt unsupported crypto short sales.
+- Default maximum entry size is **$5 notional per trade**.
+- Only one bot-managed position is allowed at a time.
+- Default exits: +0.6% take-profit, -0.4% stop-loss, or 15-minute maximum hold.
+- The existing 10% session-loss, 3-consecutive-loss, and trade-count safety halts remain server-enforced.
+- Pressing **Stop Live Bot** stops the loop and attempts to close any bot-managed open position.
+- The bot refuses to start if Alpaca already shows an open BTC/USD, ETH/USD, or SOL/USD position, or if the local trade log contains an unresolved open crypto trade.
 
-The live scanner:
-- refreshes Alpaca's tradable asset universe;
-- scans crypto continuously;
-- rotates through equity/ETF batches while the US market is open;
-- enters only when the configured momentum signal qualifies;
-- sizes entries using **Risk Per Trade × current Alpaca live equity**, limited by buying power;
-- has **no fixed $5 entry cap**;
-- keeps server-side loss/trade safety limits in force.
+These defaults are conservative operational guardrails, **not a claim of profitability**. The paper simulator's configured win rate is synthetic and must not be interpreted as expected live performance.
 
-## Trading configuration
+## Backend
 
-The editable configuration includes:
-- Starting Capital (paper seed after Reset Paper Balance)
-- Risk Per Trade (%)
-- Max Trades Per Session
-- Max Trades Per Market / Symbol
-- Paper Win Rate Target (%)
-- Daily Loss Halt (%)
-- Consecutive Losses Before Halt
+Use the `momentumflow/` directory as the backend root. The older `momentumflow/Backend/` folder is legacy/demo code and should **not** be used for deployment.
 
-The frontend sends all of these fields to `/api/trading-config`. The dashboard polling loop does not reload/overwrite trading configuration while a user is editing it.
+```bash
+cd momentumflow
+npm install
+cp .env.example .env
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
 
-## Broker status
+Put the generated value into `CREDENTIAL_ENCRYPTION_KEY`.
 
-Market prices and broker connectivity are separate. The dashboard's connected indicator is based on `/api/credentials/accounts`, which verifies the paper/live Alpaca account and returns `connected: true` only when Alpaca accepts the credentials.
+Keep this off until you have tested setup:
 
-## Deployment
+```env
+LIVE_TRADING_ENABLED=false
+```
 
-Backend root on Railway: `momentumflow`
+Start the backend:
 
-Frontend root on Vercel: `momentumflow/frontend`
+```bash
+npm start
+```
 
-Vercel environment variable:
-`VITE_API_URL=https://YOUR-RAILWAY-BACKEND/api`
+Health check: `GET /api/health`.
+
+## Frontend
+
+```bash
+cd momentumflow/frontend
+npm install
+npm run dev
+```
+
+For a deployed/mobile build, set `VITE_API_URL` to the HTTPS backend URL.
+
+## Live setup sequence
+
+1. Save Alpaca **live** credentials in Settings.
+2. On the backend host, set `LIVE_TRADING_ENABLED=true` and restart.
+3. Re-open Settings after restart and complete all five Live Gate items.
+4. Switch Trading Mode from Paper to Live.
+5. Go to Dashboard and press **Start Live Bot**.
+6. Watch Sessions and bot status. Press **Stop Live Bot** to stop automation and attempt to close its current position.
+
+## API added in this build
+
+- `GET /api/live-bot/status`
+- `POST /api/live-bot/start`
+- `POST /api/live-bot/stop`
+
+The old one-order endpoint `POST /api/sessions/live/trade` remains available behind the same Live Gate.
+
+## Deployment note
+
+For Render/Railway/Fly, point the service root at **`momentumflow`**, run `npm install`, and start with `npm start`. Set a persistent `DATA_DIR` if you want sessions/credentials to survive redeployments. Set `CORS_ORIGIN` to the deployed frontend origin.

@@ -3,15 +3,43 @@ const storedBase = typeof localStorage !== 'undefined'
   : null;
 
 const BASE = (import.meta.env.VITE_API_URL || storedBase || '/api').replace(/\/$/, '');
+const CONFIG_DRAFT_KEY = 'momentumflow_trading_config_draft_v9';
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
+
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || `Request failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Request failed: ${res.status}`);
+  }
   return data;
+}
+
+function readTradingConfigDraft() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(CONFIG_DRAFT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTradingConfigDraft(draft) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CONFIG_DRAFT_KEY, JSON.stringify(draft));
+  } catch {}
+}
+
+function clearTradingConfigDraft() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.removeItem(CONFIG_DRAFT_KEY);
+  } catch {}
 }
 
 export const api = {
@@ -26,7 +54,7 @@ export const api = {
   getPaperAccount: () => request('/sessions/paper/account'),
   resetPaperAccount: (startingCapital) => request('/sessions/paper/reset', {
     method: 'POST',
-    body: JSON.stringify({ startingCapital: Number(startingCapital) }),
+    body: JSON.stringify({ startingCapital }),
   }),
 
   placeLiveTrade: (payload) => request('/sessions/live/trade', {
@@ -68,16 +96,11 @@ export const api = {
   getTradingConfig: () => request('/trading-config'),
   setTradingConfig: (cfg) => request('/trading-config', {
     method: 'POST',
-    body: JSON.stringify({
-      startingCapital: Number(cfg.startingCapital),
-      riskPerTrade: Number(cfg.riskPerTrade),
-      maxTradesPerSession: Math.trunc(Number(cfg.maxTradesPerSession)),
-      maxTradesPerMarket: Math.trunc(Number(cfg.maxTradesPerMarket)),
-      winRateTarget: Number(cfg.winRateTarget),
-      dailyLossLimit: Number(cfg.dailyLossLimit),
-      consecutiveStopLoss: Math.trunc(Number(cfg.consecutiveStopLoss)),
-    }),
+    body: JSON.stringify(cfg),
   }),
+  readTradingConfigDraft,
+  writeTradingConfigDraft,
+  clearTradingConfigDraft,
 
   getLiveBotStatus: () => request('/live-bot/status'),
   startLiveBot: () => request('/live-bot/start', { method: 'POST' }),
