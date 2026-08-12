@@ -8,7 +8,6 @@ export default function Dashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
   const [liveBot, setLiveBot] = useState(null);
   const [paperAccount, setPaperAccount] = useState(null);
   const [tradingMode, setTradingMode] = useState('paper');
@@ -191,199 +190,18 @@ export default function Dashboard() {
         {showSettings ? '▼ Hide Settings' : '▶ Show Settings'}
       </button>
 
-      {/* Settings Panel */}
+      {/* Trading Configuration — same shared editor as Settings page */}
       {showSettings && (
         <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
-          <h3 style={{ marginTop: '0', color: '#ccc' }}>Trading Configuration</h3>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            {/* Starting Capital */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Starting Capital
-              </label>
-              <input
-                type="number"
-                value={config.startingCapital}
-                onChange={(e) => handleConfigChange('startingCapital', e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Risk Per Trade */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Risk Per Trade (%)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="100"
-                value={config.riskPerTrade === '' ? '' : Number(config.riskPerTrade) * 100}
-                onChange={(e) => handleConfigChange('riskPerTrade', e.target.value === '' ? '' : Number(e.target.value) / 100)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Max Trades Per Session */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Max Trades Per Session
-              </label>
-              <input
-                type="number"
-                value={config.maxTradesPerSession}
-                onChange={(e) => handleConfigChange('maxTradesPerSession', e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Trades Per Market */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Max Trades Per Market
-              </label>
-              <input
-                type="number"
-                value={config.maxTradesPerMarket}
-                onChange={(e) => handleConfigChange('maxTradesPerMarket', e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Win Rate Target */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Paper Win Rate Target (%)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={config.winRateTarget * 100}
-                onChange={(e) => handleConfigChange('winRateTarget', e.target.value === '' ? '' : Number(e.target.value) / 100)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Daily Loss Limit */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Daily Loss Limit (%)
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="100"
-                value={config.dailyLossLimit === '' ? '' : Number(config.dailyLossLimit) * 100}
-                onChange={(e) => handleConfigChange('dailyLossLimit', e.target.value === '' ? '' : Number(e.target.value) / 100)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-
-            {/* Consecutive Stop Loss */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#888', fontSize: '12px' }}>
-                Consecutive Losses Before Halt
-              </label>
-              <input
-                type="number"
-                value={config.consecutiveStopLoss}
-                onChange={(e) => handleConfigChange('consecutiveStopLoss', e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#0f1419',
-                  border: '1px solid #2a2e4a',
-                  borderRadius: '4px',
-                  color: '#fff',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={handleSaveConfig}
-            style={{
-              marginTop: '15px',
-              padding: '10px 20px',
-              background: '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Save Configuration
-          </button>
-
-          {saved && <span style={{ marginLeft: '10px', color: '#4ade80' }}>✓ Saved</span>}
-
-
+          <h3 style={{ marginTop: 0, color: '#ccc' }}>Trading Configuration</h3>
+          <TradingConfigPanel compact />
           <button
             onClick={handleResetPaperAccount}
             disabled={resettingPaper}
             style={{
-              marginTop: '15px',
-              marginLeft: '10px',
-              padding: '10px 20px',
-              background: '#7f1d1d',
-              color: 'white',
-              border: '1px solid #991b1b',
-              borderRadius: '4px',
+              marginTop: '15px', padding: '10px 20px', background: '#7f1d1d',
+              color: 'white', border: '1px solid #991b1b', borderRadius: '4px',
               cursor: resettingPaper ? 'not-allowed' : 'pointer',
-              fontSize: '14px',
               opacity: resettingPaper ? 0.6 : 1,
             }}
           >

@@ -26,7 +26,7 @@ export default function Settings() {
 
   useEffect(() => {
     refreshStatus();
-  }, [refreshStatus, loadConfig]);
+  }, [refreshStatus]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
