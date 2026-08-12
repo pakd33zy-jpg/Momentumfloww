@@ -2,39 +2,44 @@ import React, { useCallback, useEffect, useState } from 'react';
 import ApiKeyCard from '../components/ApiKeyCard.jsx';
 import LiveGateChecklist from '../components/LiveGateChecklist.jsx';
 import TradingModeToggle from '../components/TradingModeToggle.jsx';
-import { api } from '../lib/api.js';
 import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
+import BrokerStatus from '../components/BrokerStatus.jsx';
+import { api } from '../lib/api.js';
 
 export default function Settings() {
   const [creds, setCreds] = useState(null);
+  const [accounts, setAccounts] = useState({ paper: null, live: null });
   const [gate, setGate] = useState(null);
-  const [tradingMode, setTradingModeState] = useState(null);
-  const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
+  const [tradingMode, setTradingModeState] = useState({ mode: 'paper' });
+  const [error, setError] = useState('');
 
-  const refreshStatus = useCallback(async () => {
+  const refresh = useCallback(async () => {
     const results = await Promise.allSettled([
       api.getCredentials(),
+      api.getBrokerAccounts(),
       api.getLiveGate(),
       api.getTradingMode(),
-      api.getBrokerAccounts(),
     ]);
     if (results[0].status === 'fulfilled') setCreds(results[0].value);
-    if (results[1].status === 'fulfilled') setGate(results[1].value);
-    if (results[2].status === 'fulfilled') setTradingModeState(results[2].value);
-    if (results[3].status === 'fulfilled') setBrokerAccounts(results[3].value || { paper: null, live: null });
+    if (results[1].status === 'fulfilled') setAccounts(results[1].value || { paper: null, live: null });
+    if (results[2].status === 'fulfilled') setGate(results[2].value);
+    if (results[3].status === 'fulfilled') setTradingModeState(results[3].value || { mode: 'paper' });
+    const failures = results.filter((r) => r.status === 'rejected');
+    setError(failures.length ? failures.map((r) => r.reason?.message || 'request failed').join(' · ') : '');
   }, []);
 
-  useEffect(() => {
-    refreshStatus();
-  }, [refreshStatus]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <section>
         <h2 style={h2}>Trading mode</h2>
-        {tradingMode && (
-          <TradingModeToggle mode={tradingMode.mode} liveUnlocked={gate?.unlocked} onChanged={refreshStatus} />
-        )}
+        <TradingModeToggle mode={tradingMode?.mode || 'paper'} liveUnlocked={gate?.unlocked} onChanged={refresh} />
+      </section>
+
+      <section>
+        <h2 style={h2}>Broker status</h2>
+        <BrokerStatus mode={tradingMode?.mode || 'paper'} accounts={accounts} />
       </section>
 
       <section>
@@ -43,19 +48,19 @@ export default function Settings() {
           {creds && <>
             <ApiKeyCard
               mode="paper"
-              configured={creds.paper.configured}
-              keyIdMasked={creds.paper.keyIdMasked}
-              connected={Boolean(brokerAccounts?.paper?.connected)}
-              connectionError={brokerAccounts?.paper?.error}
-              onSaved={refreshStatus}
+              configured={creds.paper?.configured}
+              keyIdMasked={creds.paper?.keyIdMasked}
+              connected={Boolean(accounts?.paper?.connected)}
+              connectionError={accounts?.paper?.error}
+              onSaved={refresh}
             />
             <ApiKeyCard
               mode="live"
-              configured={creds.live.configured}
-              keyIdMasked={creds.live.keyIdMasked}
-              connected={Boolean(brokerAccounts?.live?.connected)}
-              connectionError={brokerAccounts?.live?.error}
-              onSaved={refreshStatus}
+              configured={creds.live?.configured}
+              keyIdMasked={creds.live?.keyIdMasked}
+              connected={Boolean(accounts?.live?.connected)}
+              connectionError={accounts?.live?.error}
+              onSaved={refresh}
             />
           </>}
         </div>
@@ -63,16 +68,26 @@ export default function Settings() {
 
       <section>
         <h2 style={h2}>Live Gate</h2>
-        <LiveGateChecklist gate={gate} onChange={refreshStatus} />
-        <button onClick={async () => { await api.resetLiveGate(); refreshStatus(); }} style={secondaryButton}>
-          Reset all consents
-        </button>
+        <LiveGateChecklist gate={gate} onChange={refresh} />
+        <button onClick={async () => { await api.resetLiveGate(); refresh(); }} style={secondaryButton}>Reset all consents</button>
       </section>
 
       <section>
-        <h2 style={h2}>Adjustable trading settings</h2>
+        <h2 style={h2}>Trading configuration</h2>
         <TradingConfigPanel />
       </section>
+
+      <section>
+        <h2 style={h2}>Live bot scope</h2>
+        <div style={card}>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+            Automated live scanning covers Alpaca active tradable equities/ETFs plus crypto. Live order size uses the Risk Per Trade setting as a percentage of current Alpaca live equity, limited by available buying power. There is no fixed $5 entry cap.
+          </div>
+        </div>
+      </section>
+
+      {error && <div style={{ color: '#f87171', fontSize: 12 }}>{error}</div>}
+      <div style={{ fontSize: 10, color: '#64748b' }}>MOMENTUMFLOW UI v8</div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { store } from './store.js';
 
 const router = express.Router();
 
+// Canonical first-run defaults only. Stored user settings override these after Save Configuration.
 export const TRADING_DEFAULTS = {
   startingCapital: 100,
   riskPerTrade: 0.02,          // fraction: 0.02 = 2%

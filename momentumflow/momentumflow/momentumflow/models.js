@@ -1,3 +1,4 @@
+// Legacy simulator / dashboard sample symbols only. The automated live bot dynamically loads Alpaca's supported tradable equities/ETFs + crypto universe.
 import { v4 as uuid } from 'uuid';
 
 export const MARKETS = {

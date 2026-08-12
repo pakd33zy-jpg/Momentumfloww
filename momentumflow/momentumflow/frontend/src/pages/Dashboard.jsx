@@ -1,313 +1,232 @@
-import { useState, useEffect } from 'react';
-import { api } from '../lib/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { api } from '../lib/api.js';
+import BrokerStatus from '../components/BrokerStatus.jsx';
 import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 
 export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [marketData, setMarketData] = useState([]);
+  const [paperAccount, setPaperAccount] = useState(null);
+  const [accounts, setAccounts] = useState({ paper: null, live: null });
+  const [tradingMode, setTradingMode] = useState('paper');
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resettingPaper, setResettingPaper] = useState(false);
   const [error, setError] = useState('');
   const [liveBot, setLiveBot] = useState(null);
-  const [paperAccount, setPaperAccount] = useState(null);
-  const [tradingMode, setTradingMode] = useState('paper');
-  const [brokerAccounts, setBrokerAccounts] = useState({ paper: null, live: null });
-  const [resettingPaper, setResettingPaper] = useState(false);
   const [liveBusy, setLiveBusy] = useState(false);
 
+  async function loadDynamicData() {
+    const results = await Promise.allSettled([
+      api.listSessions(),
+      api.getMarketGrid(),
+      api.getPaperAccount(),
+      api.getBrokerAccounts(),
+      api.getTradingMode(),
+      api.getLiveBotStatus(),
+    ]);
+
+    const [sr, mr, pr, ar, tr, br] = results;
+    if (sr.status === 'fulfilled') setSessions(sr.value || []);
+    if (mr.status === 'fulfilled') setMarketData(mr.value || []);
+    if (pr.status === 'fulfilled') setPaperAccount(pr.value || null);
+    if (ar.status === 'fulfilled') setAccounts(ar.value || { paper: null, live: null });
+    if (tr.status === 'fulfilled') setTradingMode(tr.value?.mode || 'paper');
+    if (br.status === 'fulfilled') setLiveBot(br.value || null);
+
+    const failures = results.filter((r) => r.status === 'rejected');
+    setError(failures.length ? `Some data failed to load: ${failures.map((r) => r.reason?.message || 'request failed').join(' · ')}` : '');
+  }
+
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 5000);
+    loadDynamicData();
+    const interval = setInterval(loadDynamicData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  const loadData = async () => {
-    const results = await Promise.allSettled([
-      api.listSessions(),
-      api.getPaperAccount(),
-      api.getTradingMode(),
-      api.getBrokerAccounts(),
-      api.getMarketGrid(),
-      api.getLiveBotStatus(),
-    ]);
-    const [sr, pr, mr, ar, gr, br] = results;
-    if (sr.status === 'fulfilled') setSessions(sr.value || []);
-    if (pr.status === 'fulfilled') setPaperAccount(pr.value);
-    if (mr.status === 'fulfilled') setTradingMode(mr.value?.mode || 'paper');
-    if (ar.status === 'fulfilled') setBrokerAccounts(ar.value || { paper: null, live: null });
-    if (gr.status === 'fulfilled') setMarketData(gr.value || []);
-    if (br.status === 'fulfilled') setLiveBot(br.value);
-
-    const bad = results.filter(r => r.status === 'rejected');
-    setError(bad.length ? `Some data failed to load: ${bad.map(x => x.reason?.message || 'request failed').join(' · ')}` : '');
-  };
-
-  const handleRunSession = async () => {
+  async function handleRunSession() {
     try {
       setLoading(true);
       setError('');
       await api.runPaperSession();
-      await loadData();
-    } catch (err) {
-      setError(`Failed to run session: ${err.message}`);
+      await loadDynamicData();
+    } catch (e) {
+      setError(`Failed to run session: ${e.message}`);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-
-  const handleResetPaperAccount = async () => {
-    const cfg = await api.getTradingConfig();
-    const startingCapital = Number(cfg.startingCapital || 100);
-    const confirmed = window.confirm(`Reset the simulated paper balance to $${startingCapital.toFixed(2)}? This starts a new cumulative run.`);
-    if (!confirmed) return;
+  async function handleResetPaperAccount() {
     try {
+      const cfg = await api.getTradingConfig();
+      const seed = Number(cfg.startingCapital || 100);
+      if (!window.confirm(`Reset paper balance to $${seed.toFixed(2)} and start a new cumulative run?`)) return;
       setResettingPaper(true);
-      setError('');
-      const account = await api.resetPaperAccount(startingCapital);
-      setPaperAccount(account);
-      await loadData();
-    } catch (err) {
-      setError(`Failed to reset paper balance: ${err.message}`);
+      await api.resetPaperAccount(seed);
+      await loadDynamicData();
+    } catch (e) {
+      setError(`Failed to reset paper balance: ${e.message}`);
     } finally {
       setResettingPaper(false);
     }
-  };
+  }
 
-  const handleStartLiveBot = async () => {
+  async function handleStartLiveBot() {
     try {
       setLiveBusy(true);
       setError('');
-      const status = await api.startLiveBot();
-      setLiveBot(status);
-      await loadData();
-    } catch (err) {
-      setError(`Live bot not started: ${err.message}`);
+      setLiveBot(await api.startLiveBot());
+      await loadDynamicData();
+    } catch (e) {
+      setError(`Live bot not started: ${e.message}`);
     } finally {
       setLiveBusy(false);
     }
-  };
+  }
 
-  const handleStopLiveBot = async () => {
+  async function handleStopLiveBot() {
     try {
       setLiveBusy(true);
-      const status = await api.stopLiveBot();
-      setLiveBot(status);
-      await loadData();
-    } catch (err) {
-      setError(`Failed to stop live bot: ${err.message}`);
+      setError('');
+      setLiveBot(await api.stopLiveBot());
+      await loadDynamicData();
+    } catch (e) {
+      setError(`Failed to stop live bot: ${e.message}`);
     } finally {
       setLiveBusy(false);
     }
-  };
+  }
 
-  const lastSession = sessions.find((session) => session.mode === 'paper');
-  const seedCapital = Number(paperAccount?.seedCapital ?? 100);
-  const simulatedPaperAssets = Number(paperAccount?.currentCapital ?? seedCapital);
-  const simulatedPaperPnl = Number(paperAccount?.cumulativePnl ?? (simulatedPaperAssets - seedCapital));
-  const liveAccount = brokerAccounts?.live;
-  const liveConnected = Boolean(liveAccount?.connected);
-  const paperBrokerConnected = Boolean(brokerAccounts?.paper?.connected);
-  const isLiveMode = tradingMode === 'live';
-  const currentBrokerConnected = isLiveMode ? liveConnected : paperBrokerConnected;
-  const currentBroker = isLiveMode ? liveAccount : brokerAccounts?.paper;
-  // In LIVE mode the dashboard is broker-authoritative: Alpaca equity is the source of truth.
-  // In PAPER mode this app continues to show the resettable compounded simulator balance.
-  const totalAssets = isLiveMode && liveConnected
-    ? Number(liveAccount.equity ?? liveAccount.portfolioValue ?? 0)
-    : simulatedPaperAssets;
-  const cumulativePnl = isLiveMode && liveConnected
-    ? Number(totalAssets - Number(liveAccount.lastEquity || totalAssets))
-    : simulatedPaperPnl;
-  const pnl = lastSession ? Number(lastSession.total_pnl ?? lastSession.pnl ?? 0) : 0;
+  const lastSession = sessions[0] || null;
+  const paperTotal = Number(paperAccount?.currentCapital ?? paperAccount?.seedCapital ?? 100);
+  const liveTotal = Number(accounts?.live?.equity ?? accounts?.live?.portfolioValue ?? 0);
+  const totalAssets = tradingMode === 'live' && accounts?.live?.connected ? liveTotal : paperTotal;
+  const lastPnl = Number(lastSession?.total_pnl ?? lastSession?.pnl ?? 0);
   const wins = Number(lastSession?.wins ?? lastSession?.win_count ?? 0);
   const losses = Number(lastSession?.losses ?? lastSession?.loss_count ?? 0);
-  const winRate = (wins + losses > 0) ? ((wins / (wins + losses)) * 100).toFixed(1) : '-';
-  const sessionsSinceReset = Number(paperAccount?.sessionsSinceReset ?? 0);
+  const winRate = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : '—';
+  const sessionsRun = tradingMode === 'paper'
+    ? Number(paperAccount?.sessionsSinceReset ?? 0)
+    : sessions.filter((s) => s.mode === 'live').length;
+
+  const topCandidates = liveBot?.topCandidates || [];
+  const universe = liveBot?.universe || {};
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div style={{ padding: 20, maxWidth: 1200, margin: '0 auto' }}>
       <h1>MomentumFlow</h1>
 
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px', marginBottom: '30px' }}>
-        <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>{isLiveMode ? 'LIVE ALPACA EQUITY' : 'TOTAL ASSETS'}</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>${totalAssets.toFixed(2)}</div>
-          <div style={{ fontSize: '11px', color: pnl >= 0 ? '#4ade80' : '#f87171', marginTop: '5px' }}>
-            {isLiveMode && liveConnected
-              ? `${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl.toFixed(2)} vs Alpaca previous equity · BP $${Number(liveAccount.buyingPower || 0).toFixed(2)}`
-              : `${cumulativePnl >= 0 ? '+' : ''}${cumulativePnl.toFixed(2)} since $${seedCapital.toFixed(2)} reset`}
-          </div>
-        </div>
-
-        <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>LAST SESSION P&L</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: lastSession?.pnl >= 0 ? '#4ade80' : '#f87171' }}>
-            {lastSession ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-'}
-          </div>
-        </div>
-
-        <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>WIN RATE</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{winRate}%</div>
-        </div>
-
-        <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>SESSIONS RUN</div>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{sessionsSinceReset}</div>
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 15, marginBottom: 22 }}>
+        <Stat label={tradingMode === 'live' ? 'LIVE ALPACA EQUITY' : 'TOTAL PAPER ASSETS'} value={`$${Number(totalAssets || 0).toFixed(2)}`} />
+        <Stat label="LAST SESSION P&L" value={`${lastPnl >= 0 ? '+' : ''}$${lastPnl.toFixed(2)}`} valueColor={lastPnl >= 0 ? '#4ade80' : '#f87171'} />
+        <Stat label="LAST SESSION WIN RATE" value={winRate === '—' ? '—' : `${winRate}%`} />
+        <Stat label={tradingMode === 'paper' ? 'SESSIONS SINCE RESET' : 'LIVE SESSIONS'} value={String(sessionsRun)} />
       </div>
 
-      {/* Broker Status */}
-      <div style={{ background: '#1e2139', padding: '15px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '8px', height: '8px', background: currentBrokerConnected ? '#4ade80' : '#f87171', borderRadius: '50%' }}></div>
-          <span style={{ fontSize: '14px', color: '#ccc' }}>
-            Alpaca {isLiveMode ? 'LIVE' : 'PAPER'}: {currentBrokerConnected ? 'connected' : 'not connected'}
-            {isLiveMode && liveConnected ? ` · equity $${Number(liveAccount.equity || 0).toFixed(2)} · cash $${Number(liveAccount.cash || 0).toFixed(2)}` : ''}
-            {!isLiveMode && paperBrokerConnected && currentBroker?.equity != null ? ` · paper equity $${Number(currentBroker.equity || 0).toFixed(2)}` : ''}
-            {!currentBrokerConnected && currentBroker?.error ? ` · ${currentBroker.error}` : ''}
-            {currentBrokerConnected ? ` · other account: ${isLiveMode ? (paperBrokerConnected ? 'paper connected' : 'paper not configured') : (liveConnected ? 'live connected' : 'live not configured')}` : ''}
-          </span>
-        </div>
+      <div style={{ marginBottom: 22 }}>
+        <BrokerStatus mode={tradingMode} accounts={accounts} />
       </div>
 
-      {/* Settings Toggle */}
-      <button
-        onClick={() => setShowSettings(!showSettings)}
-        style={{
-          padding: '10px 15px',
-          background: '#1e2139',
-          color: '#3b82f6',
-          border: '1px solid #2a2e4a',
-          borderRadius: '4px',
-          cursor: 'pointer',
-          marginBottom: '20px',
-          fontSize: '14px',
-        }}
-      >
+      <button onClick={() => setShowSettings((v) => !v)} style={toggleButton}>
         {showSettings ? '▼ Hide Settings' : '▶ Show Settings'}
       </button>
 
-      {/* Trading Configuration — same shared editor as Settings page */}
       {showSettings && (
-        <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
+        <div style={panel}>
           <h3 style={{ marginTop: 0, color: '#ccc' }}>Trading Configuration</h3>
           <TradingConfigPanel compact />
-          <button
-            onClick={handleResetPaperAccount}
-            disabled={resettingPaper}
-            style={{
-              marginTop: '15px', padding: '10px 20px', background: '#7f1d1d',
-              color: 'white', border: '1px solid #991b1b', borderRadius: '4px',
-              cursor: resettingPaper ? 'not-allowed' : 'pointer',
-              opacity: resettingPaper ? 0.6 : 1,
-            }}
-          >
+          <button onClick={handleResetPaperAccount} disabled={resettingPaper} style={resetButton}>
             {resettingPaper ? 'Resetting…' : 'Reset Paper Balance'}
           </button>
         </div>
       )}
 
-      {/* Strategy Info */}
-      <div style={{ background: '#1e2139', padding: '20px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '30px' }}>
-        <h3 style={{ margin: '0 0 10px 0', color: '#4ade80', fontSize: '14px' }}>TREND-ALIGNED MOMENTUM</h3>
-        <p style={{ margin: '0 0 15px 0', color: '#aaa', fontSize: '13px' }}>
-          Momentum strategy across Alpaca tradable equities/ETFs and crypto. Live entries use Alpaca account equity for risk-based sizing and remain subject to server-side safety halts.
+      <div style={panel}>
+        <h3 style={{ margin: '0 0 10px', color: '#4ade80', fontSize: 14 }}>TREND-ALIGNED MOMENTUM</h3>
+        <p style={{ margin: 0, color: '#aaa', fontSize: 13, lineHeight: 1.5 }}>
+          Automated live scanning covers Alpaca active tradable equities/ETFs plus crypto. Risk Per Trade controls live entry size as a percentage of current Alpaca live equity; there is no fixed $5 entry cap.
         </p>
       </div>
 
-      {/* Run Button */}
-      <button
-        onClick={handleRunSession}
-        disabled={loading}
-        style={{
-          width: '100%',
-          padding: '16px',
-          background: '#3b82f6',
-          color: 'white',
-          border: 'none',
-          borderRadius: '8px',
-          fontSize: '16px',
-          fontWeight: 'bold',
-          cursor: loading ? 'not-allowed' : 'pointer',
-          opacity: loading ? 0.7 : 1,
-          marginBottom: '20px',
-        }}
-      >
-        {loading ? 'Running...' : 'Run paper session'}
+      <button onClick={handleRunSession} disabled={loading} style={{ ...runButton, opacity: loading ? 0.7 : 1 }}>
+        {loading ? 'Running…' : 'Run paper session'}
       </button>
 
-      {error && <div style={{ color: '#f87171', marginBottom: '20px', fontSize: '14px' }}>{error}</div>}
+      {error && <div style={{ color: '#f87171', marginBottom: 20, fontSize: 13 }}>{error}</div>}
 
-      {/* Live Bot */}
-      <div style={{ background: '#1e2139', padding: '18px', borderRadius: '8px', border: '1px solid #2a2e4a', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+      <div style={panel}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
           <div>
-            <div style={{ fontWeight: 'bold', color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot — Alpaca Equities/ETFs + Crypto</div>
-            <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>
-              Scans Alpaca's active tradable equities/ETFs plus crypto. Options are excluded until options-specific permissions and risk controls are added. Requires Live Mode, completed Live Gate, server enable flag, and live Alpaca keys.
+            <div style={{ fontWeight: 700, color: liveBot?.running ? '#4ade80' : '#fff' }}>Automated Live Bot — Alpaca Equities/ETFs + Crypto</div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>
+              Scans the supported Alpaca tradable universe every {liveBot?.config?.pollSeconds ?? 5}s and waits for a qualifying momentum signal.
             </div>
           </div>
-          <div style={{ fontSize: '12px', color: liveBot?.running ? '#4ade80' : '#888' }}>
-            {liveBot?.running ? 'RUNNING' : 'STOPPED'}
-          </div>
+          <div style={{ fontSize: 12, color: liveBot?.running ? '#4ade80' : '#888' }}>{liveBot?.running ? 'RUNNING' : 'STOPPED'}</div>
         </div>
-        {liveBot?.lastError && <div style={{ marginTop: '8px', color: '#f87171', fontSize: '12px' }}>{liveBot.lastError}</div>}
-        {liveBot?.running && (
-          <div style={{ marginTop: '10px', padding: '10px', background: '#0f1419', borderRadius: '6px', fontSize: '12px', color: '#bbb' }}>
-            <div><strong>Scanner:</strong> every {liveBot?.config?.pollSeconds ?? 5}s · {liveBot?.lastDecision || 'starting'}</div>
-            <div style={{ marginTop: '5px' }}>Universe: {Number(liveBot?.universe?.totalCount || 0).toLocaleString()} tradable assets ({Number(liveBot?.universe?.equityCount || 0).toLocaleString()} equities/ETFs + {Number(liveBot?.universe?.cryptoCount || 0).toLocaleString()} crypto) · US market {liveBot?.marketOpen == null ? 'checking' : liveBot.marketOpen ? 'OPEN' : 'CLOSED'}</div>
-            {Array.isArray(liveBot?.topCandidates) && liveBot.topCandidates.length > 0 && (<div style={{ marginTop: '7px' }}><strong>Top signals:</strong> {liveBot.topCandidates.slice(0,5).map(c => `${c.symbol} ${Number(c.momentumPct).toFixed(3)}%`).join(' · ')}</div>)}
+
+        <div style={{ marginTop: 10, fontSize: 12, color: '#cbd5e1' }}>
+          {liveBot?.lastDecision || 'Waiting for bot status…'}
+        </div>
+        {liveBot?.lastError && <div style={{ marginTop: 7, color: '#f87171', fontSize: 12 }}>{liveBot.lastError}</div>}
+
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, fontSize: 11, color: '#888' }}>
+          <span>Universe: {Number(universe.totalCount || 0).toLocaleString()}</span>
+          <span>Equities/ETFs: {Number(universe.equityCount || 0).toLocaleString()}</span>
+          <span>Crypto: {Number(universe.cryptoCount || 0).toLocaleString()}</span>
+          <span>US market: {liveBot?.marketOpen == null ? 'unknown' : liveBot.marketOpen ? 'OPEN' : 'CLOSED'}</span>
+          <span>Risk/trade: {liveBot?.config?.riskPerTrade != null ? `${(Number(liveBot.config.riskPerTrade) * 100).toFixed(2)}%` : '—'}</span>
+        </div>
+
+        {topCandidates.length > 0 && (
+          <div style={{ marginTop: 10, fontSize: 11, color: '#94a3b8' }}>
+            Top signals: {topCandidates.slice(0, 5).map((c) => `${c.symbol} ${Number(c.momentumPct).toFixed(3)}%`).join(' · ')}
           </div>
         )}
-        <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
-          <button
-            onClick={handleStartLiveBot}
-            disabled={liveBusy || liveBot?.running}
-            style={{ flex: 1, padding: '12px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', opacity: liveBusy || liveBot?.running ? 0.5 : 1 }}
-          >
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+          <button onClick={handleStartLiveBot} disabled={liveBusy || liveBot?.running} style={{ ...liveStartButton, opacity: liveBusy || liveBot?.running ? 0.5 : 1 }}>
             {liveBusy ? 'Please wait…' : 'Start Live Bot'}
           </button>
-          <button
-            onClick={handleStopLiveBot}
-            disabled={liveBusy || !liveBot?.running}
-            style={{ flex: 1, padding: '12px', background: '#111827', color: '#fff', border: '1px solid #4b5563', borderRadius: '6px', fontWeight: 'bold', opacity: liveBusy || !liveBot?.running ? 0.5 : 1 }}
-          >
+          <button onClick={handleStopLiveBot} disabled={liveBusy || !liveBot?.running} style={{ ...liveStopButton, opacity: liveBusy || !liveBot?.running ? 0.5 : 1 }}>
             Stop Live Bot
           </button>
         </div>
-        <div style={{ marginTop: '10px', fontSize: '11px', color: '#888' }}>
-          Live scanner checks every 5 seconds, rotates through the supported Alpaca tradable universe, and only places an order when a qualifying momentum signal appears. Entry size uses the saved Risk Per Trade percentage of current Alpaca live equity, limited by available buying power.
-        </div>
       </div>
 
-      {/* Market Grid */}
-      <h3 style={{ color: '#ccc', marginBottom: '15px', marginTop: '30px' }}>Live market grid</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px' }}>
-        {marketData.map(market => (
-          <div
-            key={market.market}
-            style={{
-              background: '#1e2139',
-              padding: '15px',
-              borderRadius: '8px',
-              border: '1px solid #2a2e4a',
-            }}
-          >
-            <div style={{ fontSize: '12px', color: '#888', marginBottom: '5px' }}>{market.market}</div>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff', marginBottom: '5px' }}>
+      <h3 style={{ color: '#ccc', marginBottom: 15, marginTop: 30 }}>Market grid</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 15 }}>
+        {marketData.map((market) => (
+          <div key={market.market} style={marketCell}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 5 }}>{market.market}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>
               ${Number.isFinite(Number(market.price)) ? Number(market.price).toFixed(2) : 'N/A'}
             </div>
-            <div style={{ fontSize: '11px', color: market.change >= 0 ? '#4ade80' : '#f87171' }}>
-              {Number.isFinite(Number(market.change)) ? `${Number(market.change) >= 0 ? '+' : ''}${Number(market.change).toFixed(2)}%` : '—'}
-            </div>
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>{market.source || 'market data'}</div>
           </div>
         ))}
       </div>
+
+      <div style={{ marginTop: 18, fontSize: 10, color: '#64748b' }}>MOMENTUMFLOW UI v8</div>
     </div>
   );
 }
-    
-    
+
+function Stat({ label, value, valueColor = '#fff' }) {
+  return (
+    <div style={statCard}>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 5 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: valueColor }}>{value}</div>
+    </div>
+  );
+}
+
+const statCard = { background: '#1e2139', padding: 20, borderRadius: 8, border: '1px solid #2a2e4a' };
+const panel = { background: '#1e2139', padding: 20, borderRadius: 8, border: '1px solid #2a2e4a', marginBottom: 22 };
+const toggleButton = { padding: '10px 15px', background: '#1e2139', color: '#3b82f6', border: '1px solid #2a2e4a', borderRadius: 4, cursor: 'pointer', marginBottom: 20, fontSize: 14 };
+const resetButton = { marginTop: 14, padding: '9px 14px', background: '#7f1d1d', color: '#fff', border: '1px solid #991b1b', borderRadius: 6, cursor: 'pointer' };
+const runButton = { width: '100%', padding: 16, background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, fontSize: 16, fontWeight: 700, cursor: 'pointer', marginBottom: 20 };
+const liveStartButton = { flex: 1, padding: 12, background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' };
+const liveStopButton = { flex: 1, padding: 12, background: '#111827', color: '#fff', border: '1px solid #4b5563', borderRadius: 6, fontWeight: 700, cursor: 'pointer' };
+const marketCell = { background: '#1e2139', padding: 15, borderRadius: 8, border: '1px solid #2a2e4a' };
