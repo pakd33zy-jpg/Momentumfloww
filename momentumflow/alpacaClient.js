@@ -2,22 +2,7 @@ import fetch from 'node-fetch';
 import { decrypt } from './crypto.js';
 import { store } from './store.js';
 
-// ALPACA CLIENT v14
-//
-// Fix:
-// Crypto universe is restricted to /USD pairs.
-//
-// Examples allowed:
-// BTC/USD
-// ETH/USD
-// SOL/USD
-// PEPE/USD
-// DOGE/USD
-//
-// Examples blocked:
-// BTC/USDT
-// ETH/USDC
-// ETH/BTC
+// ALPACA CLIENT v16
 
 export function getCredentials(mode) {
   const creds =
@@ -53,31 +38,21 @@ export function getCredentials(mode) {
     }
   }
 
-  // Railway/environment fallback.
-  //
-  // Generic ALPACA_API_KEY /
-  // ALPACA_SECRET_KEY are treated
-  // as LIVE credentials only.
-
   const keyId =
     mode === 'live'
-      ? (
-          process.env
-            .ALPACA_LIVE_API_KEY ||
-          process.env
-            .ALPACA_API_KEY
-        )
+      ? process.env
+          .ALPACA_LIVE_API_KEY ||
+        process.env
+          .ALPACA_API_KEY
       : process.env
           .ALPACA_PAPER_API_KEY;
 
   const secretKey =
     mode === 'live'
-      ? (
-          process.env
-            .ALPACA_LIVE_SECRET_KEY ||
-          process.env
-            .ALPACA_SECRET_KEY
-        )
+      ? process.env
+          .ALPACA_LIVE_SECRET_KEY ||
+        process.env
+          .ALPACA_SECRET_KEY
       : process.env
           .ALPACA_PAPER_SECRET_KEY;
 
@@ -88,6 +63,7 @@ export function getCredentials(mode) {
     return {
       keyId,
       secretKey,
+
       source:
         'environment',
     };
@@ -106,6 +82,21 @@ export function hasCredentials(
   );
 }
 
+function selectedMode() {
+  return (
+    store.getConfig(
+      'tradingMode',
+      {
+        mode:
+          'paper',
+      }
+    ).mode ===
+    'live'
+  )
+    ? 'live'
+    : 'paper';
+}
+
 function baseUrlFor(
   mode
 ) {
@@ -115,12 +106,15 @@ function baseUrlFor(
       : 'https://paper-api.alpaca.markets';
 
   return (
-    mode === 'live'
-      ? process.env
-          .ALPACA_LIVE_BASE_URL
-      : process.env
-          .ALPACA_PAPER_BASE_URL
-  ) || fallback;
+    (
+      mode === 'live'
+        ? process.env
+            .ALPACA_LIVE_BASE_URL
+        : process.env
+            .ALPACA_PAPER_BASE_URL
+    ) ||
+    fallback
+  );
 }
 
 async function alpacaRequest(
@@ -192,6 +186,8 @@ export async function placeOrder({
   side,
   type = 'market',
   timeInForce,
+  limitPrice,
+  extendedHours,
 }) {
   const isCrypto =
     String(
@@ -233,6 +229,25 @@ export async function placeOrder({
     throw new Error(
       'qty or notional is required'
     );
+  }
+
+  if (
+    limitPrice != null
+  ) {
+    body.limit_price =
+      String(
+        limitPrice
+      );
+  }
+
+  if (
+    extendedHours !=
+    null
+  ) {
+    body.extended_hours =
+      Boolean(
+        extendedHours
+      );
   }
 
   return alpacaRequest(
@@ -387,139 +402,6 @@ export async function waitForFill(
   return order;
 }
 
-// --------------------------------------------------
-// LEGACY DISPLAY GRID
-//
-// NOTE:
-// These fallback values are for the old Market Grid
-// display only.
-//
-// The automated trading scanner uses Alpaca snapshots
-// below and does NOT use these fallback equity prices.
-// --------------------------------------------------
-
-const STATIC_FALLBACK_PRICES = {
-  BTC:
-    62000,
-
-  ETH:
-    3400,
-
-  SOL:
-    145,
-
-  SPY:
-    560,
-
-  QQQ:
-    480,
-
-  GLD:
-    210,
-
-  GBTC:
-    58,
-};
-
-const COINBASE_SYMBOLS = {
-  BTC:
-    'BTC-USD',
-
-  ETH:
-    'ETH-USD',
-
-  SOL:
-    'SOL-USD',
-};
-
-export async function getSpotPrice(
-  market
-) {
-  if (
-    COINBASE_SYMBOLS[
-      market
-    ]
-  ) {
-    try {
-      const res =
-        await fetch(
-          `https://api.coinbase.com/v2/prices/${
-            COINBASE_SYMBOLS[
-              market
-            ]
-          }/spot`
-        );
-
-      const data =
-        await res.json();
-
-      const price =
-        Number(
-          data?.data
-            ?.amount
-        );
-
-      if (
-        res.ok &&
-        Number.isFinite(
-          price
-        )
-      ) {
-        return {
-          market,
-          price,
-          source:
-            'coinbase',
-        };
-      }
-    } catch (err) {
-      console.warn(
-        `[market] Coinbase ${market} price failed: ${err.message}`
-      );
-    }
-  }
-
-  return {
-    market,
-
-    price:
-      STATIC_FALLBACK_PRICES[
-        market
-      ] ??
-      100,
-
-    source:
-      'fallback',
-  };
-}
-
-export async function getMarketGrid(
-  markets
-) {
-  return Promise.all(
-    markets.map(
-      async (
-        market
-      ) => {
-        const spot =
-          await getSpotPrice(
-            market
-          );
-
-        return {
-          ...spot,
-          change:
-            null,
-        };
-      }
-    )
-  );
-}
-
-// --------------------------------------------------
-// ALPACA MARKET DATA
-// --------------------------------------------------
-
 const DATA_BASE_URL =
   process.env
     .ALPACA_DATA_BASE_URL ||
@@ -573,10 +455,6 @@ async function alpacaDataRequest(
   return data;
 }
 
-// --------------------------------------------------
-// TRADABLE UNIVERSE
-// --------------------------------------------------
-
 export async function getTradableAssets(
   mode = 'live'
 ) {
@@ -587,13 +465,11 @@ export async function getTradableAssets(
     await Promise.all([
       alpacaRequest(
         mode,
-
         '/v2/assets?status=active&asset_class=us_equity'
       ),
 
       alpacaRequest(
         mode,
-
         '/v2/assets?status=active&asset_class=crypto'
       ),
     ]);
@@ -609,28 +485,8 @@ export async function getTradableAssets(
       (asset) =>
         asset.tradable &&
         asset.status ===
-          'active' &&
-        asset.fractionable
+          'active'
     );
-
-  /*
-   * IMPORTANT:
-   *
-   * Only trade crypto pairs
-   * whose quote currency is USD.
-   *
-   * This prevents the bot from
-   * attempting orders such as:
-   *
-   * BTC/USDT
-   * ETH/USDT
-   * SOL/USDC
-   * ETH/BTC
-   *
-   * when the Alpaca account has
-   * USD buying power but no USDT,
-   * USDC, BTC, etc.
-   */
 
   const cryptoAssets =
     (
@@ -674,7 +530,7 @@ export async function getMarketClock(
 
 function chunks(
   symbols,
-  n = 75
+  size = 75
 ) {
   const output =
     [];
@@ -683,12 +539,12 @@ function chunks(
     let i = 0;
     i <
     symbols.length;
-    i += n
+    i += size
   ) {
     output.push(
       symbols.slice(
         i,
-        i + n
+        i + size
       )
     );
   }
@@ -713,6 +569,12 @@ export async function getStockSnapshots(
       []
     )
   ) {
+    if (
+      !batch.length
+    ) {
+      continue;
+    }
+
     const query =
       new URLSearchParams({
         symbols:
@@ -723,14 +585,18 @@ export async function getStockSnapshots(
         feed,
       });
 
-    Object.assign(
-      output,
-
+    const data =
       await alpacaDataRequest(
         mode,
 
         `/v2/stocks/snapshots?${query}`
-      )
+      );
+
+    Object.assign(
+      output,
+      data?.snapshots ||
+      data ||
+      {}
     );
   }
 
@@ -751,6 +617,12 @@ export async function getCryptoSnapshots(
       []
     )
   ) {
+    if (
+      !batch.length
+    ) {
+      continue;
+    }
+
     const query =
       new URLSearchParams({
         symbols:
@@ -778,6 +650,401 @@ export async function getCryptoSnapshots(
   return output;
 }
 
+function isoOrNull(
+  value
+) {
+  if (!value) {
+    return null;
+  }
+
+  const date =
+    value instanceof Date
+      ? value
+      : new Date(
+          value
+        );
+
+  return Number.isNaN(
+    date.getTime()
+  )
+    ? null
+    : date.toISOString();
+}
+
+export async function getStockBars(
+  mode,
+  symbols,
+  {
+    timeframe = '1Min',
+    start,
+    end,
+    limit = 10000,
+    feed = 'iex',
+    sort = 'asc',
+    maxPages = 5,
+  } = {}
+) {
+  const wanted =
+    [
+      ...new Set(
+        (
+          symbols ||
+          []
+        ).filter(
+          Boolean
+        )
+      ),
+    ];
+
+  const output =
+    Object.fromEntries(
+      wanted.map(
+        (symbol) => [
+          symbol,
+          [],
+        ]
+      )
+    );
+
+  if (
+    !wanted.length
+  ) {
+    return output;
+  }
+
+  let pageToken =
+    null;
+
+  let page =
+    0;
+
+  do {
+    const query =
+      new URLSearchParams({
+        symbols:
+          wanted.join(
+            ','
+          ),
+
+        timeframe,
+
+        limit:
+          String(
+            Math.max(
+              1,
+
+              Math.min(
+                10000,
+
+                Number(
+                  limit
+                ) ||
+                10000
+              )
+            )
+          ),
+
+        feed,
+        sort,
+      });
+
+    const startIso =
+      isoOrNull(
+        start
+      );
+
+    const endIso =
+      isoOrNull(
+        end
+      );
+
+    if (startIso) {
+      query.set(
+        'start',
+        startIso
+      );
+    }
+
+    if (endIso) {
+      query.set(
+        'end',
+        endIso
+      );
+    }
+
+    if (pageToken) {
+      query.set(
+        'page_token',
+        pageToken
+      );
+    }
+
+    const data =
+      await alpacaDataRequest(
+        mode,
+
+        `/v2/stocks/bars?${query}`
+      );
+
+    const bars =
+      data?.bars ||
+      {};
+
+    for (
+      const [
+        symbol,
+        rows,
+      ] of
+      Object.entries(
+        bars
+      )
+    ) {
+      if (
+        !output[
+          symbol
+        ]
+      ) {
+        output[
+          symbol
+        ] = [];
+      }
+
+      if (
+        Array.isArray(
+          rows
+        )
+      ) {
+        output[
+          symbol
+        ].push(
+          ...rows
+        );
+      }
+    }
+
+    pageToken =
+      data
+        ?.next_page_token ||
+      null;
+
+    page +=
+      1;
+  } while (
+    pageToken &&
+    page <
+      maxPages
+  );
+
+  for (
+    const symbol of
+    Object.keys(
+      output
+    )
+  ) {
+    output[
+      symbol
+    ].sort(
+      (a, b) =>
+        new Date(
+          a?.t ||
+          0
+        ) -
+        new Date(
+          b?.t ||
+          0
+        )
+    );
+  }
+
+  return output;
+}
+
+export async function getCryptoBars(
+  mode,
+  symbols,
+  {
+    timeframe = '1Min',
+    start,
+    end,
+    limit = 10000,
+    sort = 'asc',
+    maxPages = 5,
+  } = {}
+) {
+  const wanted =
+    [
+      ...new Set(
+        (
+          symbols ||
+          []
+        ).filter(
+          Boolean
+        )
+      ),
+    ];
+
+  const output =
+    Object.fromEntries(
+      wanted.map(
+        (symbol) => [
+          symbol,
+          [],
+        ]
+      )
+    );
+
+  if (
+    !wanted.length
+  ) {
+    return output;
+  }
+
+  let pageToken =
+    null;
+
+  let page =
+    0;
+
+  do {
+    const query =
+      new URLSearchParams({
+        symbols:
+          wanted.join(
+            ','
+          ),
+
+        timeframe,
+
+        limit:
+          String(
+            Math.max(
+              1,
+
+              Math.min(
+                10000,
+
+                Number(
+                  limit
+                ) ||
+                10000
+              )
+            )
+          ),
+
+        sort,
+      });
+
+    const startIso =
+      isoOrNull(
+        start
+      );
+
+    const endIso =
+      isoOrNull(
+        end
+      );
+
+    if (startIso) {
+      query.set(
+        'start',
+        startIso
+      );
+    }
+
+    if (endIso) {
+      query.set(
+        'end',
+        endIso
+      );
+    }
+
+    if (pageToken) {
+      query.set(
+        'page_token',
+        pageToken
+      );
+    }
+
+    const data =
+      await alpacaDataRequest(
+        mode,
+
+        `/v1beta3/crypto/us/bars?${query}`
+      );
+
+    const bars =
+      data?.bars ||
+      {};
+
+    for (
+      const [
+        symbol,
+        rows,
+      ] of
+      Object.entries(
+        bars
+      )
+    ) {
+      if (
+        !output[
+          symbol
+        ]
+      ) {
+        output[
+          symbol
+        ] = [];
+      }
+
+      if (
+        Array.isArray(
+          rows
+        )
+      ) {
+        output[
+          symbol
+        ].push(
+          ...rows
+        );
+      }
+    }
+
+    pageToken =
+      data
+        ?.next_page_token ||
+      null;
+
+    page +=
+      1;
+  } while (
+    pageToken &&
+    page <
+      maxPages
+  );
+
+  for (
+    const symbol of
+    Object.keys(
+      output
+    )
+  ) {
+    output[
+      symbol
+    ].sort(
+      (a, b) =>
+        new Date(
+          a?.t ||
+          0
+        ) -
+        new Date(
+          b?.t ||
+          0
+        )
+    );
+  }
+
+  return output;
+}
+
 export async function getLatestTradablePrice(
   mode,
   symbol,
@@ -796,9 +1063,13 @@ export async function getLatestTradablePrice(
       );
 
     const snapshot =
-      data[symbol] ||
       data[
-        symbol.replace(
+        symbol
+      ] ||
+      data[
+        String(
+          symbol
+        ).replace(
           '/',
           ''
         )
@@ -839,7 +1110,9 @@ export async function getLatestTradablePrice(
     );
 
   const snapshot =
-    data[symbol];
+    data[
+      symbol
+    ];
 
   const price =
     Number(
@@ -867,9 +1140,81 @@ export async function getLatestTradablePrice(
   return price;
 }
 
-// --------------------------------------------------
-// ACCOUNT SUMMARY
-// --------------------------------------------------
+const CRYPTO_GRID_SYMBOLS = {
+  BTC:
+    'BTC/USD',
+
+  ETH:
+    'ETH/USD',
+
+  SOL:
+    'SOL/USD',
+};
+
+export async function getSpotPrice(
+  market,
+  mode = selectedMode()
+) {
+  const isCrypto =
+    Boolean(
+      CRYPTO_GRID_SYMBOLS[
+        market
+      ]
+    );
+
+  const symbol =
+    CRYPTO_GRID_SYMBOLS[
+      market
+    ] ||
+    market;
+
+  const price =
+    await getLatestTradablePrice(
+      mode,
+
+      symbol,
+
+      isCrypto
+        ? 'crypto'
+        : 'us_equity'
+    );
+
+  return {
+    market,
+    price,
+
+    source:
+      isCrypto
+        ? `alpaca_${mode}`
+        : `alpaca_${mode}_iex`,
+  };
+}
+
+export async function getMarketGrid(
+  markets,
+  mode = selectedMode()
+) {
+  return Promise.all(
+    (
+      markets ||
+      []
+    ).map(
+      async (
+        market
+      ) => ({
+        ...(
+          await getSpotPrice(
+            market,
+            mode
+          )
+        ),
+
+        change:
+          null,
+      })
+    )
+  );
+}
 
 export async function getAccountSummary(
   mode
