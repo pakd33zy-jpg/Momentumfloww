@@ -1,6 +1,11 @@
 import express from 'express';
+import fetch from 'node-fetch';
 import { store } from './store.js';
-import { createSession, createTrade, recomputeSessionStats } from './models.js';
+import {
+  createSession,
+  createTrade,
+  recomputeSessionStats,
+} from './models.js';
 import {
   checkHaltConditions,
   evaluateLiveGate,
@@ -14,25 +19,30 @@ import {
   getStockSnapshots,
   getCryptoSnapshots,
   getLatestTradablePrice,
+  getCredentials,
   hasCredentials,
   placeOrder,
+  getOrder,
+  cancelOrder,
   waitForFill,
 } from './alpacaClient.js';
 
-// UNIFIED BOT v14
+// UNIFIED BOT v15
 //
-// PAPER = real Alpaca market data + Alpaca paper orders
+// PAPER = Alpaca market data + Alpaca paper orders
 // LIVE  = same strategy + Alpaca live orders
 //
 // Equities = LONG + SHORT
 // Crypto   = LONG only
 //
-// v14:
-// - up to 3 simultaneous positions
-// - manages every open trade each tick
-// - opens at most one new position per tick
-// - recovers up to 3 positions after restart
-// - keeps qty_available crypto exit fix
+// v15:
+// - 3 simultaneous positions
+// - handles partial exit fills
+// - cancels partial-order remainder before retry
+// - retries actual remaining broker quantity
+// - saves partial fills
+// - startup orphan reconciliation from Alpaca order history
+// - preserves qty_available crypto exit fix
 
 const router = express.Router();
 
@@ -46,8 +56,10 @@ const state = {
   lastError: null,
 
   openTradeIds: [],
+  exitRetryPending: false,
 
   lastDecision: 'stopped',
+
   signalSnapshot: {},
   topCandidates: [],
 
@@ -74,9 +86,11 @@ const DEFAULTS = {
   maxOpenPositions: 3,
 
   equityBatchSize: 75,
+
   universeRefreshMinutes: 15,
 
   minEquityPrice: 1,
+
   minDailyDollarVolume: 1000000,
 
   stockFeed: 'iex',
@@ -101,13 +115,19 @@ const cfg = () => ({
 });
 
 function maxOpenPositions() {
-  const value = Math.trunc(
-    Number(
-      cfg().maxOpenPositions ?? 3
-    )
-  );
+  const value =
+    Math.trunc(
+      Number(
+        cfg().maxOpenPositions ??
+        3
+      )
+    );
 
-  if (!Number.isFinite(value)) {
+  if (
+    !Number.isFinite(
+      value
+    )
+  ) {
     return 3;
   }
 
@@ -121,7 +141,7 @@ function maxOpenPositions() {
 }
 
 function selectedMode() {
-  const current =
+  const mode =
     store.getConfig(
       'tradingMode',
       {
@@ -129,13 +149,17 @@ function selectedMode() {
       }
     ).mode;
 
-  return current === 'live'
+  return mode === 'live'
     ? 'live'
     : 'paper';
 }
 
-function accessCheck(mode) {
-  if (mode === 'live') {
+function accessCheck(
+  mode
+) {
+  if (
+    mode === 'live'
+  ) {
     return evaluateLiveGate({
       consents:
         store.getConfig(
@@ -189,12 +213,11 @@ function pub() {
     lastError:
       state.lastError,
 
-    // Backward compatibility with current Dashboard
+    // Keeps current Dashboard compatible.
     openTradeId:
       state.openTradeIds[0] ||
       null,
 
-    // New multi-position fields
     openTradeIds:
       [
         ...state.openTradeIds,
@@ -205,6 +228,9 @@ function pub() {
 
     maxOpenPositions:
       maxOpenPositions(),
+
+    exitRetryPending:
+      state.exitRetryPending,
 
     lastDecision:
       state.lastDecision,
@@ -276,7 +302,9 @@ function pub() {
 function stop(
   reason = null
 ) {
-  if (state.timer) {
+  if (
+    state.timer
+  ) {
     clearTimeout(
       state.timer
     );
@@ -288,7 +316,9 @@ function stop(
   state.running =
     false;
 
-  if (reason) {
+  if (
+    reason
+  ) {
     state.lastError =
       reason;
   }
@@ -307,7 +337,6 @@ function schedule() {
 
       Math.max(
         2,
-
         Number(
           cfg().pollSeconds
         )
@@ -365,6 +394,144 @@ function positiveQtyString(
   return raw.startsWith('-')
     ? raw.slice(1)
     : raw;
+}
+
+function tradingBaseUrl(
+  mode
+) {
+  return (
+    (
+      mode === 'live'
+        ? process.env
+            .ALPACA_LIVE_BASE_URL
+        : process.env
+            .ALPACA_PAPER_BASE_URL
+    ) ||
+    (
+      mode === 'live'
+        ? 'https://api.alpaca.markets'
+        : 'https://paper-api.alpaca.markets'
+    )
+  );
+}
+
+async function getRecentExitOrders(
+  mode,
+  {
+    after,
+    symbol,
+    side,
+    limit = 100,
+  }
+) {
+  const creds =
+    getCredentials(
+      mode
+    );
+
+  if (!creds) {
+    throw new Error(
+      `No ${mode} Alpaca credentials configured.`
+    );
+  }
+
+  const query =
+    new URLSearchParams({
+      status:
+        'all',
+
+      limit:
+        String(
+          Math.max(
+            1,
+            Math.min(
+              500,
+              Number(limit) ||
+              100
+            )
+          )
+        ),
+
+      direction:
+        'asc',
+    });
+
+  if (
+    after
+  ) {
+    query.set(
+      'after',
+      String(
+        after
+      )
+    );
+  }
+
+  if (
+    side
+  ) {
+    query.set(
+      'side',
+      String(
+        side
+      )
+    );
+  }
+
+  if (
+    symbol
+  ) {
+    query.set(
+      'symbols',
+      String(
+        symbol
+      ).replace(
+        '/',
+        ''
+      )
+    );
+  }
+
+  const response =
+    await fetch(
+      `${tradingBaseUrl(
+        mode
+      )}/v2/orders?${query.toString()}`,
+      {
+        headers: {
+          'APCA-API-KEY-ID':
+            creds.keyId,
+
+          'APCA-API-SECRET-KEY':
+            creds.secretKey,
+        },
+      }
+    );
+
+  const data =
+    await response
+      .json()
+      .catch(
+        () => []
+      );
+
+  if (
+    !response.ok
+  ) {
+    throw new Error(
+      `Alpaca orders query failed (${response.status}): ` +
+      `${
+        data?.message ||
+        response.statusText
+      }`
+    );
+  }
+
+  return Array.isArray(
+    data
+  )
+    ? data
+    : [];
 }
 
 function findMatchingPosition(
@@ -436,7 +603,8 @@ function syncOpenTradeIds() {
           trade.id
       );
 
-  return state.openTradeIds;
+  return state
+    .openTradeIds;
 }
 
 async function refreshUniverse(
@@ -602,7 +770,8 @@ async function scan(
                 position.qty ||
                 0
               )
-            ) > 0
+            ) >
+            0
         )
         .map(
           (
@@ -614,7 +783,6 @@ async function scan(
         )
     );
 
-  // Prevent duplicate bot positions
   for (
     const trade of
     trades
@@ -638,7 +806,8 @@ async function scan(
     {};
 
   // ========================================
-  // CRYPTO — LONG ONLY
+  // CRYPTO
+  // LONG ONLY
   // ========================================
 
   const cryptoSymbols =
@@ -756,7 +925,8 @@ async function scan(
   }
 
   // ========================================
-  // EQUITIES — LONG + SHORT
+  // EQUITIES
+  // LONG + SHORT
   // ========================================
 
   const clock =
@@ -942,7 +1112,9 @@ async function scan(
           ),
       };
 
-      if (direction) {
+      if (
+        direction
+      ) {
         candidates.push({
           symbol:
             asset.symbol,
@@ -1028,33 +1200,319 @@ async function scan(
   );
 }
 
-async function closeTrade(
-  mode,
-  trade,
-  price,
-  reason
+function saveTradePatch(
+  tradeId,
+  patch
 ) {
-  const recordedQtyString =
-    positiveQtyString(
-      trade.filled_qty ??
-      trade.qty
+  const allTrades =
+    store.getAll(
+      'trades'
     );
 
-  const recordedQty =
+  const index =
+    allTrades.findIndex(
+      (
+        item
+      ) =>
+        item.id ===
+        tradeId
+    );
+
+  if (
+    index < 0
+  ) {
+    throw new Error(
+      `Trade ${tradeId} was not found.`
+    );
+  }
+
+  allTrades[index] = {
+    ...allTrades[index],
+    ...patch,
+  };
+
+  store.saveAll(
+    'trades',
+    allTrades
+  );
+
+  return allTrades[
+    index
+  ];
+}
+
+function getExitProgress(
+  trade
+) {
+  return {
+    qty:
+      Number(
+        trade.partial_exit_qty ||
+        0
+      ),
+
+    value:
+      Number(
+        trade.partial_exit_value ||
+        0
+      ),
+
+    orderIds:
+      Array.isArray(
+        trade.partial_exit_order_ids
+      )
+        ? [
+            ...trade.partial_exit_order_ids,
+          ]
+        : [],
+  };
+}
+
+function isOrderStillOpen(
+  status
+) {
+  return [
+    'accepted',
+    'new',
+    'partially_filled',
+    'pending_new',
+    'pending_cancel',
+    'accepted_for_bidding',
+    'stopped',
+    'suspended',
+    'calculated',
+    'done_for_day',
+  ].includes(
+    String(
+      status ||
+      ''
+    )
+  );
+}
+
+async function settleExitOrder(
+  mode,
+  orderId
+) {
+  let order =
+    await waitForFill(
+      mode,
+      orderId,
+      {
+        timeoutMs:
+          15000,
+
+        intervalMs:
+          750,
+      }
+    );
+
+  if (
+    order.status ===
+    'filled'
+  ) {
+    return order;
+  }
+
+  if (
+    isOrderStillOpen(
+      order.status
+    )
+  ) {
+    /*
+     * Important:
+     *
+     * A crypto GTC exit can partially fill
+     * and continue filling after our wait.
+     *
+     * Cancel the remaining quantity before
+     * submitting another exit.
+     */
+
+    try {
+      await cancelOrder(
+        mode,
+        orderId
+      );
+    } catch (
+      cancelError
+    ) {
+      console.warn(
+        `[${mode}-bot] exit cancel ${orderId}: ${cancelError.message}`
+      );
+    }
+
+    order =
+      await waitForFill(
+        mode,
+        orderId,
+        {
+          timeoutMs:
+            5000,
+
+          intervalMs:
+            500,
+        }
+      );
+
+    order =
+      await getOrder(
+        mode,
+        orderId
+      );
+  }
+
+  return order;
+}
+
+function recordExitOrderProgress(
+  trade,
+  order
+) {
+  const latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const progress =
+    getExitProgress(
+      latest
+    );
+
+  const orderId =
+    String(
+      order?.id ||
+      ''
+    );
+
+  if (
+    !orderId
+  ) {
+    throw new Error(
+      `Exit order for ${trade.market} has no order id.`
+    );
+  }
+
+  if (
+    progress.orderIds.includes(
+      orderId
+    )
+  ) {
+    return latest;
+  }
+
+  const fillQty =
     Number(
-      recordedQtyString
+      order?.filled_qty ||
+      0
+    );
+
+  const fillPrice =
+    Number(
+      order
+        ?.filled_avg_price
+    );
+
+  const patch = {
+    pending_exit_order_id:
+      null,
+
+    last_exit_order_status:
+      order?.status ||
+      null,
+  };
+
+  if (
+    fillQty >
+    0
+  ) {
+    if (
+      !Number.isFinite(
+        fillPrice
+      ) ||
+      fillPrice <= 0
+    ) {
+      throw new Error(
+        `Exit order ${orderId} filled ${fillQty} but has no valid filled_avg_price.`
+      );
+    }
+
+    patch.partial_exit_qty =
+      Number(
+        (
+          progress.qty +
+          fillQty
+        ).toFixed(
+          12
+        )
+      );
+
+    patch.partial_exit_value =
+      progress.value +
+      (
+        fillQty *
+        fillPrice
+      );
+
+    patch.partial_exit_order_ids =
+      [
+        ...progress.orderIds,
+        orderId,
+      ];
+  }
+
+  return saveTradePatch(
+    trade.id,
+    patch
+  );
+}
+
+function finalizeTradeClosure(
+  mode,
+  trade,
+  {
+    exitQty,
+    exitValue,
+    reason,
+    exitOrderId,
+    reconciled = false,
+  }
+) {
+  const qty =
+    Number(
+      exitQty
+    );
+
+  const value =
+    Number(
+      exitValue
     );
 
   if (
     !Number.isFinite(
-      recordedQty
+      qty
     ) ||
-    recordedQty <= 0
+    qty <= 0 ||
+    !Number.isFinite(
+      value
+    ) ||
+    value <= 0
   ) {
     throw new Error(
-      `Open trade ${trade.id} has no filled quantity to close.`
+      `Cannot finalize ${trade.market}; no valid executed exit quantity/value.`
     );
   }
+
+  const exitPrice =
+    value /
+    qty;
+
+  const entryPrice =
+    Number(
+      trade.entry_price
+    );
 
   const direction =
     trade.direction ===
@@ -1062,139 +1520,16 @@ async function closeTrade(
       ? 'SHORT'
       : 'LONG';
 
-  const crypto =
-    trade.asset_class ===
-      'crypto' ||
-    String(
-      trade.market
-    ).includes('/');
-
-  // Alpaca is source of truth
-  // for quantity actually available.
-  const positions =
-    await getPositions(
-      mode
-    );
-
-  const position =
-    findMatchingPosition(
-      positions,
-      trade.market
-    );
-
-  if (!position) {
-    throw new Error(
-      `No matching Alpaca ${mode} position exists for ${trade.market}. ` +
-      `Local trade ${trade.id} is still marked open and needs reconciliation.`
-    );
-  }
-
-  const availableQtyString =
-    positiveQtyString(
-      position.qty_available ??
-      position.qty
-    );
-
-  const availableQty =
-    Number(
-      availableQtyString
-    );
-
   if (
     !Number.isFinite(
-      availableQty
+      entryPrice
     ) ||
-    availableQty <= 0
+    entryPrice <= 0
   ) {
     throw new Error(
-      `Alpaca reports no available quantity to close for ${trade.market}.`
+      `Invalid entry price for ${trade.market}.`
     );
   }
-
-  const closeQtyString =
-    availableQty <=
-    recordedQty
-      ? availableQtyString
-      : recordedQtyString;
-
-  const closeQty =
-    Number(
-      closeQtyString
-    );
-
-  if (
-    !Number.isFinite(
-      closeQty
-    ) ||
-    closeQty <= 0
-  ) {
-    throw new Error(
-      `Invalid close quantity for ${trade.market}.`
-    );
-  }
-
-  const exitSide =
-    direction === 'SHORT'
-      ? 'buy'
-      : 'sell';
-
-  state.lastDecision =
-    `closing ${mode.toUpperCase()} ${direction} ${trade.market} ` +
-    `qty ${closeQtyString} — ${reason}`;
-
-  const order =
-    await placeOrder({
-      mode,
-
-      symbol:
-        trade.market,
-
-      qty:
-        closeQtyString,
-
-      side:
-        exitSide,
-
-      type:
-        'market',
-
-      timeInForce:
-        crypto
-          ? 'gtc'
-          : 'day',
-    });
-
-  const fill =
-    await waitForFill(
-      mode,
-      order.id
-    );
-
-  if (
-    fill.status !==
-    'filled'
-  ) {
-    throw new Error(
-      `Exit order ${order.id} was not filled (status: ${fill.status}).`
-    );
-  }
-
-  const exitPrice =
-    Number(
-      fill.filled_avg_price ||
-      price
-    );
-
-  const entryPrice =
-    Number(
-      trade.entry_price
-    );
-
-  const filledQty =
-    Number(
-      fill.filled_qty ||
-      closeQtyString
-    );
 
   const pnl =
     direction ===
@@ -1203,19 +1538,19 @@ async function closeTrade(
           entryPrice -
           exitPrice
         ) *
-        filledQty
+        qty
       : (
           exitPrice -
           entryPrice
         ) *
-        filledQty;
+        qty;
 
   const result =
     pnl >= 0
       ? 'win'
       : 'loss';
 
-  const allTrades =
+  let allTrades =
     store.getAll(
       'trades'
     );
@@ -1230,44 +1565,72 @@ async function closeTrade(
     );
 
   if (
-    index >= 0
+    index < 0
   ) {
-    allTrades[index] = {
-      ...allTrades[index],
-
-      exit_price:
-        exitPrice,
-
-      pnl:
-        Number(
-          pnl.toFixed(
-            4
-          )
-        ),
-
-      result,
-
-      exit_reason:
-        reason,
-
-      exit_order_id:
-        order.id,
-
-      exit_qty:
-        filledQty,
-
-      broker_qty_available_at_exit:
-        availableQtyString,
-
-      closed_at:
-        new Date().toISOString(),
-    };
-
-    store.saveAll(
-      'trades',
-      allTrades
+    throw new Error(
+      `Trade ${trade.id} was not found during exit finalization.`
     );
   }
+
+  const current =
+    allTrades[
+      index
+    ];
+
+  const progress =
+    getExitProgress(
+      current
+    );
+
+  allTrades[index] = {
+    ...current,
+
+    exit_price:
+      exitPrice,
+
+    pnl:
+      Number(
+        pnl.toFixed(
+          4
+        )
+      ),
+
+    result,
+
+    exit_reason:
+      reason,
+
+    exit_order_id:
+      exitOrderId ||
+      progress.orderIds[
+        progress.orderIds.length -
+        1
+      ] ||
+      current.pending_exit_order_id ||
+      null,
+
+    exit_order_ids:
+      progress.orderIds,
+
+    exit_qty:
+      qty,
+
+    pending_exit_order_id:
+      null,
+
+    reconciled_exit:
+      Boolean(
+        reconciled
+      ),
+
+    closed_at:
+      new Date().toISOString(),
+  };
+
+  store.saveAll(
+    'trades',
+    allTrades
+  );
 
   const session =
     store.getOne(
@@ -1275,7 +1638,9 @@ async function closeTrade(
       trade.session_id
     );
 
-  if (session) {
+  if (
+    session
+  ) {
     session.consecutive_losses =
       result === 'loss'
         ? Number(
@@ -1306,6 +1671,719 @@ async function closeTrade(
           id !==
           trade.id
       );
+
+  state.exitRetryPending =
+    false;
+
+  state.lastDecision =
+    `closed ${mode.toUpperCase()} ${direction} ${trade.market} ` +
+    `qty ${qty} at ${exitPrice} — ${reason}`;
+
+  return true;
+}
+
+async function tryPendingExitRecovery(
+  mode,
+  trade,
+  reason
+) {
+  const latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const pendingOrderId =
+    latest.pending_exit_order_id;
+
+  if (
+    !pendingOrderId
+  ) {
+    return latest;
+  }
+
+  const settled =
+    await settleExitOrder(
+      mode,
+      pendingOrderId
+    );
+
+  const updated =
+    recordExitOrderProgress(
+      latest,
+      settled
+    );
+
+  const positions =
+    await getPositions(
+      mode
+    );
+
+  const position =
+    findMatchingPosition(
+      positions,
+      trade.market
+    );
+
+  const progress =
+    getExitProgress(
+      updated
+    );
+
+  if (
+    !position &&
+    progress.qty >
+      0
+  ) {
+    return finalizeTradeClosure(
+      mode,
+      updated,
+      {
+        exitQty:
+          progress.qty,
+
+        exitValue:
+          progress.value,
+
+        reason:
+          `${reason} — reconciled pending Alpaca exit`,
+
+        exitOrderId:
+          pendingOrderId,
+
+        reconciled:
+          true,
+      }
+    );
+  }
+
+  return updated;
+}
+
+async function reconcileMissingPositionFromOrderHistory(
+  mode,
+  trade
+) {
+  let latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  /*
+   * If a prior process stopped while an
+   * exit was pending, reconcile that exact
+   * order first.
+   */
+
+  if (
+    latest.pending_exit_order_id
+  ) {
+    const recovered =
+      await tryPendingExitRecovery(
+        mode,
+        latest,
+        'restart recovery'
+      );
+
+    if (
+      recovered ===
+      true
+    ) {
+      return true;
+    }
+
+    latest =
+      store.getOne(
+        'trades',
+        trade.id
+      ) ||
+      latest;
+
+    const positions =
+      await getPositions(
+        mode
+      );
+
+    if (
+      findMatchingPosition(
+        positions,
+        trade.market
+      )
+    ) {
+      return false;
+    }
+  }
+
+  const direction =
+    latest.direction ===
+    'SHORT'
+      ? 'SHORT'
+      : 'LONG';
+
+  const exitSide =
+    direction ===
+    'SHORT'
+      ? 'buy'
+      : 'sell';
+
+  const after =
+    latest.timestamp ||
+    latest.created_at;
+
+  if (
+    !after
+  ) {
+    return false;
+  }
+
+  const orders =
+    await getRecentExitOrders(
+      mode,
+      {
+        after,
+
+        symbol:
+          latest.market,
+
+        side:
+          exitSide,
+
+        limit:
+          100,
+      }
+    );
+
+  const candidates =
+    (
+      Array.isArray(
+        orders
+      )
+        ? orders
+        : []
+    ).filter(
+      (
+        order
+      ) => {
+        if (
+          !order ||
+          order.id ===
+            latest.alpaca_order_id
+        ) {
+          return false;
+        }
+
+        if (
+          normPos(
+            order.symbol
+          ) !==
+          normPos(
+            latest.market
+          )
+        ) {
+          return false;
+        }
+
+        if (
+          String(
+            order.side ||
+            ''
+          ).toLowerCase() !==
+          exitSide
+        ) {
+          return false;
+        }
+
+        const fillQty =
+          Number(
+            order.filled_qty ||
+            0
+          );
+
+        const fillPrice =
+          Number(
+            order
+              .filled_avg_price
+          );
+
+        return (
+          fillQty > 0 &&
+          Number.isFinite(
+            fillPrice
+          ) &&
+          fillPrice > 0
+        );
+      }
+    );
+
+  /*
+   * Only auto-repair when we have exactly
+   * one possible matching exit.
+   *
+   * Anything ambiguous remains blocked
+   * instead of guessing.
+   */
+
+  if (
+    candidates.length !==
+    1
+  ) {
+    return false;
+  }
+
+  let candidate =
+    candidates[0];
+
+  if (
+    isOrderStillOpen(
+      candidate.status
+    )
+  ) {
+    candidate =
+      await settleExitOrder(
+        mode,
+        candidate.id
+      );
+  }
+
+  latest =
+    recordExitOrderProgress(
+      latest,
+      candidate
+    );
+
+  const positions =
+    await getPositions(
+      mode
+    );
+
+  if (
+    findMatchingPosition(
+      positions,
+      latest.market
+    )
+  ) {
+    return false;
+  }
+
+  const progress =
+    getExitProgress(
+      latest
+    );
+
+  const recordedQty =
+    Number(
+      positiveQtyString(
+        latest.filled_qty ??
+        latest.qty
+      )
+    );
+
+  if (
+    !Number.isFinite(
+      recordedQty
+    ) ||
+    recordedQty <= 0 ||
+    progress.qty <= 0
+  ) {
+    return false;
+  }
+
+  const fillRatio =
+    progress.qty /
+    recordedQty;
+
+  /*
+   * Allows minor crypto fee/precision
+   * differences, but refuses a large
+   * mismatch.
+   */
+
+  if (
+    fillRatio < 0.90 ||
+    fillRatio > 1.10
+  ) {
+    return false;
+  }
+
+  finalizeTradeClosure(
+    mode,
+    latest,
+    {
+      exitQty:
+        progress.qty,
+
+      exitValue:
+        progress.value,
+
+      reason:
+        'reconciled from Alpaca exit-order history after restart',
+
+      exitOrderId:
+        candidate.id,
+
+      reconciled:
+        true,
+    }
+  );
+
+  return true;
+}
+
+async function closeTrade(
+  mode,
+  trade,
+  price,
+  reason
+) {
+  let latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const recordedQty =
+    Number(
+      positiveQtyString(
+        latest.filled_qty ??
+        latest.qty
+      )
+    );
+
+  if (
+    !Number.isFinite(
+      recordedQty
+    ) ||
+    recordedQty <= 0
+  ) {
+    throw new Error(
+      `Open trade ${trade.id} has no filled quantity to close.`
+    );
+  }
+
+  const direction =
+    latest.direction ===
+    'SHORT'
+      ? 'SHORT'
+      : 'LONG';
+
+  const crypto =
+    latest.asset_class ===
+      'crypto' ||
+    String(
+      latest.market
+    ).includes('/');
+
+  /*
+   * If the process restarted while an
+   * exit order was still active, finish
+   * that order before submitting another.
+   */
+
+  if (
+    latest.pending_exit_order_id
+  ) {
+    const recovered =
+      await tryPendingExitRecovery(
+        mode,
+        latest,
+        reason
+      );
+
+    if (
+      recovered ===
+      true
+    ) {
+      return true;
+    }
+
+    latest =
+      store.getOne(
+        'trades',
+        trade.id
+      ) ||
+      latest;
+  }
+
+  /*
+   * Up to 3 exit attempts.
+   *
+   * Each retry uses the exact quantity
+   * Alpaca says is actually still there.
+   */
+
+  for (
+    let attempt = 1;
+    attempt <= 3;
+    attempt++
+  ) {
+    const positions =
+      await getPositions(
+        mode
+      );
+
+    const position =
+      findMatchingPosition(
+        positions,
+        latest.market
+      );
+
+    const progress =
+      getExitProgress(
+        latest
+      );
+
+    if (
+      !position
+    ) {
+      if (
+        progress.qty >
+        0
+      ) {
+        return finalizeTradeClosure(
+          mode,
+          latest,
+          {
+            exitQty:
+              progress.qty,
+
+            exitValue:
+              progress.value,
+
+            reason,
+
+            reconciled:
+              attempt >
+              1,
+          }
+        );
+      }
+
+      throw new Error(
+        `No matching Alpaca ${mode} position exists for ${latest.market}. ` +
+        `Local trade ${latest.id} is still marked open and needs reconciliation.`
+      );
+    }
+
+    const availableQtyString =
+      positiveQtyString(
+        position.qty_available ??
+        position.qty
+      );
+
+    const availableQty =
+      Number(
+        availableQtyString
+      );
+
+    if (
+      !Number.isFinite(
+        availableQty
+      ) ||
+      availableQty <= 0
+    ) {
+      throw new Error(
+        `Alpaca reports no available quantity to close for ${latest.market}.`
+      );
+    }
+
+    /*
+     * Broker is source of truth.
+     * Use the exact available string.
+     */
+
+    const closeQtyString =
+      availableQtyString;
+
+    const closeQty =
+      Number(
+        closeQtyString
+      );
+
+    if (
+      !Number.isFinite(
+        closeQty
+      ) ||
+      closeQty <= 0
+    ) {
+      throw new Error(
+        `Invalid close quantity for ${latest.market}.`
+      );
+    }
+
+    const exitSide =
+      direction ===
+      'SHORT'
+        ? 'buy'
+        : 'sell';
+
+    state.lastDecision =
+      `closing ${mode.toUpperCase()} ${direction} ${latest.market} ` +
+      `qty ${closeQtyString} — ${reason} — attempt ${attempt}/3`;
+
+    const order =
+      await placeOrder({
+        mode,
+
+        symbol:
+          latest.market,
+
+        qty:
+          closeQtyString,
+
+        side:
+          exitSide,
+
+        type:
+          'market',
+
+        timeInForce:
+          crypto
+            ? 'gtc'
+            : 'day',
+      });
+
+    latest =
+      saveTradePatch(
+        latest.id,
+        {
+          pending_exit_order_id:
+            order.id,
+
+          pending_exit_reason:
+            reason,
+
+          pending_exit_started_at:
+            new Date().toISOString(),
+        }
+      );
+
+    const settled =
+      await settleExitOrder(
+        mode,
+        order.id
+      );
+
+    latest =
+      recordExitOrderProgress(
+        latest,
+        settled
+      );
+
+    /*
+     * Do not submit another order while
+     * Alpaca still says the previous exit
+     * is active.
+     */
+
+    if (
+      isOrderStillOpen(
+        settled.status
+      )
+    ) {
+      throw new Error(
+        `Exit order ${order.id} is still ${settled.status} after cancel/recheck. ` +
+        `Bot stopped to avoid submitting a duplicate exit.`
+      );
+    }
+
+    const afterPositions =
+      await getPositions(
+        mode
+      );
+
+    const remainingPosition =
+      findMatchingPosition(
+        afterPositions,
+        latest.market
+      );
+
+    const updatedProgress =
+      getExitProgress(
+        latest
+      );
+
+    /*
+     * Position is gone.
+     * Finalize using actual executed fills.
+     */
+
+    if (
+      !remainingPosition
+    ) {
+      if (
+        updatedProgress.qty <=
+        0
+      ) {
+        throw new Error(
+          `Alpaca no longer shows ${latest.market}, but exit order ${order.id} ` +
+          `reported no executed quantity. Reconciliation is required.`
+        );
+      }
+
+      return finalizeTradeClosure(
+        mode,
+        latest,
+        {
+          exitQty:
+            updatedProgress.qty,
+
+          exitValue:
+            updatedProgress.value,
+
+          reason,
+
+          exitOrderId:
+            order.id,
+
+          reconciled:
+            attempt > 1 ||
+            settled.status !==
+              'filled',
+        }
+      );
+    }
+
+    /*
+     * If rejected/expired without any fill,
+     * stop instead of repeatedly firing
+     * orders.
+     */
+
+    if (
+      Number(
+        settled.filled_qty ||
+        0
+      ) <= 0 &&
+      [
+        'rejected',
+        'expired',
+      ].includes(
+        settled.status
+      )
+    ) {
+      throw new Error(
+        `Exit order ${order.id} ${settled.status} without a fill for ${latest.market}.`
+      );
+    }
+
+    /*
+     * Otherwise there is a real broker
+     * remainder. Loop and close the exact
+     * remaining qty.
+     */
+  }
+
+  state.exitRetryPending =
+    true;
+
+  state.lastDecision =
+    `partial exit remains for ${latest.market}; no new entries until next retry`;
+
+  return false;
 }
 
 async function manageOne(
@@ -1386,17 +2464,20 @@ async function manageOne(
       c.takeProfitPct
     )
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} take profit +${favorableMove.toFixed(
-        3
-      )}%`
-    );
+        `${direction} take profit +${favorableMove.toFixed(
+          3
+        )}%`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   if (
@@ -1405,17 +2486,20 @@ async function manageOne(
       c.stopLossPct
     )
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} stop loss ${favorableMove.toFixed(
-        3
-      )}%`
-    );
+        `${direction} stop loss ${favorableMove.toFixed(
+          3
+        )}%`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   if (
@@ -1424,17 +2508,20 @@ async function manageOne(
       c.maxHoldMinutes
     )
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} max hold ${ageMinutes.toFixed(
-        1
-      )}m`
-    );
+        `${direction} max hold ${ageMinutes.toFixed(
+          1
+        )}m`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   return 'open';
@@ -1485,8 +2572,8 @@ async function manageOpenTrades(
     }
 
     state.lastDecision =
-      `managing ${mode.toUpperCase()} ` +
-      `${state.openTradeIds.length}/${maxOpenPositions()} positions — ` +
+      `managing ${mode.toUpperCase()} ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} positions — ` +
       `${trade.direction || 'LONG'} ${trade.market}`;
 
     await manageOne(
@@ -1512,8 +2599,8 @@ async function enter(
     maxOpenPositions()
   ) {
     state.lastDecision =
-      `${mode.toUpperCase()} managing ` +
-      `${state.openTradeIds.length}/${maxOpenPositions()} open positions`;
+      `${mode.toUpperCase()} managing ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} open positions`;
 
     return false;
   }
@@ -1539,11 +2626,11 @@ async function enter(
     halt.halt
   ) {
     /*
-     * When there are still open
-     * positions, block NEW entries,
-     * but keep the bot running so
-     * those positions remain managed.
+     * No new positions while halted,
+     * but existing positions continue
+     * being managed.
      */
+
     if (
       state.openTradeIds.length >
       0
@@ -1604,7 +2691,9 @@ async function enter(
   state.lastDecision =
     `${mode.toUpperCase()} ${direction} signal ${best.symbol} ` +
     `${best.momentumPct >= 0 ? '+' : ''}` +
-    `${best.momentumPct.toFixed(4)}%`;
+    `${best.momentumPct.toFixed(
+      4
+    )}%`;
 
   const account =
     await getAccount(
@@ -1905,16 +2994,21 @@ async function tick() {
     state.lastError =
       null;
 
-    // First manage everything
-    // currently open.
+    state.exitRetryPending =
+      false;
+
     await manageOpenTrades(
       mode
     );
 
-    // Then fill one empty slot
-    // if a valid new signal exists.
+    /*
+     * Do not open a fresh trade while
+     * an exit still needs resolution.
+     */
+
     if (
       state.running &&
+      !state.exitRetryPending &&
       state.openTradeIds.length <
         maxOpenPositions()
     ) {
@@ -1922,7 +3016,9 @@ async function tick() {
         mode
       );
     }
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.error(
       `[${mode}-bot]`,
       error
@@ -1959,7 +3055,7 @@ router.get(
 );
 
 // ========================================
-// START / RECOVER
+// START / RECOVERY
 // ========================================
 
 router.post(
@@ -2023,11 +3119,7 @@ router.post(
           mode
         );
 
-      /*
-       * Find every unfinished local
-       * trade for this mode.
-       */
-      const openLocalTrades =
+      let openLocalTrades =
         store
           .getAll(
             'trades'
@@ -2057,11 +3149,77 @@ router.post(
           );
 
       /*
-       * RECOVERY
+       * If local says a trade is open but
+       * Alpaca has no position, inspect
+       * Alpaca exit history.
+       *
+       * This fixes the SHIB-type orphan
+       * caused by an order continuing to
+       * fill after our old timeout.
        */
+
       if (
         openLocalTrades.length
       ) {
+        for (
+          const trade of
+          [
+            ...openLocalTrades,
+          ]
+        ) {
+          const matchingPosition =
+            findMatchingPosition(
+              brokerPositions,
+              trade.market
+            );
+
+          if (
+            !matchingPosition
+          ) {
+            const repaired =
+              await reconcileMissingPositionFromOrderHistory(
+                mode,
+                trade
+              );
+
+            if (
+              !repaired
+            ) {
+              return res
+                .status(409)
+                .json({
+                  error:
+                    `Local ${mode} trade ${trade.id} is marked open, but Alpaca ` +
+                    `has no matching ${trade.market} position. Automatic order-history ` +
+                    `reconciliation was not unambiguous, so manual reconciliation is required.`,
+                });
+            }
+          }
+        }
+
+        /*
+         * Remove any trades repaired above.
+         */
+
+        openLocalTrades =
+          openLocalTrades
+            .filter(
+              (
+                trade
+              ) => {
+                const current =
+                  store.getOne(
+                    'trades',
+                    trade.id
+                  );
+
+                return (
+                  current?.result ===
+                  null
+                );
+              }
+            );
+
         if (
           openLocalTrades.length >
           maxOpenPositions()
@@ -2075,166 +3233,150 @@ router.post(
             });
         }
 
-        const sessionIds =
-          [
-            ...new Set(
-              openLocalTrades.map(
-                (
-                  trade
-                ) =>
-                  trade.session_id
-              )
-            ),
-          ];
-
         if (
-          sessionIds.length !==
-          1
+          openLocalTrades.length
         ) {
-          return res
-            .status(409)
-            .json({
-              error:
-                `Open local ${mode} trades belong to multiple sessions. ` +
-                `Automatic recovery is blocked to avoid mixing session P&L.`,
-            });
-        }
-
-        for (
-          const trade of
-          openLocalTrades
-        ) {
-          const matchingPosition =
-            findMatchingPosition(
-              brokerPositions,
-              trade.market
-            );
+          const sessionIds =
+            [
+              ...new Set(
+                openLocalTrades.map(
+                  (
+                    trade
+                  ) =>
+                    trade.session_id
+                )
+              ),
+            ];
 
           if (
-            !matchingPosition
+            sessionIds.length !==
+            1
           ) {
             return res
               .status(409)
               .json({
                 error:
-                  `Local ${mode} trade ${trade.id} is marked open, but Alpaca ` +
-                  `has no matching ${trade.market} position. Reconciliation is required.`,
+                  `Open local ${mode} trades belong to multiple sessions. ` +
+                  `Automatic recovery is blocked to avoid mixing session P&L.`,
               });
           }
-        }
 
-        const existingSession =
-          store.getOne(
-            'sessions',
-            sessionIds[0]
-          );
+          const existingSession =
+            store.getOne(
+              'sessions',
+              sessionIds[0]
+            );
 
-        if (
-          !existingSession
-        ) {
-          return res
-            .status(409)
-            .json({
-              error:
-                'Open local trades exist, but their session record is missing.',
-            });
-        }
-
-        state.mode =
-          mode;
-
-        state.universe = {
-          equities:
-            [],
-
-          crypto:
-            [],
-
-          refreshedAt:
-            null,
-        };
-
-        state.equityCursor =
-          0;
-
-        await refreshUniverse(
-          mode,
-          true
-        );
-
-        store.update(
-          'sessions',
-          existingSession.id,
-          {
-            status:
-              'running',
-
-            halt_reason:
-              null,
-
-            completed_at:
-              null,
-
-            updated_at:
-              new Date().toISOString(),
+          if (
+            !existingSession
+          ) {
+            return res
+              .status(409)
+              .json({
+                error:
+                  'Open local trades exist, but their session record is missing.',
+              });
           }
-        );
 
-        Object.assign(
-          state,
-          {
-            running:
-              true,
+          state.mode =
+            mode;
 
-            mode,
-
-            sessionId:
-              existingSession.id,
-
-            startedAt:
-              new Date().toISOString(),
-
-            lastTickAt:
-              null,
-
-            lastError:
-              null,
-
-            openTradeIds:
-              openLocalTrades.map(
-                (
-                  trade
-                ) =>
-                  trade.id
-              ),
-
-            lastDecision:
-              `recovering ${openLocalTrades.length}/${maxOpenPositions()} ` +
-              `${mode.toUpperCase()} bot positions`,
-
-            signalSnapshot:
-              {},
-
-            topCandidates:
+          state.universe = {
+            equities:
               [],
 
-            marketOpen:
+            crypto:
+              [],
+
+            refreshedAt:
               null,
-          }
-        );
+          };
 
-        setImmediate(
-          tick
-        );
+          state.equityCursor =
+            0;
 
-        return res.json(
-          pub()
-        );
+          await refreshUniverse(
+            mode,
+            true
+          );
+
+          store.update(
+            'sessions',
+            existingSession.id,
+            {
+              status:
+                'running',
+
+              halt_reason:
+                null,
+
+              completed_at:
+                null,
+
+              updated_at:
+                new Date().toISOString(),
+            }
+          );
+
+          Object.assign(
+            state,
+            {
+              running:
+                true,
+
+              mode,
+
+              sessionId:
+                existingSession.id,
+
+              startedAt:
+                new Date().toISOString(),
+
+              lastTickAt:
+                null,
+
+              lastError:
+                null,
+
+              openTradeIds:
+                openLocalTrades.map(
+                  (
+                    trade
+                  ) =>
+                    trade.id
+                ),
+
+              exitRetryPending:
+                false,
+
+              lastDecision:
+                `recovering ${openLocalTrades.length}/${maxOpenPositions()} ` +
+                `${mode.toUpperCase()} bot positions`,
+
+              signalSnapshot:
+                {},
+
+              topCandidates:
+                [],
+
+              marketOpen:
+                null,
+            }
+          );
+
+          setImmediate(
+            tick
+          );
+
+          return res.json(
+            pub()
+          );
+        }
       }
 
-      /*
-       * NEW SESSION
-       */
+      // ========================================
+      // NEW SESSION
+      // ========================================
 
       const equity =
         Number(
@@ -2315,6 +3457,9 @@ router.post(
           openTradeIds:
             [],
 
+          exitRetryPending:
+            false,
+
           lastDecision:
             `starting ${mode.toUpperCase()} bot — loaded ` +
             `${
@@ -2343,7 +3488,9 @@ router.post(
       return res.json(
         pub()
       );
-    } catch (error) {
+    } catch (
+      error
+    ) {
       return res
         .status(500)
         .json({
@@ -2377,7 +3524,9 @@ router.post(
       [];
 
     try {
-      if (mode) {
+      if (
+        mode
+      ) {
         syncOpenTradeIds();
 
         for (
@@ -2418,12 +3567,21 @@ router.post(
                 assetClass
               );
 
-            await closeTrade(
-              mode,
-              trade,
-              price,
-              'bot stopped by user'
-            );
+            const closed =
+              await closeTrade(
+                mode,
+                trade,
+                price,
+                'bot stopped by user'
+              );
+
+            if (
+              !closed
+            ) {
+              closeErrors.push(
+                `${trade.market}: exit remained partially filled after retry limit`
+              );
+            }
           } catch (
             error
           ) {
@@ -2494,7 +3652,9 @@ router.post(
       return res.json(
         pub()
       );
-    } catch (error) {
+    } catch (
+      error
+    ) {
       state.lastError =
         `Bot stopped, but shutdown cleanup failed: ${error.message}`;
 
