@@ -1,10 +1,6 @@
 import express from 'express';
 import { store } from './store.js';
-import {
-  createSession,
-  createTrade,
-  recomputeSessionStats,
-} from './models.js';
+import { createSession, createTrade, recomputeSessionStats } from './models.js';
 import {
   checkHaltConditions,
   evaluateLiveGate,
@@ -23,28 +19,20 @@ import {
   waitForFill,
 } from './alpacaClient.js';
 
-// UNIFIED BOT v13
+// UNIFIED BOT v14
 //
-// PAPER:
-// real Alpaca market data
-// real strategy
-// Alpaca PAPER orders
-// fake money
-//
-// LIVE:
-// same market data
-// same strategy
-// Alpaca LIVE orders
-// real money
+// PAPER = real Alpaca market data + Alpaca paper orders
+// LIVE  = same strategy + Alpaca live orders
 //
 // Equities = LONG + SHORT
-// Crypto = LONG only
+// Crypto   = LONG only
 //
-// v13 fixes:
-// 1) exits use Alpaca's CURRENT available position quantity
-//    when it is lower than the recorded entry fill
-// 2) startup recovers a local open trade when the matching
-//    Alpaca paper/live position still exists
+// v14:
+// - up to 3 simultaneous positions
+// - manages every open trade each tick
+// - opens at most one new position per tick
+// - recovers up to 3 positions after restart
+// - keeps qty_available crypto exit fix
 
 const router = express.Router();
 
@@ -56,7 +44,9 @@ const state = {
   startedAt: null,
   lastTickAt: null,
   lastError: null,
-  openTradeId: null,
+
+  openTradeIds: [],
+
   lastDecision: 'stopped',
   signalSnapshot: {},
   topCandidates: [],
@@ -73,19 +63,28 @@ const state = {
 
 const DEFAULTS = {
   pollSeconds: 5,
+
   entryMomentumPct: 0.15,
+
   takeProfitPct: 0.6,
   stopLossPct: 0.4,
+
   maxHoldMinutes: 15,
+
+  maxOpenPositions: 3,
+
   equityBatchSize: 75,
   universeRefreshMinutes: 15,
+
   minEquityPrice: 1,
   minDailyDollarVolume: 1000000,
+
   stockFeed: 'iex',
 };
 
 const tradingCfg = () => ({
   riskPerTrade: 0.02,
+
   ...store.getConfig(
     'tradingConfig',
     {}
@@ -94,11 +93,32 @@ const tradingCfg = () => ({
 
 const cfg = () => ({
   ...DEFAULTS,
+
   ...store.getConfig(
     'liveBotConfig',
     {}
   ),
 });
+
+function maxOpenPositions() {
+  const value = Math.trunc(
+    Number(
+      cfg().maxOpenPositions ?? 3
+    )
+  );
+
+  if (!Number.isFinite(value)) {
+    return 3;
+  }
+
+  return Math.max(
+    1,
+    Math.min(
+      10,
+      value
+    )
+  );
+}
 
 function selectedMode() {
   const current =
@@ -169,8 +189,22 @@ function pub() {
     lastError:
       state.lastError,
 
+    // Backward compatibility with current Dashboard
     openTradeId:
-      state.openTradeId,
+      state.openTradeIds[0] ||
+      null,
+
+    // New multi-position fields
+    openTradeIds:
+      [
+        ...state.openTradeIds,
+      ],
+
+    openPositionCount:
+      state.openTradeIds.length,
+
+    maxOpenPositions:
+      maxOpenPositions(),
 
     lastDecision:
       state.lastDecision,
@@ -209,6 +243,9 @@ function pub() {
 
     config: {
       ...cfg(),
+
+      maxOpenPositions:
+        maxOpenPositions(),
 
       riskPerTrade:
         Number(
@@ -270,6 +307,7 @@ function schedule() {
 
       Math.max(
         2,
+
         Number(
           cfg().pollSeconds
         )
@@ -282,7 +320,8 @@ function normPos(
 ) {
   const value =
     String(
-      symbol || ''
+      symbol ||
+      ''
     ).toUpperCase();
 
   if (
@@ -315,7 +354,9 @@ function positiveQtyString(
   }
 
   const raw =
-    String(value).trim();
+    String(
+      value
+    ).trim();
 
   if (!raw) {
     return null;
@@ -340,7 +381,9 @@ function findMatchingPosition(
       positions ||
       []
     ).find(
-      (position) => {
+      (
+        position
+      ) => {
         const qty =
           Math.abs(
             Number(
@@ -359,6 +402,41 @@ function findMatchingPosition(
     ) ||
     null
   );
+}
+
+function getSessionOpenTrades() {
+  if (
+    !state.sessionId
+  ) {
+    return [];
+  }
+
+  return store
+    .getAll(
+      'trades'
+    )
+    .filter(
+      (
+        trade
+      ) =>
+        trade.session_id ===
+          state.sessionId &&
+        trade.result ===
+          null
+    );
+}
+
+function syncOpenTradeIds() {
+  state.openTradeIds =
+    getSessionOpenTrades()
+      .map(
+        (
+          trade
+        ) =>
+          trade.id
+      );
+
+  return state.openTradeIds;
 }
 
 async function refreshUniverse(
@@ -451,10 +529,13 @@ function momentum(
   return {
     momentumPct:
       (
-        (close -
-          open) /
+        (
+          close -
+          open
+        ) /
         open
-      ) * 100,
+      ) *
+      100,
 
     price:
       close,
@@ -497,7 +578,9 @@ async function scan(
         'trades'
       )
       .filter(
-        (trade) =>
+        (
+          trade
+        ) =>
           trade.session_id ===
           session.id
       );
@@ -511,7 +594,9 @@ async function scan(
     new Set(
       positions
         .filter(
-          (position) =>
+          (
+            position
+          ) =>
             Math.abs(
               Number(
                 position.qty ||
@@ -520,12 +605,31 @@ async function scan(
             ) > 0
         )
         .map(
-          (position) =>
+          (
+            position
+          ) =>
             normPos(
               position.symbol
             )
         )
     );
+
+  // Prevent duplicate bot positions
+  for (
+    const trade of
+    trades
+  ) {
+    if (
+      trade.result ===
+      null
+    ) {
+      blocked.add(
+        normPos(
+          trade.market
+        )
+      );
+    }
+  }
 
   const candidates =
     [];
@@ -533,16 +637,17 @@ async function scan(
   const snapshotOutput =
     {};
 
-  // ----------------
-  // CRYPTO
-  // LONG ONLY
-  // ----------------
+  // ========================================
+  // CRYPTO — LONG ONLY
+  // ========================================
 
   const cryptoSymbols =
     state.universe
       .crypto
       .map(
-        (asset) =>
+        (
+          asset
+        ) =>
           asset.symbol
       )
       .filter(
@@ -560,7 +665,8 @@ async function scan(
 
     for (
       const asset of
-      state.universe.crypto
+      state.universe
+        .crypto
     ) {
       const snapshot =
         snapshots[
@@ -649,10 +755,9 @@ async function scan(
     }
   }
 
-  // ----------------
-  // EQUITIES
-  // LONG + SHORT
-  // ----------------
+  // ========================================
+  // EQUITIES — LONG + SHORT
+  // ========================================
 
   const clock =
     await getMarketClock(
@@ -716,7 +821,9 @@ async function scan(
         mode,
 
         batch.map(
-          (asset) =>
+          (
+            asset
+          ) =>
             asset.symbol
         ),
 
@@ -727,7 +834,8 @@ async function scan(
       );
 
     for (
-      const asset of batch
+      const asset of
+      batch
     ) {
       const m =
         momentum(
@@ -862,7 +970,10 @@ async function scan(
   }
 
   candidates.sort(
-    (a, b) =>
+    (
+      a,
+      b
+    ) =>
       b.score -
       a.score
   );
@@ -871,7 +982,9 @@ async function scan(
     Object.fromEntries(
       Object.entries(
         snapshotOutput
-      ).slice(-25)
+      ).slice(
+        -25
+      )
     );
 
   state.topCandidates =
@@ -881,7 +994,9 @@ async function scan(
         10
       )
       .map(
-        (candidate) => ({
+        (
+          candidate
+        ) => ({
           symbol:
             candidate.symbol,
 
@@ -937,7 +1052,7 @@ async function closeTrade(
     recordedQty <= 0
   ) {
     throw new Error(
-      'Open trade has no filled quantity to close.'
+      `Open trade ${trade.id} has no filled quantity to close.`
     );
   }
 
@@ -954,12 +1069,8 @@ async function closeTrade(
       trade.market
     ).includes('/');
 
-  /*
-   * CRITICAL FIX:
-   *
-   * Ask Alpaca what is
-   * ACTUALLY available now.
-   */
+  // Alpaca is source of truth
+  // for quantity actually available.
   const positions =
     await getPositions(
       mode
@@ -1000,15 +1111,6 @@ async function closeTrade(
     );
   }
 
-  /*
-   * If Alpaca says less is
-   * available than our recorded
-   * entry quantity, use Alpaca's
-   * EXACT quantity string.
-   *
-   * This fixes PEPE/crypto fee
-   * quantity mismatches.
-   */
   const closeQtyString =
     availableQty <=
     recordedQty
@@ -1030,9 +1132,6 @@ async function closeTrade(
       `Invalid close quantity for ${trade.market}.`
     );
   }
-
-  // LONG closes SELL.
-  // SHORT closes BUY.
 
   const exitSide =
     direction === 'SHORT'
@@ -1098,7 +1197,8 @@ async function closeTrade(
     );
 
   const pnl =
-    direction === 'SHORT'
+    direction ===
+    'SHORT'
       ? (
           entryPrice -
           exitPrice
@@ -1122,7 +1222,9 @@ async function closeTrade(
 
   const index =
     allTrades.findIndex(
-      (item) =>
+      (
+        item
+      ) =>
         item.id ===
         trade.id
     );
@@ -1138,7 +1240,9 @@ async function closeTrade(
 
       pnl:
         Number(
-          pnl.toFixed(4)
+          pnl.toFixed(
+            4
+          )
         ),
 
       result,
@@ -1193,43 +1297,26 @@ async function closeTrade(
     );
   }
 
-  state.openTradeId =
-    null;
+  state.openTradeIds =
+    state.openTradeIds
+      .filter(
+        (
+          id
+        ) =>
+          id !==
+          trade.id
+      );
 }
 
-async function manage(
-  mode
+async function manageOne(
+  mode,
+  trade
 ) {
-  if (
-    !state.openTradeId
-  ) {
-    return false;
-  }
-
-  const trade =
-    store.getOne(
-      'trades',
-      state.openTradeId
-    );
-
-  if (
-    !trade ||
-    trade.result !== null
-  ) {
-    state.openTradeId =
-      null;
-
-    return false;
-  }
-
   const direction =
     trade.direction ===
     'SHORT'
       ? 'SHORT'
       : 'LONG';
-
-  state.lastDecision =
-    `managing ${mode.toUpperCase()} ${direction} ${trade.market}`;
 
   const assetClass =
     trade.asset_class ||
@@ -1271,10 +1358,12 @@ async function manage(
         entryPrice
       ) /
       entryPrice
-    ) * 100;
+    ) *
+    100;
 
   const favorableMove =
-    direction === 'SHORT'
+    direction ===
+    'SHORT'
       ? -rawMove
       : rawMove;
 
@@ -1306,7 +1395,11 @@ async function manage(
         3
       )}%`
     );
-  } else if (
+
+    return 'closed';
+  }
+
+  if (
     favorableMove <=
     -Number(
       c.stopLossPct
@@ -1321,7 +1414,11 @@ async function manage(
         3
       )}%`
     );
-  } else if (
+
+    return 'closed';
+  }
+
+  if (
     ageMinutes >=
     Number(
       c.maxHoldMinutes
@@ -1336,14 +1433,91 @@ async function manage(
         1
       )}m`
     );
+
+    return 'closed';
   }
 
-  return true;
+  return 'open';
+}
+
+async function manageOpenTrades(
+  mode
+) {
+  syncOpenTradeIds();
+
+  if (
+    !state.openTradeIds.length
+  ) {
+    return 0;
+  }
+
+  const ids =
+    [
+      ...state.openTradeIds,
+    ];
+
+  for (
+    const id of
+    ids
+  ) {
+    const trade =
+      store.getOne(
+        'trades',
+        id
+      );
+
+    if (
+      !trade ||
+      trade.result !==
+        null
+    ) {
+      state.openTradeIds =
+        state.openTradeIds
+          .filter(
+            (
+              tradeId
+            ) =>
+              tradeId !==
+              id
+          );
+
+      continue;
+    }
+
+    state.lastDecision =
+      `managing ${mode.toUpperCase()} ` +
+      `${state.openTradeIds.length}/${maxOpenPositions()} positions — ` +
+      `${trade.direction || 'LONG'} ${trade.market}`;
+
+    await manageOne(
+      mode,
+      trade
+    );
+  }
+
+  syncOpenTradeIds();
+
+  return state
+    .openTradeIds
+    .length;
 }
 
 async function enter(
   mode
 ) {
+  syncOpenTradeIds();
+
+  if (
+    state.openTradeIds.length >=
+    maxOpenPositions()
+  ) {
+    state.lastDecision =
+      `${mode.toUpperCase()} managing ` +
+      `${state.openTradeIds.length}/${maxOpenPositions()} open positions`;
+
+    return false;
+  }
+
   const session =
     store.getOne(
       'sessions',
@@ -1364,6 +1538,23 @@ async function enter(
   if (
     halt.halt
   ) {
+    /*
+     * When there are still open
+     * positions, block NEW entries,
+     * but keep the bot running so
+     * those positions remain managed.
+     */
+    if (
+      state.openTradeIds.length >
+      0
+    ) {
+      state.lastDecision =
+        `SAFETY HALT — no new entries (${halt.reason}); ` +
+        `managing ${state.openTradeIds.length} open position(s)`;
+
+      return false;
+    }
+
     store.update(
       'sessions',
       session.id,
@@ -1383,7 +1574,7 @@ async function enter(
       `Safety halt: ${halt.reason}`
     );
 
-    return;
+    return false;
   }
 
   const best =
@@ -1393,14 +1584,17 @@ async function enter(
 
   if (!best) {
     state.lastDecision =
-      `${mode.toUpperCase()} scanning ${
+      `${mode.toUpperCase()} scanning ` +
+      `${
         state.universe
           .equities.length +
         state.universe
           .crypto.length
-      } Alpaca tradable assets — waiting for LONG or SHORT momentum signal`;
+      } Alpaca tradable assets — ` +
+      `${state.openTradeIds.length}/${maxOpenPositions()} positions open — ` +
+      `waiting for LONG or SHORT momentum signal`;
 
-    return;
+    return false;
   }
 
   const direction =
@@ -1408,13 +1602,9 @@ async function enter(
     'LONG';
 
   state.lastDecision =
-    `${mode.toUpperCase()} ${direction} signal ${best.symbol} ${
-      best.momentumPct >= 0
-        ? '+'
-        : ''
-    }${best.momentumPct.toFixed(
-      4
-    )}%`;
+    `${mode.toUpperCase()} ${direction} signal ${best.symbol} ` +
+    `${best.momentumPct >= 0 ? '+' : ''}` +
+    `${best.momentumPct.toFixed(4)}%`;
 
   const account =
     await getAccount(
@@ -1478,9 +1668,9 @@ async function enter(
 
   let order;
 
-  // ----------------
+  // ========================================
   // SHORT EQUITY
-  // ----------------
+  // ========================================
 
   if (
     direction ===
@@ -1506,10 +1696,10 @@ async function enter(
     ) {
       state.lastDecision =
         `${mode.toUpperCase()} SHORT ${best.symbol} skipped — ` +
-        `$${riskBudget.toFixed(2)} risk budget is below one whole share at ` +
+        `$${riskBudget.toFixed(2)} budget is below one whole share at ` +
         `$${best.price.toFixed(2)}`;
 
-      return;
+      return false;
     }
 
     order =
@@ -1531,9 +1721,9 @@ async function enter(
           'day',
       });
   } else {
-    // ----------------
+    // ========================================
     // LONG
-    // ----------------
+    // ========================================
 
     order =
       await placeOrder({
@@ -1616,10 +1806,6 @@ async function enter(
       alpaca_order_id:
         order.id,
 
-      /*
-       * Keep Alpaca's exact
-       * quantity string.
-       */
       qty:
         fill.filled_qty,
 
@@ -1647,11 +1833,15 @@ async function enter(
     trade
   );
 
-  state.openTradeId =
-    trade.id;
+  state.openTradeIds.push(
+    trade.id
+  );
 
   state.lastDecision =
-    `entered ${mode.toUpperCase()} ${direction} ${best.symbol} at ${entryPrice}`;
+    `entered ${mode.toUpperCase()} ${direction} ${best.symbol} at ` +
+    `${entryPrice} — ${state.openTradeIds.length}/${maxOpenPositions()} positions open`;
+
+  return true;
 }
 
 async function tick() {
@@ -1715,14 +1905,18 @@ async function tick() {
     state.lastError =
       null;
 
-    const managing =
-      await manage(
-        mode
-      );
+    // First manage everything
+    // currently open.
+    await manageOpenTrades(
+      mode
+    );
 
+    // Then fill one empty slot
+    // if a valid new signal exists.
     if (
-      !managing &&
-      !state.openTradeId
+      state.running &&
+      state.openTradeIds.length <
+        maxOpenPositions()
     ) {
       await enter(
         mode
@@ -1748,26 +1942,33 @@ async function tick() {
   }
 }
 
-// ----------------
+// ========================================
 // STATUS
-// ----------------
+// ========================================
 
 router.get(
   '/status',
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
     res.json(
       pub()
     );
   }
 );
 
-// ----------------
+// ========================================
 // START / RECOVER
-// ----------------
+// ========================================
 
 router.post(
   '/start',
-  async (req, res) => {
+
+  async (
+    req,
+    res
+  ) => {
     try {
       if (
         state.running
@@ -1822,13 +2023,19 @@ router.post(
           mode
         );
 
-      const openLocalTrade =
+      /*
+       * Find every unfinished local
+       * trade for this mode.
+       */
+      const openLocalTrades =
         store
           .getAll(
             'trades'
           )
-          .find(
-            (trade) => {
+          .filter(
+            (
+              trade
+            ) => {
               if (
                 trade.result !==
                 null
@@ -1850,39 +2057,76 @@ router.post(
           );
 
       /*
-       * RECOVERY PATH
-       *
-       * If the previous bot stopped
-       * on an exit error but Alpaca
-       * still has the position,
-       * reconnect to it.
+       * RECOVERY
        */
       if (
-        openLocalTrade
+        openLocalTrades.length
       ) {
-        const matchingPosition =
-          findMatchingPosition(
-            brokerPositions,
-            openLocalTrade.market
-          );
-
         if (
-          !matchingPosition
+          openLocalTrades.length >
+          maxOpenPositions()
         ) {
           return res
             .status(409)
             .json({
               error:
-                `Local ${mode} trade ${openLocalTrade.id} is marked open, ` +
-                `but Alpaca has no matching ${openLocalTrade.market} position. ` +
-                `The record cannot be auto-closed because the actual exit price/P&L is unknown.`,
+                `Found ${openLocalTrades.length} open local ${mode} trades, ` +
+                `but this bot is configured for at most ${maxOpenPositions()} positions.`,
             });
+        }
+
+        const sessionIds =
+          [
+            ...new Set(
+              openLocalTrades.map(
+                (
+                  trade
+                ) =>
+                  trade.session_id
+              )
+            ),
+          ];
+
+        if (
+          sessionIds.length !==
+          1
+        ) {
+          return res
+            .status(409)
+            .json({
+              error:
+                `Open local ${mode} trades belong to multiple sessions. ` +
+                `Automatic recovery is blocked to avoid mixing session P&L.`,
+            });
+        }
+
+        for (
+          const trade of
+          openLocalTrades
+        ) {
+          const matchingPosition =
+            findMatchingPosition(
+              brokerPositions,
+              trade.market
+            );
+
+          if (
+            !matchingPosition
+          ) {
+            return res
+              .status(409)
+              .json({
+                error:
+                  `Local ${mode} trade ${trade.id} is marked open, but Alpaca ` +
+                  `has no matching ${trade.market} position. Reconciliation is required.`,
+              });
+          }
         }
 
         const existingSession =
           store.getOne(
             'sessions',
-            openLocalTrade.session_id
+            sessionIds[0]
           );
 
         if (
@@ -1892,7 +2136,7 @@ router.post(
             .status(409)
             .json({
               error:
-                `Open local trade ${openLocalTrade.id} exists, but its session record is missing.`,
+                'Open local trades exist, but their session record is missing.',
             });
         }
 
@@ -1918,11 +2162,6 @@ router.post(
           true
         );
 
-        /*
-         * Re-open that session so
-         * the existing broker
-         * position can be managed.
-         */
         store.update(
           'sessions',
           existingSession.id,
@@ -1961,19 +2200,17 @@ router.post(
             lastError:
               null,
 
-            openTradeId:
-              openLocalTrade.id,
+            openTradeIds:
+              openLocalTrades.map(
+                (
+                  trade
+                ) =>
+                  trade.id
+              ),
 
             lastDecision:
-              `recovering ${mode.toUpperCase()} ` +
-              `${openLocalTrade.direction || 'LONG'} ` +
-              `${openLocalTrade.market} — ` +
-              `Alpaca position qty ${positiveQtyString(
-                matchingPosition.qty
-              )}, available ${positiveQtyString(
-                matchingPosition.qty_available ??
-                matchingPosition.qty
-              )}`,
+              `recovering ${openLocalTrades.length}/${maxOpenPositions()} ` +
+              `${mode.toUpperCase()} bot positions`,
 
             signalSnapshot:
               {},
@@ -1994,6 +2231,10 @@ router.post(
           pub()
         );
       }
+
+      /*
+       * NEW SESSION
+       */
 
       const equity =
         Number(
@@ -2071,16 +2312,18 @@ router.post(
           lastError:
             null,
 
-          openTradeId:
-            null,
+          openTradeIds:
+            [],
 
           lastDecision:
-            `starting ${mode.toUpperCase()} bot — loaded ${
+            `starting ${mode.toUpperCase()} bot — loaded ` +
+            `${
               state.universe
                 .equities.length +
               state.universe
                 .crypto.length
-            } Alpaca tradable assets`,
+            } Alpaca tradable assets — ` +
+            `up to ${maxOpenPositions()} positions`,
 
           signalSnapshot:
             {},
@@ -2097,11 +2340,11 @@ router.post(
         tick
       );
 
-      res.json(
+      return res.json(
         pub()
       );
     } catch (error) {
-      res
+      return res
         .status(500)
         .json({
           error:
@@ -2111,13 +2354,17 @@ router.post(
   }
 );
 
-// ----------------
+// ========================================
 // STOP
-// ----------------
+// ========================================
 
 router.post(
   '/stop',
-  async (req, res) => {
+
+  async (
+    req,
+    res
+  ) => {
     const mode =
       state.mode;
 
@@ -2126,45 +2373,64 @@ router.post(
     state.lastDecision =
       'stopped by user';
 
+    const closeErrors =
+      [];
+
     try {
-      if (
-        mode &&
-        state.openTradeId
-      ) {
-        const trade =
-          store.getOne(
-            'trades',
-            state.openTradeId
-          );
+      if (mode) {
+        syncOpenTradeIds();
 
-        if (
-          trade &&
-          trade.result ===
-            null
+        for (
+          const id of
+          [
+            ...state.openTradeIds,
+          ]
         ) {
-          const assetClass =
-            trade.asset_class ||
-            (
-              String(
-                trade.market
-              ).includes('/')
-                ? 'crypto'
-                : 'us_equity'
+          const trade =
+            store.getOne(
+              'trades',
+              id
             );
 
-          const price =
-            await getLatestTradablePrice(
+          if (
+            !trade ||
+            trade.result !==
+              null
+          ) {
+            continue;
+          }
+
+          try {
+            const assetClass =
+              trade.asset_class ||
+              (
+                String(
+                  trade.market
+                ).includes('/')
+                  ? 'crypto'
+                  : 'us_equity'
+              );
+
+            const price =
+              await getLatestTradablePrice(
+                mode,
+                trade.market,
+                assetClass
+              );
+
+            await closeTrade(
               mode,
-              trade.market,
-              assetClass
+              trade,
+              price,
+              'bot stopped by user'
             );
-
-          await closeTrade(
-            mode,
-            trade,
-            price,
-            'bot stopped by user'
-          );
+          } catch (
+            error
+          ) {
+            closeErrors.push(
+              `${trade.market}: ${error.message}`
+            );
+          }
         }
       }
 
@@ -2190,7 +2456,12 @@ router.post(
                 'halted',
 
               halt_reason:
-                'Bot stopped by user',
+                closeErrors.length >
+                0
+                  ? `Bot stopped; some positions failed to close: ${closeErrors.join(
+                      ' | '
+                    )}`
+                  : 'Bot stopped by user',
 
               completed_at:
                 new Date().toISOString(),
@@ -2199,14 +2470,35 @@ router.post(
         }
       }
 
-      res.json(
+      syncOpenTradeIds();
+
+      if (
+        closeErrors.length
+      ) {
+        state.lastError =
+          `Bot stopped, but ${closeErrors.length} position(s) failed to close: ` +
+          closeErrors.join(
+            ' | '
+          );
+
+        return res
+          .status(500)
+          .json({
+            error:
+              state.lastError,
+
+            ...pub(),
+          });
+      }
+
+      return res.json(
         pub()
       );
     } catch (error) {
       state.lastError =
-        `Bot stopped, but open-position close failed: ${error.message}`;
+        `Bot stopped, but shutdown cleanup failed: ${error.message}`;
 
-      res
+      return res
         .status(500)
         .json({
           error:
