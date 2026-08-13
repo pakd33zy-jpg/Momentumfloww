@@ -23,7 +23,7 @@ import {
   waitForFill,
 } from './alpacaClient.js';
 
-// UNIFIED BOT v12
+// UNIFIED BOT v13
 //
 // PAPER:
 // real Alpaca market data
@@ -39,6 +39,12 @@ import {
 //
 // Equities = LONG + SHORT
 // Crypto = LONG only
+//
+// v13 fixes:
+// 1) exits use Alpaca's CURRENT available position quantity
+//    when it is lower than the recorded entry fill
+// 2) startup recovers a local open trade when the matching
+//    Alpaca paper/live position still exists
 
 const router = express.Router();
 
@@ -67,29 +73,19 @@ const state = {
 
 const DEFAULTS = {
   pollSeconds: 5,
-
   entryMomentumPct: 0.15,
-
   takeProfitPct: 0.6,
-
   stopLossPct: 0.4,
-
   maxHoldMinutes: 15,
-
   equityBatchSize: 75,
-
   universeRefreshMinutes: 15,
-
   minEquityPrice: 1,
-
   minDailyDollarVolume: 1000000,
-
   stockFeed: 'iex',
 };
 
 const tradingCfg = () => ({
   riskPerTrade: 0.02,
-
   ...store.getConfig(
     'tradingConfig',
     {}
@@ -98,7 +94,6 @@ const tradingCfg = () => ({
 
 const cfg = () => ({
   ...DEFAULTS,
-
   ...store.getConfig(
     'liveBotConfig',
     {}
@@ -129,12 +124,16 @@ function accessCheck(mode) {
         ),
 
       hasLiveCredentials:
-        hasCredentials('live'),
+        hasCredentials(
+          'live'
+        ),
     });
   }
 
   if (
-    !hasCredentials('paper')
+    !hasCredentials(
+      'paper'
+    )
   ) {
     return {
       allowed: false,
@@ -187,21 +186,22 @@ function pub() {
 
     universe: {
       equityCount:
-        state.universe.equities
-          .length,
+        state.universe
+          .equities.length,
 
       cryptoCount:
-        state.universe.crypto
-          .length,
+        state.universe
+          .crypto.length,
 
       totalCount:
-        state.universe.equities
-          .length +
-        state.universe.crypto
-          .length,
+        state.universe
+          .equities.length +
+        state.universe
+          .crypto.length,
 
       refreshedAt:
-        state.universe.refreshedAt,
+        state.universe
+          .refreshedAt,
 
       equityCursor:
         state.equityCursor,
@@ -214,7 +214,7 @@ function pub() {
         Number(
           tradingCfg()
             .riskPerTrade ??
-            0.02
+          0.02
         ),
 
       sizingMode:
@@ -245,9 +245,11 @@ function stop(
     );
   }
 
-  state.timer = null;
+  state.timer =
+    null;
 
-  state.running = false;
+  state.running =
+    false;
 
   if (reason) {
     state.lastError =
@@ -256,7 +258,9 @@ function stop(
 }
 
 function schedule() {
-  if (!state.running) {
+  if (
+    !state.running
+  ) {
     return;
   }
 
@@ -276,31 +280,93 @@ function schedule() {
 function normPos(
   symbol = ''
 ) {
+  const value =
+    String(
+      symbol || ''
+    ).toUpperCase();
+
   if (
-    symbol.includes('/')
+    value.includes('/')
   ) {
-    return symbol;
+    return value;
   }
 
   if (
     /^[A-Z]+USD$/.test(
-      symbol
+      value
     )
   ) {
-    return `${symbol.slice(
+    return `${value.slice(
       0,
       -3
     )}/USD`;
   }
 
-  return symbol;
+  return value;
+}
+
+function positiveQtyString(
+  value
+) {
+  if (
+    value == null
+  ) {
+    return null;
+  }
+
+  const raw =
+    String(value).trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  return raw.startsWith('-')
+    ? raw.slice(1)
+    : raw;
+}
+
+function findMatchingPosition(
+  positions,
+  market
+) {
+  const wanted =
+    normPos(
+      market
+    );
+
+  return (
+    (
+      positions ||
+      []
+    ).find(
+      (position) => {
+        const qty =
+          Math.abs(
+            Number(
+              position?.qty ||
+              0
+            )
+          );
+
+        return (
+          qty > 0 &&
+          normPos(
+            position?.symbol
+          ) === wanted
+        );
+      }
+    ) ||
+    null
+  );
 }
 
 async function refreshUniverse(
   mode,
   force = false
 ) {
-  const c = cfg();
+  const c =
+    cfg();
 
   const age =
     state.universe
@@ -330,10 +396,12 @@ async function refreshUniverse(
 
   state.universe = {
     equities:
-      assets.equities || [],
+      assets.equities ||
+      [],
 
     crypto:
-      assets.crypto || [],
+      assets.crypto ||
+      [],
 
     refreshedAt:
       new Date().toISOString(),
@@ -341,10 +409,11 @@ async function refreshUniverse(
 
   if (
     state.equityCursor >=
-    state.universe.equities
-      .length
+    state.universe
+      .equities.length
   ) {
-    state.equityCursor = 0;
+    state.equityCursor =
+      0;
   }
 }
 
@@ -362,12 +431,18 @@ function momentum(
   const close =
     Number(
       bar?.c ??
-      snapshot?.latestTrade?.p
+      snapshot
+        ?.latestTrade
+        ?.p
     );
 
   if (
-    !Number.isFinite(open) ||
-    !Number.isFinite(close) ||
+    !Number.isFinite(
+      open
+    ) ||
+    !Number.isFinite(
+      close
+    ) ||
     open <= 0
   ) {
     return null;
@@ -375,17 +450,21 @@ function momentum(
 
   return {
     momentumPct:
-      ((close - open) /
-        open) *
-      100,
+      (
+        (close -
+          open) /
+        open
+      ) * 100,
 
     price:
       close,
 
     volume:
       Number(
-        snapshot?.dailyBar?.v ||
-          0
+        snapshot
+          ?.dailyBar
+          ?.v ||
+        0
       ),
   };
 }
@@ -397,7 +476,8 @@ async function scan(
     mode
   );
 
-  const c = cfg();
+  const c =
+    cfg();
 
   const session =
     store.getOne(
@@ -413,7 +493,9 @@ async function scan(
 
   const trades =
     store
-      .getAll('trades')
+      .getAll(
+        'trades'
+      )
       .filter(
         (trade) =>
           trade.session_id ===
@@ -433,7 +515,7 @@ async function scan(
             Math.abs(
               Number(
                 position.qty ||
-                  0
+                0
               )
             ) > 0
         )
@@ -445,7 +527,8 @@ async function scan(
         )
     );
 
-  const candidates = [];
+  const candidates =
+    [];
 
   const snapshotOutput =
     {};
@@ -456,12 +539,15 @@ async function scan(
   // ----------------
 
   const cryptoSymbols =
-    state.universe.crypto
+    state.universe
+      .crypto
       .map(
         (asset) =>
           asset.symbol
       )
-      .filter(Boolean);
+      .filter(
+        Boolean
+      );
 
   if (
     cryptoSymbols.length
@@ -481,10 +567,11 @@ async function scan(
           asset.symbol
         ] ||
         snapshots[
-          asset.symbol?.replace(
-            '/',
-            ''
-          )
+          asset.symbol
+            ?.replace(
+              '/',
+              ''
+            )
         ];
 
       const m =
@@ -498,7 +585,9 @@ async function scan(
 
       const eligible =
         !blocked.has(
-          asset.symbol
+          normPos(
+            asset.symbol
+          )
         ) &&
         canTradeMarket(
           trades,
@@ -516,9 +605,8 @@ async function scan(
 
         momentumPct:
           Number(
-            m.momentumPct.toFixed(
-              4
-            )
+            m.momentumPct
+              .toFixed(4)
           ),
 
         thresholdPct:
@@ -578,8 +666,8 @@ async function scan(
 
   if (
     state.marketOpen &&
-    state.universe.equities
-      .length
+    state.universe
+      .equities.length
   ) {
     const count =
       Math.min(
@@ -591,7 +679,8 @@ async function scan(
           .equities.length
       );
 
-    const batch = [];
+    const batch =
+      [];
 
     for (
       let i = 0;
@@ -599,22 +688,28 @@ async function scan(
       i++
     ) {
       const index =
-        (state.equityCursor +
-          i) %
-        state.universe.equities
-          .length;
+        (
+          state.equityCursor +
+          i
+        ) %
+        state.universe
+          .equities.length;
 
       batch.push(
         state.universe
-          .equities[index]
+          .equities[
+            index
+          ]
       );
     }
 
     state.equityCursor =
-      (state.equityCursor +
-        count) %
-      state.universe.equities
-        .length;
+      (
+        state.equityCursor +
+        count
+      ) %
+      state.universe
+        .equities.length;
 
     const snapshots =
       await getStockSnapshots(
@@ -664,7 +759,9 @@ async function scan(
             c.minDailyDollarVolume
           ) &&
         !blocked.has(
-          asset.symbol
+          normPos(
+            asset.symbol
+          )
         ) &&
         canTradeMarket(
           trades,
@@ -709,9 +806,8 @@ async function scan(
 
         momentumPct:
           Number(
-            m.momentumPct.toFixed(
-              4
-            )
+            m.momentumPct
+              .toFixed(4)
           ),
 
         thresholdPct:
@@ -780,7 +876,10 @@ async function scan(
 
   state.topCandidates =
     candidates
-      .slice(0, 10)
+      .slice(
+        0,
+        10
+      )
       .map(
         (candidate) => ({
           symbol:
@@ -820,15 +919,22 @@ async function closeTrade(
   price,
   reason
 ) {
-  const qty =
-    Number(
-      trade.filled_qty ||
+  const recordedQtyString =
+    positiveQtyString(
+      trade.filled_qty ??
       trade.qty
     );
 
+  const recordedQty =
+    Number(
+      recordedQtyString
+    );
+
   if (
-    !Number.isFinite(qty) ||
-    qty <= 0
+    !Number.isFinite(
+      recordedQty
+    ) ||
+    recordedQty <= 0
   ) {
     throw new Error(
       'Open trade has no filled quantity to close.'
@@ -848,13 +954,94 @@ async function closeTrade(
       trade.market
     ).includes('/');
 
-  // Long closes by SELL.
-  // Short closes by BUY.
+  /*
+   * CRITICAL FIX:
+   *
+   * Ask Alpaca what is
+   * ACTUALLY available now.
+   */
+  const positions =
+    await getPositions(
+      mode
+    );
+
+  const position =
+    findMatchingPosition(
+      positions,
+      trade.market
+    );
+
+  if (!position) {
+    throw new Error(
+      `No matching Alpaca ${mode} position exists for ${trade.market}. ` +
+      `Local trade ${trade.id} is still marked open and needs reconciliation.`
+    );
+  }
+
+  const availableQtyString =
+    positiveQtyString(
+      position.qty_available ??
+      position.qty
+    );
+
+  const availableQty =
+    Number(
+      availableQtyString
+    );
+
+  if (
+    !Number.isFinite(
+      availableQty
+    ) ||
+    availableQty <= 0
+  ) {
+    throw new Error(
+      `Alpaca reports no available quantity to close for ${trade.market}.`
+    );
+  }
+
+  /*
+   * If Alpaca says less is
+   * available than our recorded
+   * entry quantity, use Alpaca's
+   * EXACT quantity string.
+   *
+   * This fixes PEPE/crypto fee
+   * quantity mismatches.
+   */
+  const closeQtyString =
+    availableQty <=
+    recordedQty
+      ? availableQtyString
+      : recordedQtyString;
+
+  const closeQty =
+    Number(
+      closeQtyString
+    );
+
+  if (
+    !Number.isFinite(
+      closeQty
+    ) ||
+    closeQty <= 0
+  ) {
+    throw new Error(
+      `Invalid close quantity for ${trade.market}.`
+    );
+  }
+
+  // LONG closes SELL.
+  // SHORT closes BUY.
 
   const exitSide =
     direction === 'SHORT'
       ? 'buy'
       : 'sell';
+
+  state.lastDecision =
+    `closing ${mode.toUpperCase()} ${direction} ${trade.market} ` +
+    `qty ${closeQtyString} — ${reason}`;
 
   const order =
     await placeOrder({
@@ -863,7 +1050,8 @@ async function closeTrade(
       symbol:
         trade.market,
 
-      qty,
+      qty:
+        closeQtyString,
 
       side:
         exitSide,
@@ -906,16 +1094,20 @@ async function closeTrade(
   const filledQty =
     Number(
       fill.filled_qty ||
-      qty
+      closeQtyString
     );
 
   const pnl =
     direction === 'SHORT'
-      ? (entryPrice -
-          exitPrice) *
+      ? (
+          entryPrice -
+          exitPrice
+        ) *
         filledQty
-      : (exitPrice -
-          entryPrice) *
+      : (
+          exitPrice -
+          entryPrice
+        ) *
         filledQty;
 
   const result =
@@ -935,7 +1127,9 @@ async function closeTrade(
         trade.id
     );
 
-  if (index >= 0) {
+  if (
+    index >= 0
+  ) {
     allTrades[index] = {
       ...allTrades[index],
 
@@ -954,6 +1148,12 @@ async function closeTrade(
 
       exit_order_id:
         order.id,
+
+      exit_qty:
+        filledQty,
+
+      broker_qty_available_at_exit:
+        availableQtyString,
 
       closed_at:
         new Date().toISOString(),
@@ -977,7 +1177,7 @@ async function closeTrade(
         ? Number(
             session
               .consecutive_losses ||
-              0
+            0
           ) + 1
         : 0;
 
@@ -1033,11 +1233,13 @@ async function manage(
 
   const assetClass =
     trade.asset_class ||
-    (String(
-      trade.market
-    ).includes('/')
-      ? 'crypto'
-      : 'us_equity');
+    (
+      String(
+        trade.market
+      ).includes('/')
+        ? 'crypto'
+        : 'us_equity'
+    );
 
   const price =
     await getLatestTradablePrice(
@@ -1063,13 +1265,13 @@ async function manage(
   }
 
   const rawMove =
-    ((price -
-      entryPrice) /
-      entryPrice) *
-    100;
-
-  // Positive means profitable
-  // regardless of direction.
+    (
+      (
+        price -
+        entryPrice
+      ) /
+      entryPrice
+    ) * 100;
 
   const favorableMove =
     direction === 'SHORT'
@@ -1077,14 +1279,17 @@ async function manage(
       : rawMove;
 
   const ageMinutes =
-    (Date.now() -
+    (
+      Date.now() -
       new Date(
         trade.timestamp ||
-          trade.created_at
-      ).getTime()) /
+        trade.created_at
+      ).getTime()
+    ) /
     60000;
 
-  const c = cfg();
+  const c =
+    cfg();
 
   if (
     favorableMove >=
@@ -1096,6 +1301,7 @@ async function manage(
       mode,
       trade,
       price,
+
       `${direction} take profit +${favorableMove.toFixed(
         3
       )}%`
@@ -1110,6 +1316,7 @@ async function manage(
       mode,
       trade,
       price,
+
       `${direction} stop loss ${favorableMove.toFixed(
         3
       )}%`
@@ -1124,6 +1331,7 @@ async function manage(
       mode,
       trade,
       price,
+
       `${direction} max hold ${ageMinutes.toFixed(
         1
       )}m`
@@ -1153,7 +1361,9 @@ async function enter(
       session
     );
 
-  if (halt.halt) {
+  if (
+    halt.halt
+  ) {
     store.update(
       'sessions',
       session.id,
@@ -1230,7 +1440,7 @@ async function enter(
     Number(
       tradingCfg()
         .riskPerTrade ??
-        0.02
+      0.02
     );
 
   if (
@@ -1291,13 +1501,13 @@ async function enter(
         best.price
       );
 
-    if (qty < 1) {
+    if (
+      qty < 1
+    ) {
       state.lastDecision =
-        `${mode.toUpperCase()} SHORT ${best.symbol} skipped — $${riskBudget.toFixed(
-          2
-        )} risk budget is below one whole share at $${best.price.toFixed(
-          2
-        )}`;
+        `${mode.toUpperCase()} SHORT ${best.symbol} skipped — ` +
+        `$${riskBudget.toFixed(2)} risk budget is below one whole share at ` +
+        `$${best.price.toFixed(2)}`;
 
       return;
     }
@@ -1406,15 +1616,15 @@ async function enter(
       alpaca_order_id:
         order.id,
 
+      /*
+       * Keep Alpaca's exact
+       * quantity string.
+       */
       qty:
-        Number(
-          fill.filled_qty
-        ),
+        fill.filled_qty,
 
       filled_qty:
-        Number(
-          fill.filled_qty
-        ),
+        fill.filled_qty,
 
       entry_signal: {
         direction,
@@ -1445,7 +1655,9 @@ async function enter(
 }
 
 async function tick() {
-  if (!state.running) {
+  if (
+    !state.running
+  ) {
     return;
   }
 
@@ -1457,7 +1669,9 @@ async function tick() {
       ![
         'paper',
         'live',
-      ].includes(mode)
+      ].includes(
+        mode
+      )
     ) {
       stop(
         'Bot mode is invalid.'
@@ -1548,7 +1762,7 @@ router.get(
 );
 
 // ----------------
-// START
+// START / RECOVER
 // ----------------
 
 router.post(
@@ -1603,6 +1817,11 @@ router.post(
           });
       }
 
+      const brokerPositions =
+        await getPositions(
+          mode
+        );
+
       const openLocalTrade =
         store
           .getAll(
@@ -1630,15 +1849,150 @@ router.post(
             }
           );
 
+      /*
+       * RECOVERY PATH
+       *
+       * If the previous bot stopped
+       * on an exit error but Alpaca
+       * still has the position,
+       * reconnect to it.
+       */
       if (
         openLocalTrade
       ) {
-        return res
-          .status(409)
-          .json({
-            error:
-              `Refusing to start while local ${mode} trade ${openLocalTrade.id} is still marked open.`,
-          });
+        const matchingPosition =
+          findMatchingPosition(
+            brokerPositions,
+            openLocalTrade.market
+          );
+
+        if (
+          !matchingPosition
+        ) {
+          return res
+            .status(409)
+            .json({
+              error:
+                `Local ${mode} trade ${openLocalTrade.id} is marked open, ` +
+                `but Alpaca has no matching ${openLocalTrade.market} position. ` +
+                `The record cannot be auto-closed because the actual exit price/P&L is unknown.`,
+            });
+        }
+
+        const existingSession =
+          store.getOne(
+            'sessions',
+            openLocalTrade.session_id
+          );
+
+        if (
+          !existingSession
+        ) {
+          return res
+            .status(409)
+            .json({
+              error:
+                `Open local trade ${openLocalTrade.id} exists, but its session record is missing.`,
+            });
+        }
+
+        state.mode =
+          mode;
+
+        state.universe = {
+          equities:
+            [],
+
+          crypto:
+            [],
+
+          refreshedAt:
+            null,
+        };
+
+        state.equityCursor =
+          0;
+
+        await refreshUniverse(
+          mode,
+          true
+        );
+
+        /*
+         * Re-open that session so
+         * the existing broker
+         * position can be managed.
+         */
+        store.update(
+          'sessions',
+          existingSession.id,
+          {
+            status:
+              'running',
+
+            halt_reason:
+              null,
+
+            completed_at:
+              null,
+
+            updated_at:
+              new Date().toISOString(),
+          }
+        );
+
+        Object.assign(
+          state,
+          {
+            running:
+              true,
+
+            mode,
+
+            sessionId:
+              existingSession.id,
+
+            startedAt:
+              new Date().toISOString(),
+
+            lastTickAt:
+              null,
+
+            lastError:
+              null,
+
+            openTradeId:
+              openLocalTrade.id,
+
+            lastDecision:
+              `recovering ${mode.toUpperCase()} ` +
+              `${openLocalTrade.direction || 'LONG'} ` +
+              `${openLocalTrade.market} — ` +
+              `Alpaca position qty ${positiveQtyString(
+                matchingPosition.qty
+              )}, available ${positiveQtyString(
+                matchingPosition.qty_available ??
+                matchingPosition.qty
+              )}`,
+
+            signalSnapshot:
+              {},
+
+            topCandidates:
+              [],
+
+            marketOpen:
+              null,
+          }
+        );
+
+        setImmediate(
+          tick
+        );
+
+        return res.json(
+          pub()
+        );
       }
 
       const equity =
@@ -1666,9 +2020,14 @@ router.post(
         mode;
 
       state.universe = {
-        equities: [],
-        crypto: [],
-        refreshedAt: null,
+        equities:
+          [],
+
+        crypto:
+          [],
+
+        refreshedAt:
+          null,
       };
 
       state.equityCursor =
@@ -1785,11 +2144,13 @@ router.post(
         ) {
           const assetClass =
             trade.asset_class ||
-            (String(
-              trade.market
-            ).includes('/')
-              ? 'crypto'
-              : 'us_equity');
+            (
+              String(
+                trade.market
+              ).includes('/')
+                ? 'crypto'
+                : 'us_equity'
+            );
 
           const price =
             await getLatestTradablePrice(
