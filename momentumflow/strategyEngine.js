@@ -1,35 +1,86 @@
-// STRATEGY ENGINE v16
+// STRATEGY ENGINE v17 PRECISION
 //
-// Multi-factor signal scoring for MomentumFlow.
-// Equities: opening-range / breakout + multi-timeframe trend + volume + VWAP + spread + market regime.
-// Crypto: multi-timeframe trend + breakout + volume + VWAP + spread + BTC regime.
-// Dynamic ATR-style exits are generated per trade.
+// Higher-selectivity momentum strategy for MomentumFlow.
+// The goal is better setup quality, not more trades.
 //
-// No strategy guarantees profit. Run PAPER first and evaluate genuine Alpaca fills.
+// Equities:
+// - precision trading windows
+// - SPY/QQQ regime must agree with trade direction
+// - 5m + 15m trend must agree
+// - confirmed ORB or rolling breakout (2-bar hold)
+// - relative-volume confirmation
+// - VWAP confirmation
+// - spread filter
+// - ATR-based no-chase filters
+// - long + easy-to-borrow short support
+//
+// Crypto:
+// - LONG only
+// - BTC regime must be bullish
+// - 5m + 15m trend must agree
+// - confirmed rolling breakout
+// - relative-volume + VWAP + spread confirmation
+// - ATR-based no-chase filters
+//
+// IMPORTANT: Relative volume is relative to the bars returned by the configured
+// Alpaca data feed. With IEX, it is not total consolidated U.S. market volume.
+//
+// No strategy guarantees profit. Validate with genuine Alpaca PAPER fills.
 
 export const STRATEGY_DEFAULTS = {
-  equityScoreThreshold: 7,
-  cryptoScoreThreshold: 7,
+  equityScoreThreshold: 8,
+  cryptoScoreThreshold: 8,
 
   maxDetailedEquities: 6,
   maxDetailedCrypto: 6,
 
-  equityPrefilterMomentumPct: 0.03,
-  cryptoPrefilterMomentumPct: 0.05,
+  equityPrefilterMomentumPct: 0.05,
+  cryptoPrefilterMomentumPct: 0.08,
 
-  maxEquitySpreadPct: 0.25,
-  maxCryptoSpreadPct: 0.80,
+  equityMinEntryMomentumPct: 0.03,
+  cryptoMinEntryMomentumPct: 0.05,
 
-  equityCooldownMinutes: 10,
-  cryptoCooldownMinutes: 15,
+  maxEquitySpreadPct: 0.18,
+  maxCryptoSpreadPct: 0.60,
+
+  equityCooldownMinutes: 15,
+  cryptoCooldownMinutes: 20,
 
   recentVolumeLookback: 10,
   recentVolumeStrongRatio: 1.50,
-  recentVolumeOkayRatio: 1.15,
+  recentVolumeOkayRatio: 1.20,
 
   breakoutLookbackBars: 10,
   openingRangeMinutes: 5,
+  requireBreakoutConfirmation: true,
 
+  requireDualTrendAlignment: true,
+  requireVolumeConfirmation: true,
+  requireVwapAlignment: true,
+  requireMarketRegime: true,
+
+  equityMaxVwapDistanceAtr: 1.75,
+  cryptoMaxVwapDistanceAtr: 2.00,
+
+  equityMaxBreakoutDistanceAtr: 0.80,
+  cryptoMaxBreakoutDistanceAtr: 1.00,
+
+  usePrecisionTimeWindows: true,
+
+  equityMorningStartMinutesET:
+    9 * 60 + 35,
+
+  equityMorningEndMinutesET:
+    11 * 60 + 30,
+
+  equityAfternoonStartMinutesET:
+    14 * 60,
+
+  equityAfternoonEndMinutesET:
+    15 * 60 + 45,
+
+  // Keep exits close to v16 initially so we can evaluate
+  // whether the new ENTRY filters improve results.
   atrLookbackBars: 14,
   atrMultiplier: 1.25,
 
@@ -42,68 +93,136 @@ export const STRATEGY_DEFAULTS = {
   cryptoMinTakeProfitPct: 1.40,
 
   rewardRiskRatio: 1.80,
+
   trailingTriggerR: 1.00,
   trailingDistanceR: 0.65,
 
   equityMaxHoldMinutes: 25,
   cryptoMaxHoldMinutes: 40,
 
-  closeMomentumStartMinutesET: 15 * 60 + 30,
+  closeMomentumStartMinutesET:
+    15 * 60 + 30,
 };
 
-const ET_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
+const ET_FORMATTER =
+  new Intl.DateTimeFormat(
+    'en-US',
+    {
+      timeZone:
+        'America/New_York',
 
-function n(value, fallback = 0) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
+      year:
+        'numeric',
+
+      month:
+        '2-digit',
+
+      day:
+        '2-digit',
+
+      hour:
+        '2-digit',
+
+      minute:
+        '2-digit',
+
+      hourCycle:
+        'h23',
+    }
+  );
+
+function n(
+  value,
+  fallback = 0
+) {
+  const num =
+    Number(value);
+
+  return Number.isFinite(num)
+    ? num
+    : fallback;
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+function clamp(
+  value,
+  min,
+  max
+) {
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      value
+    )
+  );
 }
 
-function average(values) {
-  const good = values.filter(Number.isFinite);
+function average(
+  values
+) {
+  const good =
+    (
+      values ||
+      []
+    ).filter(
+      Number.isFinite
+    );
 
   return good.length
-    ? good.reduce((a, b) => a + b, 0) / good.length
+    ? good.reduce(
+        (
+          a,
+          b
+        ) =>
+          a + b,
+        0
+      ) /
+        good.length
     : 0;
 }
 
-function etParts(value) {
+function etParts(
+  value
+) {
   const date =
     value instanceof Date
       ? value
       : new Date(value);
 
-  const parts = Object.fromEntries(
-    ET_FORMATTER
-      .formatToParts(date)
-      .map((part) => [
-        part.type,
-        part.value,
-      ])
-  );
+  const parts =
+    Object.fromEntries(
+      ET_FORMATTER
+        .formatToParts(
+          date
+        )
+        .map(
+          (
+            part
+          ) => [
+            part.type,
+            part.value,
+          ]
+        )
+    );
 
   return {
     dateKey:
       `${parts.year}-${parts.month}-${parts.day}`,
 
     minutes:
-      Number(parts.hour) * 60 +
-      Number(parts.minute),
+      Number(
+        parts.hour
+      ) *
+        60 +
+      Number(
+        parts.minute
+      ),
   };
 }
 
-function barTime(bar) {
+function barTime(
+  bar
+) {
   return (
     bar?.t ||
     bar?.timestamp ||
@@ -111,38 +230,123 @@ function barTime(bar) {
   );
 }
 
-function barClose(bar) {
-  return n(
-    bar?.c,
-    NaN
-  );
-}
-
-function barOpen(bar) {
+function barOpen(
+  bar
+) {
   return n(
     bar?.o,
     NaN
   );
 }
 
-function barHigh(bar) {
+function barClose(
+  bar
+) {
+  return n(
+    bar?.c,
+    NaN
+  );
+}
+
+function barHigh(
+  bar
+) {
   return n(
     bar?.h,
     NaN
   );
 }
 
-function barLow(bar) {
+function barLow(
+  bar
+) {
   return n(
     bar?.l,
     NaN
   );
 }
 
-function barVolume(bar) {
+function barVolume(
+  bar
+) {
   return n(
     bar?.v,
     0
+  );
+}
+
+// Removes the still-forming current minute.
+// Breakout confirmation therefore uses CLOSED bars.
+function completedBars(
+  bars,
+  now = new Date()
+) {
+  const nowMinute =
+    Math.floor(
+      now.getTime() /
+      60000
+    );
+
+  return (
+    bars ||
+    []
+  ).filter(
+    (
+      bar
+    ) => {
+      const stamp =
+        barTime(
+          bar
+        );
+
+      if (!stamp) {
+        return false;
+      }
+
+      const time =
+        new Date(
+          stamp
+        ).getTime();
+
+      if (
+        !Number.isFinite(
+          time
+        )
+      ) {
+        return false;
+      }
+
+      return (
+        Math.floor(
+          time /
+          60000
+        ) <
+        nowMinute
+      );
+    }
+  );
+}
+
+function currentPriceFrom(
+  snapshot,
+  bars = []
+) {
+  return n(
+    snapshot
+      ?.latestTrade
+      ?.p ??
+    snapshot
+      ?.minuteBar
+      ?.c ??
+    bars[
+      bars.length -
+      1
+    ]?.c ??
+    snapshot
+      ?.dailyBar
+      ?.c,
+
+    NaN
   );
 }
 
@@ -151,18 +355,24 @@ export function mergeCurrentMinuteBar(
   snapshot = null
 ) {
   const output =
-    Array.isArray(bars)
-      ? [...bars]
+    Array.isArray(
+      bars
+    )
+      ? [
+          ...bars,
+        ]
       : [];
 
   const minuteBar =
-    snapshot?.minuteBar;
+    snapshot
+      ?.minuteBar;
 
   if (
     !minuteBar ||
     !Number.isFinite(
       Number(
-        minuteBar?.c
+        minuteBar
+          ?.c
       )
     )
   ) {
@@ -176,19 +386,26 @@ export function mergeCurrentMinuteBar(
 
   const existingIndex =
     currentTime
-      ? output.findIndex(
-          (bar) =>
-            barTime(bar) ===
-            currentTime
-        )
+      ? output
+          .findIndex(
+            (
+              bar
+            ) =>
+              barTime(
+                bar
+              ) ===
+              currentTime
+          )
       : -1;
 
   if (
-    existingIndex >= 0
+    existingIndex >=
+    0
   ) {
     output[
       existingIndex
-    ] = minuteBar;
+    ] =
+      minuteBar;
   } else {
     output.push(
       minuteBar
@@ -196,15 +413,18 @@ export function mergeCurrentMinuteBar(
   }
 
   output.sort(
-    (a, b) =>
+    (
+      a,
+      b
+    ) =>
       new Date(
         barTime(a) ||
         0
-      ) -
+      ).getTime() -
       new Date(
         barTime(b) ||
         0
-      )
+      ).getTime()
   );
 
   return output;
@@ -230,8 +450,12 @@ export function spreadPct(
     );
 
   if (
-    !Number.isFinite(ask) ||
-    !Number.isFinite(bid) ||
+    !Number.isFinite(
+      ask
+    ) ||
+    !Number.isFinite(
+      bid
+    ) ||
     ask <= 0 ||
     bid <= 0 ||
     ask < bid
@@ -254,7 +478,7 @@ export function spreadPct(
         ) /
         mid
       ) *
-      100
+        100
     : null;
 }
 
@@ -274,15 +498,20 @@ export function minuteMomentumPct(
       snapshot
         ?.minuteBar
         ?.c ??
-        snapshot
-          ?.latestTrade
-          ?.p,
+      snapshot
+        ?.latestTrade
+        ?.p,
+
       NaN
     );
 
   if (
-    !Number.isFinite(open) ||
-    !Number.isFinite(close) ||
+    !Number.isFinite(
+      open
+    ) ||
+    !Number.isFinite(
+      close
+    ) ||
     open <= 0
   ) {
     return null;
@@ -312,13 +541,15 @@ export function dailyDollarVolume(
       snapshot
         ?.dailyBar
         ?.c,
+
       0
     );
 
   return (
     price *
     barVolume(
-      snapshot?.dailyBar
+      snapshot
+        ?.dailyBar
     )
   );
 }
@@ -332,7 +563,8 @@ function trendPct(
       bars
     ) ||
     bars.length <
-      lookback + 1
+      lookback +
+      1
   ) {
     return 0;
   }
@@ -340,7 +572,8 @@ function trendPct(
   const current =
     barClose(
       bars[
-        bars.length - 1
+        bars.length -
+        1
       ]
     );
 
@@ -350,8 +583,8 @@ function trendPct(
         Math.max(
           0,
           bars.length -
-          1 -
-          lookback
+            1 -
+            lookback
         )
       ]
     );
@@ -386,7 +619,8 @@ function recentVolumeRatio(
     !Array.isArray(
       bars
     ) ||
-    bars.length < 3
+    bars.length <
+      3
   ) {
     return 0;
   }
@@ -394,7 +628,8 @@ function recentVolumeRatio(
   const current =
     barVolume(
       bars[
-        bars.length - 1
+        bars.length -
+        1
       ]
     );
 
@@ -404,8 +639,8 @@ function recentVolumeRatio(
         Math.max(
           0,
           bars.length -
-          1 -
-          lookback
+            1 -
+            lookback
         ),
         -1
       )
@@ -413,8 +648,11 @@ function recentVolumeRatio(
         barVolume
       )
       .filter(
-        (v) =>
-          v > 0
+        (
+          value
+        ) =>
+          value >
+          0
       );
 
   const base =
@@ -422,16 +660,10 @@ function recentVolumeRatio(
       prior
     );
 
-  if (
-    base <= 0
-  ) {
-    return 0;
-  }
-
-  return (
-    current /
-    base
-  );
+  return base > 0
+    ? current /
+      base
+    : 0;
 }
 
 function sessionBarsET(
@@ -447,100 +679,156 @@ function sessionBarsET(
     bars ||
     []
   ).filter(
-    (bar) => {
-      const t =
+    (
+      bar
+    ) => {
+      const stamp =
         barTime(
           bar
         );
 
-      if (!t) {
+      if (!stamp) {
         return false;
       }
 
-      const p =
+      const part =
         etParts(
-          t
+          stamp
         );
 
       return (
-        p.dateKey ===
+        part.dateKey ===
           today &&
-        p.minutes >=
-          9 * 60 + 30 &&
-        p.minutes <=
-          16 * 60
+        part.minutes >=
+          9 *
+            60 +
+            30 &&
+        part.minutes <=
+          16 *
+            60
       );
     }
+  );
+}
+
+function inEquityPrecisionWindow(
+  now,
+  config
+) {
+  if (
+    !config
+      .usePrecisionTimeWindows
+  ) {
+    return true;
+  }
+
+  const minutes =
+    etParts(
+      now
+    ).minutes;
+
+  const morning =
+    minutes >=
+      Number(
+        config
+          .equityMorningStartMinutesET
+      ) &&
+    minutes <=
+      Number(
+        config
+          .equityMorningEndMinutesET
+      );
+
+  const afternoon =
+    minutes >=
+      Number(
+        config
+          .equityAfternoonStartMinutesET
+      ) &&
+    minutes <=
+      Number(
+        config
+          .equityAfternoonEndMinutesET
+      );
+
+  return (
+    morning ||
+    afternoon
   );
 }
 
 function vwap(
   bars
 ) {
-  let pv = 0;
-  let volume = 0;
+  let priceVolume =
+    0;
+
+  let totalVolume =
+    0;
 
   for (
     const bar of
     bars ||
     []
   ) {
-    const h =
+    const high =
       barHigh(
         bar
       );
 
-    const l =
+    const low =
       barLow(
         bar
       );
 
-    const c =
+    const close =
       barClose(
         bar
       );
 
-    const v =
+    const volume =
       barVolume(
         bar
       );
 
     if (
       ![
-        h,
-        l,
-        c,
+        high,
+        low,
+        close,
       ].every(
         Number.isFinite
       ) ||
-      v <= 0
+      volume <=
+        0
     ) {
       continue;
     }
 
     const typical =
       (
-        h +
-        l +
-        c
+        high +
+        low +
+        close
       ) /
       3;
 
-    pv +=
+    priceVolume +=
       typical *
-      v;
+      volume;
 
-    volume +=
-      v;
+    totalVolume +=
+      volume;
   }
 
-  return volume > 0
-    ? pv /
-      volume
+  return totalVolume >
+    0
+    ? priceVolume /
+      totalVolume
     : null;
 }
 
-function atrPct(
+function atrAbsolute(
   bars,
   lookback = 14
 ) {
@@ -548,7 +836,8 @@ function atrPct(
     !Array.isArray(
       bars
     ) ||
-    bars.length < 3
+    bars.length <
+      3
   ) {
     return 0;
   }
@@ -561,14 +850,14 @@ function atrPct(
       )
     );
 
-  const trs =
+  const trueRanges =
     [];
 
   for (
     let i = 1;
     i <
     slice.length;
-    i++
+    i += 1
   ) {
     const high =
       barHigh(
@@ -580,10 +869,11 @@ function atrPct(
         slice[i]
       );
 
-    const prevClose =
+    const previousClose =
       barClose(
         slice[
-          i - 1
+          i -
+          1
         ]
       );
 
@@ -591,7 +881,7 @@ function atrPct(
       ![
         high,
         low,
-        prevClose,
+        previousClose,
       ].every(
         Number.isFinite
       )
@@ -599,34 +889,49 @@ function atrPct(
       continue;
     }
 
-    trs.push(
+    trueRanges.push(
       Math.max(
         high -
           low,
 
         Math.abs(
           high -
-          prevClose
+          previousClose
         ),
 
         Math.abs(
           low -
-          prevClose
+          previousClose
         )
       )
     );
   }
 
+  return average(
+    trueRanges
+  );
+}
+
+function atrPct(
+  bars,
+  lookback = 14
+) {
+  const absolute =
+    atrAbsolute(
+      bars,
+      lookback
+    );
+
   const current =
     barClose(
-      slice[
-        slice.length -
+      bars?.[
+        bars.length -
         1
       ]
     );
 
   if (
-    !trs.length ||
+    absolute <= 0 ||
     !Number.isFinite(
       current
     ) ||
@@ -636,15 +941,14 @@ function atrPct(
   }
 
   return (
-    average(
-      trs
-    ) /
+    absolute /
     current
   ) *
   100;
 }
 
-function breakoutState(
+// Two CLOSED bars must remain past the same breakout level.
+function rollingBreakoutState(
   bars,
   lookback = 10
 ) {
@@ -652,13 +956,38 @@ function breakoutState(
     !Array.isArray(
       bars
     ) ||
-    bars.length < 3
+    bars.length <
+      4
   ) {
     return {
-      long: false,
-      short: false,
+      available:
+        false,
+
+      long:
+        false,
+
+      short:
+        false,
+
+      confirmedLong:
+        false,
+
+      confirmedShort:
+        false,
+
+      high:
+        null,
+
+      low:
+        null,
     };
   }
+
+  const previous =
+    bars[
+      bars.length -
+      2
+    ];
 
   const current =
     bars[
@@ -671,10 +1000,11 @@ function breakoutState(
       Math.max(
         0,
         bars.length -
-        1 -
-        lookback
+          2 -
+          lookback
       ),
-      -1
+
+      -2
     );
 
   const highs =
@@ -695,7 +1025,12 @@ function breakoutState(
         Number.isFinite
       );
 
-  const close =
+  const previousClose =
+    barClose(
+      previous
+    );
+
+  const currentClose =
     barClose(
       current
     );
@@ -704,117 +1039,33 @@ function breakoutState(
     !highs.length ||
     !lows.length ||
     !Number.isFinite(
-      close
-    )
-  ) {
-    return {
-      long: false,
-      short: false,
-    };
-  }
-
-  return {
-    long:
-      close >
-      Math.max(
-        ...highs
-      ),
-
-    short:
-      close <
-      Math.min(
-        ...lows
-      ),
-  };
-}
-
-function openingRangeState(
-  bars,
-  now,
-  openingRangeMinutes
-) {
-  const session =
-    sessionBarsET(
-      bars,
-      now
-    );
-
-  const cutoff =
-    9 * 60 +
-    30 +
-    Number(
-      openingRangeMinutes ||
-      5
-    );
-
-  const opening =
-    session.filter(
-      (bar) => {
-        const p =
-          etParts(
-            barTime(
-              bar
-            )
-          );
-
-        return (
-          p.minutes <
-          cutoff
-        );
-      }
-    );
-
-  if (
-    opening.length < 3
-  ) {
-    return {
-      available: false,
-      long: false,
-      short: false,
-      high: null,
-      low: null,
-    };
-  }
-
-  const highs =
-    opening
-      .map(
-        barHigh
-      )
-      .filter(
-        Number.isFinite
-      );
-
-  const lows =
-    opening
-      .map(
-        barLow
-      )
-      .filter(
-        Number.isFinite
-      );
-
-  const current =
-    barClose(
-      session[
-        session.length -
-        1
-      ]
-    );
-
-  if (
-    !highs.length ||
-    !lows.length ||
+      previousClose
+    ) ||
     !Number.isFinite(
-      current
+      currentClose
     )
   ) {
     return {
-      available: false,
-      long: false,
-      short: false,
-      high: null,
-      low: null,
+      available:
+        false,
+
+      long:
+        false,
+
+      short:
+        false,
+
+      confirmedLong:
+        false,
+
+      confirmedShort:
+        false,
+
+      high:
+        null,
+
+      low:
+        null,
     };
   }
 
@@ -833,12 +1084,229 @@ function openingRangeState(
       true,
 
     long:
-      current >
+      currentClose >
       high,
 
     short:
-      current <
+      currentClose <
       low,
+
+    confirmedLong:
+      previousClose >
+        high &&
+      currentClose >
+        high,
+
+    confirmedShort:
+      previousClose <
+        low &&
+      currentClose <
+        low,
+
+    high,
+    low,
+  };
+}
+
+function openingRangeState(
+  bars,
+  now,
+  openingRangeMinutes
+) {
+  const session =
+    sessionBarsET(
+      bars,
+      now
+    );
+
+  const cutoff =
+    9 *
+      60 +
+    30 +
+    Number(
+      openingRangeMinutes ||
+      5
+    );
+
+  const opening =
+    session.filter(
+      (
+        bar
+      ) => {
+        const stamp =
+          barTime(
+            bar
+          );
+
+        return (
+          stamp &&
+          etParts(
+            stamp
+          ).minutes <
+            cutoff
+        );
+      }
+    );
+
+  const afterOpening =
+    session.filter(
+      (
+        bar
+      ) => {
+        const stamp =
+          barTime(
+            bar
+          );
+
+        return (
+          stamp &&
+          etParts(
+            stamp
+          ).minutes >=
+            cutoff
+        );
+      }
+    );
+
+  if (
+    opening.length <
+    3
+  ) {
+    return {
+      available:
+        false,
+
+      long:
+        false,
+
+      short:
+        false,
+
+      confirmedLong:
+        false,
+
+      confirmedShort:
+        false,
+
+      high:
+        null,
+
+      low:
+        null,
+    };
+  }
+
+  const highs =
+    opening
+      .map(
+        barHigh
+      )
+      .filter(
+        Number.isFinite
+      );
+
+  const lows =
+    opening
+      .map(
+        barLow
+      )
+      .filter(
+        Number.isFinite
+      );
+
+  if (
+    !highs.length ||
+    !lows.length
+  ) {
+    return {
+      available:
+        false,
+
+      long:
+        false,
+
+      short:
+        false,
+
+      confirmedLong:
+        false,
+
+      confirmedShort:
+        false,
+
+      high:
+        null,
+
+      low:
+        null,
+    };
+  }
+
+  const high =
+    Math.max(
+      ...highs
+    );
+
+  const low =
+    Math.min(
+      ...lows
+    );
+
+  const currentClose =
+    barClose(
+      afterOpening[
+        afterOpening.length -
+        1
+      ]
+    );
+
+  const previousClose =
+    barClose(
+      afterOpening[
+        afterOpening.length -
+        2
+      ]
+    );
+
+  const currentValid =
+    Number.isFinite(
+      currentClose
+    );
+
+  const previousValid =
+    Number.isFinite(
+      previousClose
+    );
+
+  return {
+    available:
+      currentValid,
+
+    long:
+      currentValid &&
+      currentClose >
+        high,
+
+    short:
+      currentValid &&
+      currentClose <
+        low,
+
+    confirmedLong:
+      currentValid &&
+      previousValid &&
+      previousClose >
+        high &&
+      currentClose >
+        high,
+
+    confirmedShort:
+      currentValid &&
+      previousValid &&
+      previousClose <
+        low &&
+      currentClose <
+        low,
 
     high,
     low,
@@ -853,6 +1321,7 @@ function dynamicExitPlan(
   const atr =
     atrPct(
       bars,
+
       Number(
         config
           .atrLookbackBars ||
@@ -874,15 +1343,21 @@ function dynamicExitPlan(
               1.25
             ),
 
+          Number(
+            config
+              .cryptoMinStopPct
+          )
+        ),
+
+        Number(
           config
             .cryptoMinStopPct
         ),
 
-        config
-          .cryptoMinStopPct,
-
-        config
-          .cryptoMaxStopPct
+        Number(
+          config
+            .cryptoMaxStopPct
+        )
       );
 
     const takeProfitPct =
@@ -965,15 +1440,21 @@ function dynamicExitPlan(
             1.25
           ),
 
+        Number(
+          config
+            .equityMinStopPct
+        )
+      ),
+
+      Number(
         config
           .equityMinStopPct
       ),
 
-      config
-        .equityMinStopPct,
-
-      config
-        .equityMaxStopPct
+      Number(
+        config
+          .equityMaxStopPct
+      )
     );
 
   const takeProfitPct =
@@ -1074,33 +1555,38 @@ export function buildEquityMarketRegime(
       15
     );
 
+  const values = [
+    spy5,
+    spy15,
+    qqq5,
+    qqq15,
+  ];
+
   const longVotes =
-    [
-      spy5,
-      spy15,
-      qqq5,
-      qqq15,
-    ].filter(
-      (v) =>
-        v > 0
+    values.filter(
+      (
+        value
+      ) =>
+        value >
+        0
     ).length;
 
   const shortVotes =
-    [
-      spy5,
-      spy15,
-      qqq5,
-      qqq15,
-    ].filter(
-      (v) =>
-        v < 0
+    values.filter(
+      (
+        value
+      ) =>
+        value <
+        0
     ).length;
 
   return {
     direction:
-      longVotes >= 3
+      longVotes >=
+      3
         ? 'LONG'
-        : shortVotes >= 3
+        : shortVotes >=
+            3
           ? 'SHORT'
           : 'NEUTRAL',
 
@@ -1137,13 +1623,13 @@ export function buildEquityMarketRegime(
 export function buildCryptoMarketRegime(
   btcBars = []
 ) {
-  const t5 =
+  const btc5 =
     trendPct(
       btcBars,
       5
     );
 
-  const t15 =
+  const btc15 =
     trendPct(
       btcBars,
       15
@@ -1151,24 +1637,24 @@ export function buildCryptoMarketRegime(
 
   return {
     direction:
-      t5 > 0 &&
-      t15 > 0
+      btc5 > 0 &&
+      btc15 > 0
         ? 'LONG'
-        : t5 < 0 &&
-            t15 < 0
+        : btc5 < 0 &&
+            btc15 < 0
           ? 'SHORT'
           : 'NEUTRAL',
 
     btc5:
       Number(
-        t5.toFixed(
+        btc5.toFixed(
           4
         )
       ),
 
     btc15:
       Number(
-        t15.toFixed(
+        btc15.toFixed(
           4
         )
       ),
@@ -1190,97 +1676,185 @@ function scoreDirection({
       snapshot
     );
 
-  const session =
+  // Signal decisions are based on completed bars.
+  const signalBars =
+    completedBars(
+      currentBars,
+      now
+    );
+
+  if (
+    signalBars.length <
+    4
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'not enough bar history',
+    };
+  }
+
+  if (
     assetClass ===
-    'us_equity'
-      ? sessionBarsET(
-          currentBars,
-          now
-        )
-      : currentBars;
+      'us_equity' &&
+    !inEquityPrecisionWindow(
+      now,
+      config
+    )
+  ) {
+    return {
+      eligible:
+        false,
 
-  const t5 =
-    trendPct(
-      currentBars,
-      5
-    );
+      score:
+        0,
 
-  const t15 =
-    trendPct(
-      currentBars,
-      15
-    );
-
-  const volRatio =
-    recentVolumeRatio(
-      currentBars,
-      Number(
-        config
-          .recentVolumeLookback
-      )
-    );
-
-  const spread =
-    spreadPct(
-      snapshot
-    );
-
-  const recentBreakout =
-    breakoutState(
-      currentBars,
-      Number(
-        config
-          .breakoutLookbackBars
-      )
-    );
-
-  const currentPrice =
-    n(
-      snapshot
-        ?.latestTrade
-        ?.p ??
-      snapshot
-        ?.minuteBar
-        ?.c ??
-      currentBars[
-        currentBars.length -
-        1
-      ]?.c,
-      NaN
-    );
-
-  const sessionVwap =
-    vwap(
-      session
-    );
+      reason:
+        'outside v17 precision equity windows',
+    };
+  }
 
   const long =
     direction ===
     'LONG';
 
+  const currentPrice =
+    currentPriceFrom(
+      snapshot,
+      currentBars
+    );
+
+  if (
+    !Number.isFinite(
+      currentPrice
+    ) ||
+    currentPrice <=
+      0
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'invalid current price',
+    };
+  }
+
+  const trend5 =
+    trendPct(
+      signalBars,
+      5
+    );
+
+  const trend15 =
+    trendPct(
+      signalBars,
+      15
+    );
+
   const aligned5 =
     long
-      ? t5 > 0
-      : t5 < 0;
+      ? trend5 > 0
+      : trend5 < 0;
 
   const aligned15 =
     long
-      ? t15 > 0
-      : t15 < 0;
+      ? trend15 > 0
+      : trend15 < 0;
 
-  const vwapAligned =
-    Number.isFinite(
-      currentPrice
-    ) &&
-    Number.isFinite(
-      sessionVwap
-    ) &&
+  if (
+    config
+      .requireDualTrendAlignment &&
+    (
+      !aligned5 ||
+      !aligned15
+    )
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        '5m and 15m trend are not both aligned',
+    };
+  }
+
+  const momentum =
+    minuteMomentumPct(
+      snapshot
+    );
+
+  const minMomentum =
+    assetClass ===
+    'crypto'
+      ? Number(
+          config
+            .cryptoMinEntryMomentumPct
+        )
+      : Number(
+          config
+            .equityMinEntryMomentumPct
+        );
+
+  const momentumAligned =
+    momentum != null &&
     (
       long
-        ? currentPrice >
-          sessionVwap
-        : currentPrice <
-          sessionVwap
+        ? momentum >=
+          minMomentum
+        : momentum <=
+          -minMomentum
+    );
+
+  if (
+    !momentumAligned
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        `entry momentum below ${minMomentum}% threshold`,
+    };
+  }
+
+  // v17 requires the broader market to support the trade.
+  if (
+    config
+      .requireMarketRegime &&
+    regime
+      ?.direction !==
+      direction
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        `market regime is ${regime?.direction || 'UNKNOWN'}`,
+    };
+  }
+
+  const spread =
+    spreadPct(
+      snapshot
     );
 
   const maxSpread =
@@ -1308,39 +1882,103 @@ function scoreDirection({
         0,
 
       reason:
-        `spread ${spread.toFixed(
-          3
-        )}% > ${maxSpread}%`,
+        `spread ${spread.toFixed(3)}% > ${maxSpread}%`,
     };
   }
 
-  let score =
-    0;
+  // Uses completed bars instead of the still-forming current minute.
+  const volumeRatio =
+    recentVolumeRatio(
+      signalBars,
 
-  const components =
-    {};
+      Number(
+        config
+          .recentVolumeLookback
+      )
+    );
 
-  components.trend15 =
-    aligned15
-      ? 2
-      : 0;
+  if (
+    config
+      .requireVolumeConfirmation &&
+    volumeRatio <
+      Number(
+        config
+          .recentVolumeOkayRatio
+      )
+  ) {
+    return {
+      eligible:
+        false,
 
-  score +=
-    components.trend15;
+      score:
+        0,
 
-  components.trend5 =
-    aligned5
-      ? 1
-      : 0;
+      reason:
+        `relative volume ${volumeRatio.toFixed(2)}x is too weak`,
+    };
+  }
 
-  score +=
-    components.trend5;
+  const session =
+    assetClass ===
+    'us_equity'
+      ? sessionBarsET(
+          signalBars,
+          now
+        )
+      : signalBars;
 
-  let breakoutPoints =
-    0;
+  const sessionVwap =
+    vwap(
+      session
+    );
+
+  const vwapAligned =
+    Number.isFinite(
+      sessionVwap
+    ) &&
+    (
+      long
+        ? currentPrice >
+          sessionVwap
+        : currentPrice <
+          sessionVwap
+    );
+
+  if (
+    config
+      .requireVwapAlignment &&
+    !vwapAligned
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'price is not aligned with VWAP',
+    };
+  }
+
+  const rolling =
+    rollingBreakoutState(
+      signalBars,
+
+      Number(
+        config
+          .breakoutLookbackBars
+      )
+    );
 
   let openingRange =
     null;
+
+  let orbAligned =
+    false;
+
+  let orbConfirmed =
+    false;
 
   if (
     assetClass ===
@@ -1348,101 +1986,295 @@ function scoreDirection({
   ) {
     openingRange =
       openingRangeState(
-        currentBars,
+        signalBars,
         now,
+
         Number(
           config
             .openingRangeMinutes
         )
       );
 
-    const orbAligned =
-      openingRange.available &&
+    orbAligned =
+      openingRange
+        .available &&
       (
         long
-          ? openingRange.long
-          : openingRange.short
+          ? openingRange
+              .long
+          : openingRange
+              .short
       );
 
-    const recentAligned =
-      long
-        ? recentBreakout.long
-        : recentBreakout.short;
-
-    breakoutPoints =
-      orbAligned
-        ? 2
-        : recentAligned
-          ? 2
-          : 0;
-  } else {
-    breakoutPoints =
+    orbConfirmed =
+      openingRange
+        .available &&
       (
         long
-          ? recentBreakout.long
-          : recentBreakout.short
-      )
-        ? 2
-        : 0;
+          ? openingRange
+              .confirmedLong
+          : openingRange
+              .confirmedShort
+      );
   }
 
-  components.breakout =
-    breakoutPoints;
+  const rollingAligned =
+    long
+      ? rolling.long
+      : rolling.short;
 
-  score +=
-    breakoutPoints;
+  const rollingConfirmed =
+    long
+      ? rolling
+          .confirmedLong
+      : rolling
+          .confirmedShort;
 
-  components.volume =
-    volRatio >=
-    Number(
-      config
-        .recentVolumeStrongRatio
+  const breakoutAligned =
+    orbAligned ||
+    rollingAligned;
+
+  const breakoutConfirmed =
+    orbConfirmed ||
+    rollingConfirmed;
+
+  if (
+    !breakoutAligned
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'no aligned breakout',
+    };
+  }
+
+  if (
+    config
+      .requireBreakoutConfirmation &&
+    !breakoutConfirmed
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'breakout has not held for 2 completed bars',
+    };
+  }
+
+  const breakoutType =
+    orbConfirmed
+      ? 'ORB'
+      : rollingConfirmed
+        ? 'ROLLING'
+        : orbAligned
+          ? 'ORB_UNCONFIRMED'
+          : 'ROLLING_UNCONFIRMED';
+
+  const breakoutLevel =
+    orbConfirmed
+      ? long
+        ? openingRange
+            .high
+        : openingRange
+            .low
+      : long
+        ? rolling.high
+        : rolling.low;
+
+  const atr =
+    atrAbsolute(
+      signalBars,
+
+      Number(
+        config
+          .atrLookbackBars ||
+        14
+      )
+    );
+
+  if (
+    !Number.isFinite(
+      atr
+    ) ||
+    atr <=
+      0
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        'ATR unavailable for chase filter',
+    };
+  }
+
+  const vwapDistanceAtr =
+    Number.isFinite(
+      sessionVwap
     )
-      ? 2
-      : volRatio >=
-          Number(
-            config
-              .recentVolumeOkayRatio
-          )
+      ? Math.abs(
+          currentPrice -
+          sessionVwap
+        ) /
+        atr
+      : Infinity;
+
+  const breakoutDistanceAtr =
+    Number.isFinite(
+      breakoutLevel
+    )
+      ? Math.abs(
+          currentPrice -
+          breakoutLevel
+        ) /
+        atr
+      : Infinity;
+
+  const maxVwapDistanceAtr =
+    assetClass ===
+    'crypto'
+      ? Number(
+          config
+            .cryptoMaxVwapDistanceAtr
+        )
+      : Number(
+          config
+            .equityMaxVwapDistanceAtr
+        );
+
+  const maxBreakoutDistanceAtr =
+    assetClass ===
+    'crypto'
+      ? Number(
+          config
+            .cryptoMaxBreakoutDistanceAtr
+        )
+      : Number(
+          config
+            .equityMaxBreakoutDistanceAtr
+        );
+
+  // Don't buy/short something that already made most of the move.
+  if (
+    vwapDistanceAtr >
+    maxVwapDistanceAtr
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        `too extended from VWAP (${vwapDistanceAtr.toFixed(2)} ATR)`,
+    };
+  }
+
+  if (
+    breakoutDistanceAtr >
+    maxBreakoutDistanceAtr
+  ) {
+    return {
+      eligible:
+        false,
+
+      score:
+        0,
+
+      reason:
+        `late breakout chase (${breakoutDistanceAtr.toFixed(2)} ATR)`,
+    };
+  }
+
+  const components = {
+    trend15:
+      aligned15
+        ? 2
+        : 0,
+
+    trend5:
+      aligned5
         ? 1
-        : 0;
+        : 0,
 
-  score +=
-    components.volume;
+    breakout:
+      breakoutConfirmed
+        ? 2
+        : 0,
 
-  components.vwap =
-    vwapAligned
-      ? 1
-      : 0;
+    volume:
+      volumeRatio >=
+      Number(
+        config
+          .recentVolumeStrongRatio
+      )
+        ? 2
+        : volumeRatio >=
+            Number(
+              config
+                .recentVolumeOkayRatio
+            )
+          ? 1
+          : 0,
 
-  score +=
-    components.vwap;
+    vwap:
+      vwapAligned
+        ? 1
+        : 0,
 
-  components.spread =
-    spread == null ||
-    spread <=
-      maxSpread *
-      0.60
-      ? 1
-      : 0;
+    spread:
+      spread == null ||
+      spread <=
+        maxSpread *
+          0.60
+        ? 1
+        : 0,
 
-  score +=
-    components.spread;
+    regime:
+      regime
+        ?.direction ===
+      direction
+        ? 1
+        : 0,
 
-  components.regime =
-    regime?.direction ===
-    direction
-      ? 1
-      : 0;
+    closeMomentum:
+      0,
+  };
 
-  score +=
-    components.regime;
+  let score =
+    components
+      .trend15 +
+    components
+      .trend5 +
+    components
+      .breakout +
+    components
+      .volume +
+    components
+      .vwap +
+    components
+      .spread +
+    components
+      .regime;
 
   if (
     assetClass ===
     'us_equity'
   ) {
-    const nowET =
+    const minutes =
       etParts(
         now
       ).minutes;
@@ -1460,7 +2292,8 @@ function scoreDirection({
         snapshot
           ?.dailyBar
           ?.c ??
-          currentPrice,
+        currentPrice,
+
         NaN
       );
 
@@ -1480,27 +2313,23 @@ function scoreDirection({
       );
 
     if (
-      nowET >=
+      minutes >=
         Number(
           config
             .closeMomentumStartMinutesET
         ) &&
-      nowET <
-        16 * 60 &&
+      minutes <
+        16 *
+          60 &&
       dailyAligned &&
       aligned15
     ) {
-      score =
-        Math.min(
-          10,
-          score + 1
-        );
-
-      components.closeMomentum =
+      components
+        .closeMomentum =
         1;
-    } else {
-      components.closeMomentum =
-        0;
+
+      score +=
+        1;
     }
   }
 
@@ -1520,21 +2349,28 @@ function scoreDirection({
 
     trend5Pct:
       Number(
-        t5.toFixed(
+        trend5.toFixed(
           4
         )
       ),
 
     trend15Pct:
       Number(
-        t15.toFixed(
+        trend15.toFixed(
+          4
+        )
+      ),
+
+    minuteMomentumPct:
+      Number(
+        momentum.toFixed(
           4
         )
       ),
 
     recentVolumeRatio:
       Number(
-        volRatio.toFixed(
+        volumeRatio.toFixed(
           3
         )
       ),
@@ -1559,12 +2395,44 @@ function scoreDirection({
           )
         : null,
 
+    vwapDistanceAtr:
+      Number(
+        vwapDistanceAtr.toFixed(
+          3
+        )
+      ),
+
+    breakoutDistanceAtr:
+      Number(
+        breakoutDistanceAtr.toFixed(
+          3
+        )
+      ),
+
+    breakoutType,
+
+    breakoutLevel:
+      Number.isFinite(
+        breakoutLevel
+      )
+        ? Number(
+            breakoutLevel.toFixed(
+              6
+            )
+          )
+        : null,
+
     openingRange,
+
+    rollingBreakout:
+      rolling,
+
+    regime,
 
     exitPlan:
       dynamicExitPlan(
         assetClass,
-        currentBars,
+        signalBars,
         config
       ),
   };
@@ -1635,34 +2503,58 @@ export function buildEquitySignal({
             'not easy-to-borrow shortable',
         };
 
-  const chosen =
-    shortScore.eligible &&
-    shortScore.score >
-      longScore.score
-      ? {
-          direction:
-            'SHORT',
-
-          detail:
-            shortScore,
-        }
-      : {
-          direction:
-            'LONG',
-
-          detail:
-            longScore,
-        };
+  const choices =
+    [];
 
   if (
-    !chosen.detail
+    longScore
       .eligible
+  ) {
+    choices.push({
+      direction:
+        'LONG',
+
+      detail:
+        longScore,
+    });
+  }
+
+  if (
+    shortScore
+      .eligible
+  ) {
+    choices.push({
+      direction:
+        'SHORT',
+
+      detail:
+        shortScore,
+    });
+  }
+
+  if (
+    !choices.length
   ) {
     return null;
   }
 
+  choices.sort(
+    (
+      a,
+      b
+    ) =>
+      b.detail
+        .score -
+      a.detail
+        .score
+  );
+
+  const chosen =
+    choices[0];
+
   if (
-    chosen.detail.score <
+    chosen.detail
+      .score <
     Number(
       config
         .equityScoreThreshold
@@ -1671,66 +2563,22 @@ export function buildEquitySignal({
     return null;
   }
 
-  const currentMomentum =
-    minuteMomentumPct(
-      snapshot
-    );
-
-  if (
-    currentMomentum != null &&
-    (
-      (
-        chosen.direction ===
-          'LONG' &&
-        currentMomentum <= 0
-      ) ||
-      (
-        chosen.direction ===
-          'SHORT' &&
-        currentMomentum >= 0
-      )
-    )
-  ) {
-    return null;
-  }
-
   const price =
-    n(
-      snapshot
-        ?.latestTrade
-        ?.p ??
-      snapshot
-        ?.minuteBar
-        ?.c ??
-      snapshot
-        ?.dailyBar
-        ?.c,
-      NaN
+    currentPriceFrom(
+      snapshot,
+      bars ||
+        []
     );
 
   if (
     !Number.isFinite(
       price
     ) ||
-    price <= 0
+    price <=
+      0
   ) {
     return null;
   }
-
-  const orbAligned =
-    chosen.detail
-      .openingRange
-      ?.available &&
-    (
-      chosen.direction ===
-      'LONG'
-        ? chosen.detail
-            .openingRange
-            .long
-        : chosen.detail
-            .openingRange
-            .short
-    );
 
   return {
     symbol:
@@ -1751,14 +2599,17 @@ export function buildEquitySignal({
       chosen.direction,
 
     score:
-      chosen.detail.score,
+      chosen.detail
+        .score,
 
     price,
 
     strategy:
-      orbAligned
-        ? 'EQUITY_ORB_SCORE'
-        : 'EQUITY_MTF_SCORE',
+      chosen.detail
+        .breakoutType ===
+      'ORB'
+        ? 'EQUITY_ORB_PRECISION'
+        : 'EQUITY_BREAKOUT_PRECISION',
 
     signal:
       chosen.detail,
@@ -1780,6 +2631,7 @@ export function buildCryptoSignal({
     return null;
   }
 
+  // Crypto remains LONG only.
   const detail =
     scoreDirection({
       direction:
@@ -1799,7 +2651,8 @@ export function buildCryptoSignal({
     });
 
   if (
-    !detail.eligible
+    !detail
+      .eligible
   ) {
     return null;
   }
@@ -1815,24 +2668,18 @@ export function buildCryptoSignal({
   }
 
   const price =
-    n(
-      snapshot
-        ?.latestTrade
-        ?.p ??
-      snapshot
-        ?.minuteBar
-        ?.c ??
-      snapshot
-        ?.dailyBar
-        ?.c,
-      NaN
+    currentPriceFrom(
+      snapshot,
+      bars ||
+        []
     );
 
   if (
     !Number.isFinite(
       price
     ) ||
-    price <= 0
+    price <=
+      0
   ) {
     return null;
   }
@@ -1860,7 +2707,7 @@ export function buildCryptoSignal({
     price,
 
     strategy:
-      'CRYPTO_MTF_SCORE',
+      'CRYPTO_BREAKOUT_PRECISION',
 
     signal:
       detail,
@@ -1890,7 +2737,9 @@ export function isCoolingDown(
     trades ||
     []
   ).some(
-    (trade) => {
+    (
+      trade
+    ) => {
       if (
         String(
           trade.market ||
