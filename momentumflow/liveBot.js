@@ -23,14 +23,28 @@ import {
   waitForFill,
 } from './alpacaClient.js';
 
-// LIVE BOT v11
-// Equities: LONG + SHORT
-// Crypto: LONG only
+// UNIFIED BOT v12
+//
+// PAPER:
+// real Alpaca market data
+// real strategy
+// Alpaca PAPER orders
+// fake money
+//
+// LIVE:
+// same market data
+// same strategy
+// Alpaca LIVE orders
+// real money
+//
+// Equities = LONG + SHORT
+// Crypto = LONG only
 
 const router = express.Router();
 
 const state = {
   running: false,
+  mode: null,
   timer: null,
   sessionId: null,
   startedAt: null,
@@ -40,139 +54,261 @@ const state = {
   lastDecision: 'stopped',
   signalSnapshot: {},
   topCandidates: [],
+
   universe: {
     equities: [],
     crypto: [],
     refreshedAt: null,
   },
+
   equityCursor: 0,
   marketOpen: null,
 };
 
 const DEFAULTS = {
   pollSeconds: 5,
+
   entryMomentumPct: 0.15,
+
   takeProfitPct: 0.6,
+
   stopLossPct: 0.4,
+
   maxHoldMinutes: 15,
+
   equityBatchSize: 75,
+
   universeRefreshMinutes: 15,
+
   minEquityPrice: 1,
+
   minDailyDollarVolume: 1000000,
+
   stockFeed: 'iex',
 };
 
 const tradingCfg = () => ({
-  startingCapital: 100,
   riskPerTrade: 0.02,
-  ...store.getConfig('tradingConfig', {}),
+
+  ...store.getConfig(
+    'tradingConfig',
+    {}
+  ),
 });
 
 const cfg = () => ({
   ...DEFAULTS,
-  ...store.getConfig('liveBotConfig', {}),
+
+  ...store.getConfig(
+    'liveBotConfig',
+    {}
+  ),
 });
 
-function gate() {
-  return evaluateLiveGate({
-    consents: store.getConfig(
-      'liveGateConsents',
-      {}
-    ),
-    hasLiveCredentials:
-      hasCredentials('live'),
-  });
+function selectedMode() {
+  const current =
+    store.getConfig(
+      'tradingMode',
+      {
+        mode: 'paper',
+      }
+    ).mode;
+
+  return current === 'live'
+    ? 'live'
+    : 'paper';
+}
+
+function accessCheck(mode) {
+  if (mode === 'live') {
+    return evaluateLiveGate({
+      consents:
+        store.getConfig(
+          'liveGateConsents',
+          {}
+        ),
+
+      hasLiveCredentials:
+        hasCredentials('live'),
+    });
+  }
+
+  if (
+    !hasCredentials('paper')
+  ) {
+    return {
+      allowed: false,
+
+      reason:
+        'No Alpaca paper credentials on file.',
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: null,
+  };
 }
 
 function pub() {
   return {
-    running: state.running,
-    sessionId: state.sessionId,
-    startedAt: state.startedAt,
-    lastTickAt: state.lastTickAt,
-    lastError: state.lastError,
-    openTradeId: state.openTradeId,
-    lastDecision: state.lastDecision,
-    signalSnapshot: state.signalSnapshot,
-    topCandidates: state.topCandidates,
-    marketOpen: state.marketOpen,
+    running:
+      state.running,
+
+    mode:
+      state.mode,
+
+    sessionId:
+      state.sessionId,
+
+    startedAt:
+      state.startedAt,
+
+    lastTickAt:
+      state.lastTickAt,
+
+    lastError:
+      state.lastError,
+
+    openTradeId:
+      state.openTradeId,
+
+    lastDecision:
+      state.lastDecision,
+
+    signalSnapshot:
+      state.signalSnapshot,
+
+    topCandidates:
+      state.topCandidates,
+
+    marketOpen:
+      state.marketOpen,
 
     universe: {
       equityCount:
-        state.universe.equities.length,
+        state.universe.equities
+          .length,
+
       cryptoCount:
-        state.universe.crypto.length,
+        state.universe.crypto
+          .length,
+
       totalCount:
-        state.universe.equities.length +
-        state.universe.crypto.length,
+        state.universe.equities
+          .length +
+        state.universe.crypto
+          .length,
+
       refreshedAt:
         state.universe.refreshedAt,
+
       equityCursor:
         state.equityCursor,
     },
 
     config: {
       ...cfg(),
-      riskPerTrade: Number(
-        tradingCfg().riskPerTrade ?? 0.02
-      ),
+
+      riskPerTrade:
+        Number(
+          tradingCfg()
+            .riskPerTrade ??
+            0.02
+        ),
+
       sizingMode:
-        'equity_risk_fraction',
+        'alpaca_account_equity_fraction',
+
       equityDirections:
         'LONG_AND_SHORT',
+
       cryptoDirections:
         'LONG_ONLY',
+
+      execution:
+        state.mode === 'paper'
+          ? 'ALPACA_PAPER'
+          : state.mode === 'live'
+            ? 'ALPACA_LIVE'
+            : null,
     },
   };
 }
 
-function stop(reason = null) {
+function stop(
+  reason = null
+) {
   if (state.timer) {
-    clearTimeout(state.timer);
+    clearTimeout(
+      state.timer
+    );
   }
 
   state.timer = null;
+
   state.running = false;
 
   if (reason) {
-    state.lastError = reason;
+    state.lastError =
+      reason;
   }
 }
 
 function schedule() {
-  if (!state.running) return;
+  if (!state.running) {
+    return;
+  }
 
-  state.timer = setTimeout(
-    tick,
-    Math.max(
-      2,
-      Number(cfg().pollSeconds)
-    ) * 1000
-  );
+  state.timer =
+    setTimeout(
+      tick,
+
+      Math.max(
+        2,
+        Number(
+          cfg().pollSeconds
+        )
+      ) * 1000
+    );
 }
 
-function normPos(symbol = '') {
-  if (symbol.includes('/')) {
+function normPos(
+  symbol = ''
+) {
+  if (
+    symbol.includes('/')
+  ) {
     return symbol;
   }
 
-  if (/^[A-Z]+USD$/.test(symbol)) {
-    return `${symbol.slice(0, -3)}/USD`;
+  if (
+    /^[A-Z]+USD$/.test(
+      symbol
+    )
+  ) {
+    return `${symbol.slice(
+      0,
+      -3
+    )}/USD`;
   }
 
   return symbol;
 }
 
 async function refreshUniverse(
+  mode,
   force = false
 ) {
   const c = cfg();
 
   const age =
-    state.universe.refreshedAt
+    state.universe
+      .refreshedAt
       ? Date.now() -
         new Date(
-          state.universe.refreshedAt
+          state.universe
+            .refreshedAt
         ).getTime()
       : Infinity;
 
@@ -188,34 +324,46 @@ async function refreshUniverse(
   }
 
   const assets =
-    await getTradableAssets('live');
+    await getTradableAssets(
+      mode
+    );
 
   state.universe = {
     equities:
       assets.equities || [],
+
     crypto:
       assets.crypto || [],
+
     refreshedAt:
       new Date().toISOString(),
   };
 
   if (
     state.equityCursor >=
-    state.universe.equities.length
+    state.universe.equities
+      .length
   ) {
     state.equityCursor = 0;
   }
 }
 
-function momentum(snapshot) {
-  const bar = snapshot?.minuteBar;
+function momentum(
+  snapshot
+) {
+  const bar =
+    snapshot?.minuteBar;
 
-  const open = Number(bar?.o);
+  const open =
+    Number(
+      bar?.o
+    );
 
-  const close = Number(
-    bar?.c ??
+  const close =
+    Number(
+      bar?.c ??
       snapshot?.latestTrade?.p
-  );
+    );
 
   if (
     !Number.isFinite(open) ||
@@ -227,77 +375,100 @@ function momentum(snapshot) {
 
   return {
     momentumPct:
-      ((close - open) / open) *
+      ((close - open) /
+        open) *
       100,
 
-    price: close,
+    price:
+      close,
 
-    volume: Number(
-      snapshot?.dailyBar?.v || 0
-    ),
+    volume:
+      Number(
+        snapshot?.dailyBar?.v ||
+          0
+      ),
   };
 }
 
-async function scan() {
-  await refreshUniverse();
+async function scan(
+  mode
+) {
+  await refreshUniverse(
+    mode
+  );
 
   const c = cfg();
 
-  const session = store.getOne(
-    'sessions',
-    state.sessionId
-  );
+  const session =
+    store.getOne(
+      'sessions',
+      state.sessionId
+    );
 
   if (!session) {
     throw new Error(
-      'Live bot session was not found.'
+      'Bot session was not found.'
     );
   }
 
-  const trades = store
-    .getAll('trades')
-    .filter(
-      (trade) =>
-        trade.session_id ===
-        session.id
-    );
+  const trades =
+    store
+      .getAll('trades')
+      .filter(
+        (trade) =>
+          trade.session_id ===
+          session.id
+      );
 
   const positions =
-    await getPositions('live');
+    await getPositions(
+      mode
+    );
 
-  const blocked = new Set(
-    positions
-      .filter(
-        (position) =>
-          Math.abs(
-            Number(
-              position.qty || 0
+  const blocked =
+    new Set(
+      positions
+        .filter(
+          (position) =>
+            Math.abs(
+              Number(
+                position.qty ||
+                  0
+              )
+            ) > 0
+        )
+        .map(
+          (position) =>
+            normPos(
+              position.symbol
             )
-          ) > 0
-      )
-      .map((position) =>
-        normPos(position.symbol)
-      )
-  );
+        )
+    );
 
   const candidates = [];
 
-  const snapshotOutput = {};
+  const snapshotOutput =
+    {};
 
-  /*
-   * CRYPTO
-   *
-   * Long only.
-   */
+  // ----------------
+  // CRYPTO
+  // LONG ONLY
+  // ----------------
+
   const cryptoSymbols =
     state.universe.crypto
-      .map((asset) => asset.symbol)
+      .map(
+        (asset) =>
+          asset.symbol
+      )
       .filter(Boolean);
 
-  if (cryptoSymbols.length) {
+  if (
+    cryptoSymbols.length
+  ) {
     const snapshots =
       await getCryptoSnapshots(
-        'live',
+        mode,
         cryptoSymbols
       );
 
@@ -306,7 +477,9 @@ async function scan() {
       state.universe.crypto
     ) {
       const snapshot =
-        snapshots[asset.symbol] ||
+        snapshots[
+          asset.symbol
+        ] ||
         snapshots[
           asset.symbol?.replace(
             '/',
@@ -315,9 +488,13 @@ async function scan() {
         ];
 
       const m =
-        momentum(snapshot);
+        momentum(
+          snapshot
+        );
 
-      if (!m) continue;
+      if (!m) {
+        continue;
+      }
 
       const eligible =
         !blocked.has(
@@ -331,14 +508,24 @@ async function scan() {
       snapshotOutput[
         asset.symbol
       ] = {
-        assetClass: 'crypto',
-        direction: 'LONG',
-        momentumPct: Number(
-          m.momentumPct.toFixed(4)
-        ),
-        thresholdPct: Number(
-          c.entryMomentumPct
-        ),
+        assetClass:
+          'crypto',
+
+        direction:
+          'LONG',
+
+        momentumPct:
+          Number(
+            m.momentumPct.toFixed(
+              4
+            )
+          ),
+
+        thresholdPct:
+          Number(
+            c.entryMomentumPct
+          ),
+
         eligible,
       };
 
@@ -350,45 +537,59 @@ async function scan() {
           )
       ) {
         candidates.push({
-          symbol: asset.symbol,
+          symbol:
+            asset.symbol,
+
           name:
             asset.name ||
             asset.symbol,
-          assetClass: 'crypto',
-          direction: 'LONG',
-          score: Math.abs(
-            m.momentumPct
-          ),
+
+          assetClass:
+            'crypto',
+
+          direction:
+            'LONG',
+
+          score:
+            Math.abs(
+              m.momentumPct
+            ),
+
           ...m,
         });
       }
     }
   }
 
-  /*
-   * EQUITIES
-   *
-   * Long positive momentum.
-   * Short negative momentum only
-   * when Alpaca reports the stock
-   * as shortable + easy to borrow.
-   */
-  const clock =
-    await getMarketClock('live');
+  // ----------------
+  // EQUITIES
+  // LONG + SHORT
+  // ----------------
 
-  state.marketOpen = Boolean(
-    clock?.is_open
-  );
+  const clock =
+    await getMarketClock(
+      mode
+    );
+
+  state.marketOpen =
+    Boolean(
+      clock?.is_open
+    );
 
   if (
     state.marketOpen &&
-    state.universe.equities.length
+    state.universe.equities
+      .length
   ) {
-    const count = Math.min(
-      Number(c.equityBatchSize),
-      state.universe.equities
-        .length
-    );
+    const count =
+      Math.min(
+        Number(
+          c.equityBatchSize
+        ),
+
+        state.universe
+          .equities.length
+      );
 
     const batch = [];
 
@@ -404,9 +605,8 @@ async function scan() {
           .length;
 
       batch.push(
-        state.universe.equities[
-          index
-        ]
+        state.universe
+          .equities[index]
       );
     }
 
@@ -418,24 +618,32 @@ async function scan() {
 
     const snapshots =
       await getStockSnapshots(
-        'live',
+        mode,
+
         batch.map(
           (asset) =>
             asset.symbol
         ),
+
         {
-          feed: c.stockFeed,
+          feed:
+            c.stockFeed,
         }
       );
 
     for (
       const asset of batch
     ) {
-      const m = momentum(
-        snapshots[asset.symbol]
-      );
+      const m =
+        momentum(
+          snapshots[
+            asset.symbol
+          ]
+        );
 
-      if (!m) continue;
+      if (!m) {
+        continue;
+      }
 
       if (
         m.price <
@@ -447,7 +655,8 @@ async function scan() {
       }
 
       const dollarVolume =
-        m.price * m.volume;
+        m.price *
+        m.volume;
 
       const baseEligible =
         dollarVolume >=
@@ -464,11 +673,13 @@ async function scan() {
 
       const shortEligible =
         baseEligible &&
-        asset.shortable === true &&
+        asset.shortable ===
+          true &&
         asset.easy_to_borrow ===
           true;
 
-      let direction = null;
+      let direction =
+        null;
 
       if (
         baseEligible &&
@@ -477,7 +688,8 @@ async function scan() {
             c.entryMomentumPct
           )
       ) {
-        direction = 'LONG';
+        direction =
+          'LONG';
       } else if (
         shortEligible &&
         m.momentumPct <=
@@ -485,7 +697,8 @@ async function scan() {
             c.entryMomentumPct
           )
       ) {
-        direction = 'SHORT';
+        direction =
+          'SHORT';
       }
 
       snapshotOutput[
@@ -493,20 +706,32 @@ async function scan() {
       ] = {
         assetClass:
           'us_equity',
-        momentumPct: Number(
-          m.momentumPct.toFixed(4)
-        ),
-        thresholdPct: Number(
-          c.entryMomentumPct
-        ),
+
+        momentumPct:
+          Number(
+            m.momentumPct.toFixed(
+              4
+            )
+          ),
+
+        thresholdPct:
+          Number(
+            c.entryMomentumPct
+          ),
+
         eligible:
           baseEligible,
+
         shortable:
-          asset.shortable === true,
+          asset.shortable ===
+          true,
+
         easyToBorrow:
           asset.easy_to_borrow ===
           true,
+
         direction,
+
         dollarVolume:
           Math.round(
             dollarVolume
@@ -515,7 +740,8 @@ async function scan() {
 
       if (direction) {
         candidates.push({
-          symbol: asset.symbol,
+          symbol:
+            asset.symbol,
 
           name:
             asset.name ||
@@ -526,9 +752,10 @@ async function scan() {
 
           direction,
 
-          score: Math.abs(
-            m.momentumPct
-          ),
+          score:
+            Math.abs(
+              m.momentumPct
+            ),
 
           dollarVolume,
 
@@ -538,13 +765,10 @@ async function scan() {
     }
   }
 
-  /*
-   * Strongest absolute momentum
-   * wins regardless of direction.
-   */
   candidates.sort(
     (a, b) =>
-      b.score - a.score
+      b.score -
+      a.score
   );
 
   state.signalSnapshot =
@@ -557,43 +781,50 @@ async function scan() {
   state.topCandidates =
     candidates
       .slice(0, 10)
-      .map((candidate) => ({
-        symbol:
-          candidate.symbol,
+      .map(
+        (candidate) => ({
+          symbol:
+            candidate.symbol,
 
-        assetClass:
-          candidate.assetClass,
+          assetClass:
+            candidate.assetClass,
 
-        direction:
-          candidate.direction,
+          direction:
+            candidate.direction,
 
-        momentumPct:
-          Number(
-            candidate.momentumPct.toFixed(
-              4
-            )
-          ),
+          momentumPct:
+            Number(
+              candidate
+                .momentumPct
+                .toFixed(4)
+            ),
 
-        price:
-          Number(
-            candidate.price.toFixed(
-              6
-            )
-          ),
-      }));
+          price:
+            Number(
+              candidate
+                .price
+                .toFixed(6)
+            ),
+        })
+      );
 
-  return candidates[0] || null;
+  return (
+    candidates[0] ||
+    null
+  );
 }
 
 async function closeTrade(
+  mode,
   trade,
   price,
   reason
 ) {
-  const qty = Number(
-    trade.filled_qty ||
+  const qty =
+    Number(
+      trade.filled_qty ||
       trade.qty
-  );
+    );
 
   if (
     !Number.isFinite(qty) ||
@@ -605,7 +836,8 @@ async function closeTrade(
   }
 
   const direction =
-    trade.direction === 'SHORT'
+    trade.direction ===
+    'SHORT'
       ? 'SHORT'
       : 'LONG';
 
@@ -616,10 +848,9 @@ async function closeTrade(
       trade.market
     ).includes('/');
 
-  /*
-   * Close LONG = SELL
-   * Close SHORT = BUY TO COVER
-   */
+  // Long closes by SELL.
+  // Short closes by BUY.
+
   const exitSide =
     direction === 'SHORT'
       ? 'buy'
@@ -627,50 +858,57 @@ async function closeTrade(
 
   const order =
     await placeOrder({
-      mode: 'live',
-      symbol: trade.market,
+      mode,
+
+      symbol:
+        trade.market,
+
       qty,
-      side: exitSide,
-      type: 'market',
-      timeInForce: crypto
-        ? 'gtc'
-        : 'day',
+
+      side:
+        exitSide,
+
+      type:
+        'market',
+
+      timeInForce:
+        crypto
+          ? 'gtc'
+          : 'day',
     });
 
   const fill =
     await waitForFill(
-      'live',
+      mode,
       order.id
     );
 
   if (
-    fill.status !== 'filled'
+    fill.status !==
+    'filled'
   ) {
     throw new Error(
       `Exit order ${order.id} was not filled (status: ${fill.status}).`
     );
   }
 
-  const exitPrice = Number(
-    fill.filled_avg_price ||
+  const exitPrice =
+    Number(
+      fill.filled_avg_price ||
       price
-  );
+    );
 
-  const entryPrice = Number(
-    trade.entry_price
-  );
+  const entryPrice =
+    Number(
+      trade.entry_price
+    );
 
-  const filledQty = Number(
-    fill.filled_qty || qty
-  );
+  const filledQty =
+    Number(
+      fill.filled_qty ||
+      qty
+    );
 
-  /*
-   * LONG:
-   * exit - entry
-   *
-   * SHORT:
-   * entry - exit
-   */
   const pnl =
     direction === 'SHORT'
       ? (entryPrice -
@@ -686,12 +924,15 @@ async function closeTrade(
       : 'loss';
 
   const allTrades =
-    store.getAll('trades');
+    store.getAll(
+      'trades'
+    );
 
   const index =
     allTrades.findIndex(
       (item) =>
-        item.id === trade.id
+        item.id ===
+        trade.id
     );
 
   if (index >= 0) {
@@ -734,7 +975,8 @@ async function closeTrade(
     session.consecutive_losses =
       result === 'loss'
         ? Number(
-            session.consecutive_losses ||
+            session
+              .consecutive_losses ||
               0
           ) + 1
         : 0;
@@ -751,18 +993,24 @@ async function closeTrade(
     );
   }
 
-  state.openTradeId = null;
+  state.openTradeId =
+    null;
 }
 
-async function manage() {
-  if (!state.openTradeId) {
+async function manage(
+  mode
+) {
+  if (
+    !state.openTradeId
+  ) {
     return false;
   }
 
-  const trade = store.getOne(
-    'trades',
-    state.openTradeId
-  );
+  const trade =
+    store.getOne(
+      'trades',
+      state.openTradeId
+    );
 
   if (
     !trade ||
@@ -775,12 +1023,13 @@ async function manage() {
   }
 
   const direction =
-    trade.direction === 'SHORT'
+    trade.direction ===
+    'SHORT'
       ? 'SHORT'
       : 'LONG';
 
   state.lastDecision =
-    `managing ${direction} ${trade.market}`;
+    `managing ${mode.toUpperCase()} ${direction} ${trade.market}`;
 
   const assetClass =
     trade.asset_class ||
@@ -792,14 +1041,15 @@ async function manage() {
 
   const price =
     await getLatestTradablePrice(
-      'live',
+      mode,
       trade.market,
       assetClass
     );
 
-  const entryPrice = Number(
-    trade.entry_price
-  );
+  const entryPrice =
+    Number(
+      trade.entry_price
+    );
 
   if (
     !Number.isFinite(
@@ -813,15 +1063,14 @@ async function manage() {
   }
 
   const rawMove =
-    ((price - entryPrice) /
+    ((price -
+      entryPrice) /
       entryPrice) *
     100;
 
-  /*
-   * Positive favorableMove means
-   * the position is profitable,
-   * regardless of LONG/SHORT.
-   */
+  // Positive means profitable
+  // regardless of direction.
+
   const favorableMove =
     direction === 'SHORT'
       ? -rawMove
@@ -844,6 +1093,7 @@ async function manage() {
     )
   ) {
     await closeTrade(
+      mode,
       trade,
       price,
       `${direction} take profit +${favorableMove.toFixed(
@@ -857,6 +1107,7 @@ async function manage() {
     )
   ) {
     await closeTrade(
+      mode,
       trade,
       price,
       `${direction} stop loss ${favorableMove.toFixed(
@@ -870,6 +1121,7 @@ async function manage() {
     )
   ) {
     await closeTrade(
+      mode,
       trade,
       price,
       `${direction} max hold ${ageMinutes.toFixed(
@@ -881,7 +1133,9 @@ async function manage() {
   return true;
 }
 
-async function enter() {
+async function enter(
+  mode
+) {
   const session =
     store.getOne(
       'sessions',
@@ -890,7 +1144,7 @@ async function enter() {
 
   if (!session) {
     throw new Error(
-      'Live bot session was not found.'
+      'Bot session was not found.'
     );
   }
 
@@ -904,7 +1158,8 @@ async function enter() {
       'sessions',
       session.id,
       {
-        status: 'halted',
+        status:
+          'halted',
 
         halt_reason:
           halt.reason,
@@ -921,15 +1176,18 @@ async function enter() {
     return;
   }
 
-  const best = await scan();
+  const best =
+    await scan(
+      mode
+    );
 
   if (!best) {
     state.lastDecision =
-      `scanning ${
-        state.universe.equities
-          .length +
-        state.universe.crypto
-          .length
+      `${mode.toUpperCase()} scanning ${
+        state.universe
+          .equities.length +
+        state.universe
+          .crypto.length
       } Alpaca tradable assets — waiting for LONG or SHORT momentum signal`;
 
     return;
@@ -940,9 +1198,7 @@ async function enter() {
     'LONG';
 
   state.lastDecision =
-    `${direction} signal ${
-      best.symbol
-    } ${
+    `${mode.toUpperCase()} ${direction} signal ${best.symbol} ${
       best.momentumPct >= 0
         ? '+'
         : ''
@@ -951,21 +1207,24 @@ async function enter() {
     )}%`;
 
   const account =
-    await getAccount('live');
+    await getAccount(
+      mode
+    );
 
   const buyingPower =
     Number(
       account.buying_power ||
-        account.cash ||
-        0
+      account.cash ||
+      0
     );
 
-  const equity = Number(
-    account.equity ||
+  const equity =
+    Number(
+      account.equity ||
       account.portfolio_value ||
       account.cash ||
       0
-  );
+    );
 
   const riskFraction =
     Number(
@@ -987,7 +1246,8 @@ async function enter() {
   }
 
   const desiredNotional =
-    equity * riskFraction;
+    equity *
+    riskFraction;
 
   const riskBudget =
     Math.min(
@@ -1002,19 +1262,19 @@ async function enter() {
     riskBudget < 1
   ) {
     throw new Error(
-      'Insufficient live buying power for the configured risk-based trade size.'
+      `Insufficient ${mode} buying power for configured trade size.`
     );
   }
 
   let order;
 
-  /*
-   * SHORT EQUITY
-   *
-   * Whole shares only.
-   */
+  // ----------------
+  // SHORT EQUITY
+  // ----------------
+
   if (
-    direction === 'SHORT'
+    direction ===
+    'SHORT'
   ) {
     if (
       best.assetClass !==
@@ -1028,72 +1288,47 @@ async function enter() {
     const qty =
       Math.floor(
         riskBudget /
-          best.price
+        best.price
       );
 
-    /*
-     * Do not exceed the configured
-     * risk budget just to force a
-     * short trade.
-     */
     if (qty < 1) {
       state.lastDecision =
-        `SHORT signal ${best.symbol} skipped — risk budget $${riskBudget.toFixed(
+        `${mode.toUpperCase()} SHORT ${best.symbol} skipped — $${riskBudget.toFixed(
           2
-        )} is below one whole share at $${best.price.toFixed(
+        )} risk budget is below one whole share at $${best.price.toFixed(
           2
         )}`;
 
       return;
     }
 
-    state.lastDecision =
-      `SHORT signal ${
-        best.symbol
-      } ${best.momentumPct.toFixed(
-        4
-      )}% · ${
-        qty
-      } whole share${
-        qty === 1 ? '' : 's'
-      } · risk budget $${riskBudget.toFixed(
-        2
-      )}`;
-
     order =
       await placeOrder({
-        mode: 'live',
+        mode,
+
         symbol:
           best.symbol,
+
         qty,
-        side: 'sell',
-        type: 'market',
+
+        side:
+          'sell',
+
+        type:
+          'market',
+
         timeInForce:
           'day',
       });
   } else {
-    /*
-     * LONG ENTRY
-     *
-     * Fractional notional sizing
-     * remains available.
-     */
-    state.lastDecision =
-      `LONG signal ${
-        best.symbol
-      } +${best.momentumPct.toFixed(
-        4
-      )}% · sizing $${riskBudget.toFixed(
-        2
-      )} (${(
-        riskFraction * 100
-      ).toFixed(
-        2
-      )}% of equity)`;
+    // ----------------
+    // LONG
+    // ----------------
 
     order =
       await placeOrder({
-        mode: 'live',
+        mode,
+
         symbol:
           best.symbol,
 
@@ -1104,9 +1339,11 @@ async function enter() {
             )
           ),
 
-        side: 'buy',
+        side:
+          'buy',
 
-        type: 'market',
+        type:
+          'market',
 
         timeInForce:
           best.assetClass ===
@@ -1118,12 +1355,13 @@ async function enter() {
 
   const fill =
     await waitForFill(
-      'live',
+      mode,
       order.id
     );
 
   if (
-    fill.status !== 'filled'
+    fill.status !==
+    'filled'
   ) {
     throw new Error(
       `Entry order ${order.id} was not filled (status: ${fill.status}).`
@@ -1133,7 +1371,7 @@ async function enter() {
   const entryPrice =
     Number(
       fill.filled_avg_price ||
-        best.price
+      best.price
     );
 
   const trade =
@@ -1162,6 +1400,9 @@ async function enter() {
       asset_class:
         best.assetClass,
 
+      execution_mode:
+        mode,
+
       alpaca_order_id:
         order.id,
 
@@ -1180,9 +1421,9 @@ async function enter() {
 
         momentum_pct:
           Number(
-            best.momentumPct.toFixed(
-              4
-            )
+            best
+              .momentumPct
+              .toFixed(4)
           ),
 
         source:
@@ -1200,7 +1441,7 @@ async function enter() {
     trade.id;
 
   state.lastDecision =
-    `entered ${direction} ${best.symbol} at ${entryPrice}`;
+    `entered ${mode.toUpperCase()} ${direction} ${best.symbol} at ${entryPrice}`;
 }
 
 async function tick() {
@@ -1208,31 +1449,47 @@ async function tick() {
     return;
   }
 
-  try {
-    const currentGate =
-      gate();
+  const mode =
+    state.mode;
 
+  try {
     if (
-      !currentGate.allowed
+      ![
+        'paper',
+        'live',
+      ].includes(mode)
     ) {
       stop(
-        `Live Gate closed while bot was running: ${currentGate.reason}`
+        'Bot mode is invalid.'
       );
 
       return;
     }
 
-    const mode =
-      store.getConfig(
-        'tradingMode',
-        {
-          mode: 'paper',
-        }
-      ).mode;
+    const access =
+      accessCheck(
+        mode
+      );
 
-    if (mode !== 'live') {
+    if (
+      !access.allowed
+    ) {
       stop(
-        'Trading mode changed away from live.'
+        `${mode.toUpperCase()} access closed: ${access.reason}`
+      );
+
+      return;
+    }
+
+    const currentMode =
+      selectedMode();
+
+    if (
+      currentMode !==
+      mode
+    ) {
+      stop(
+        `Trading mode changed from ${mode} to ${currentMode}.`
       );
 
       return;
@@ -1241,20 +1498,25 @@ async function tick() {
     state.lastTickAt =
       new Date().toISOString();
 
-    state.lastError = null;
+    state.lastError =
+      null;
 
     const managing =
-      await manage();
+      await manage(
+        mode
+      );
 
     if (
       !managing &&
       !state.openTradeId
     ) {
-      await enter();
+      await enter(
+        mode
+      );
     }
   } catch (error) {
     console.error(
-      '[live-bot]',
+      `[${mode}-bot]`,
       error
     );
 
@@ -1264,67 +1526,70 @@ async function tick() {
     state.lastDecision =
       `stopped on error: ${error.message}`;
 
-    stop(error.message);
+    stop(
+      error.message
+    );
   } finally {
     schedule();
   }
 }
 
+// ----------------
+// STATUS
+// ----------------
+
 router.get(
   '/status',
   (req, res) => {
-    res.json(pub());
+    res.json(
+      pub()
+    );
   }
 );
+
+// ----------------
+// START
+// ----------------
 
 router.post(
   '/start',
   async (req, res) => {
     try {
-      if (state.running) {
+      if (
+        state.running
+      ) {
         return res
           .status(409)
           .json({
             error:
-              'Live bot is already running.',
+              'Trading bot is already running.',
+
             ...pub(),
           });
       }
 
-      const currentGate =
-        gate();
+      const mode =
+        selectedMode();
+
+      const access =
+        accessCheck(
+          mode
+        );
 
       if (
-        !currentGate.allowed
+        !access.allowed
       ) {
         return res
           .status(403)
           .json({
             error:
-              `Live bot blocked: ${currentGate.reason}`,
-          });
-      }
-
-      const mode =
-        store.getConfig(
-          'tradingMode',
-          {
-            mode: 'paper',
-          }
-        ).mode;
-
-      if (mode !== 'live') {
-        return res
-          .status(403)
-          .json({
-            error:
-              'Switch Trading Mode to live before starting the live bot.',
+              `${mode.toUpperCase()} bot blocked: ${access.reason}`,
           });
       }
 
       const account =
         await getAccount(
-          'live'
+          mode
         );
 
       if (
@@ -1334,38 +1599,53 @@ router.post(
           .status(403)
           .json({
             error:
-              'Alpaca reports trading_blocked=true for this account.',
+              `Alpaca reports trading_blocked=true for the ${mode} account.`,
           });
       }
 
-      /*
-       * Refuse to start if our
-       * local records contain an
-       * unfinished trade.
-       */
-      const openTrade =
+      const openLocalTrade =
         store
-          .getAll('trades')
+          .getAll(
+            'trades'
+          )
           .find(
-            (trade) =>
-              trade.result ===
-              null
+            (trade) => {
+              if (
+                trade.result !==
+                null
+              ) {
+                return false;
+              }
+
+              const session =
+                store.getOne(
+                  'sessions',
+                  trade.session_id
+                );
+
+              return (
+                session?.mode ===
+                mode
+              );
+            }
           );
 
-      if (openTrade) {
+      if (
+        openLocalTrade
+      ) {
         return res
           .status(409)
           .json({
             error:
-              `Refusing to start while local trade ${openTrade.id} is still marked open.`,
+              `Refusing to start while local ${mode} trade ${openLocalTrade.id} is still marked open.`,
           });
       }
 
       const equity =
         Number(
           account.equity ||
-            account.cash ||
-            0
+          account.cash ||
+          0
         );
 
       if (
@@ -1378,17 +1658,31 @@ router.post(
           .status(403)
           .json({
             error:
-              'Live account has no available equity.',
+              `${mode.toUpperCase()} account has no available equity.`,
           });
       }
 
+      state.mode =
+        mode;
+
+      state.universe = {
+        equities: [],
+        crypto: [],
+        refreshedAt: null,
+      };
+
+      state.equityCursor =
+        0;
+
       await refreshUniverse(
+        mode,
         true
       );
 
       const session =
         createSession({
-          mode: 'live',
+          mode,
+
           startingCapital:
             equity,
         });
@@ -1401,7 +1695,10 @@ router.post(
       Object.assign(
         state,
         {
-          running: true,
+          running:
+            true,
+
+          mode,
 
           sessionId:
             session.id,
@@ -1419,7 +1716,7 @@ router.post(
             null,
 
           lastDecision:
-            `starting — loaded ${
+            `starting ${mode.toUpperCase()} bot — loaded ${
               state.universe
                 .equities.length +
               state.universe
@@ -1431,12 +1728,19 @@ router.post(
 
           topCandidates:
             [],
+
+          marketOpen:
+            null,
         }
       );
 
-      setImmediate(tick);
+      setImmediate(
+        tick
+      );
 
-      res.json(pub());
+      res.json(
+        pub()
+      );
     } catch (error) {
       res
         .status(500)
@@ -1448,22 +1752,24 @@ router.post(
   }
 );
 
+// ----------------
+// STOP
+// ----------------
+
 router.post(
   '/stop',
   async (req, res) => {
+    const mode =
+      state.mode;
+
     stop();
 
     state.lastDecision =
       'stopped by user';
 
     try {
-      /*
-       * If the bot itself has an
-       * open position, close it
-       * using LONG/SHORT-aware
-       * closeTrade().
-       */
       if (
+        mode &&
         state.openTradeId
       ) {
         const trade =
@@ -1487,20 +1793,23 @@ router.post(
 
           const price =
             await getLatestTradablePrice(
-              'live',
+              mode,
               trade.market,
               assetClass
             );
 
           await closeTrade(
+            mode,
             trade,
             price,
-            'live bot stopped by user'
+            'bot stopped by user'
           );
         }
       }
 
-      if (state.sessionId) {
+      if (
+        state.sessionId
+      ) {
         const session =
           store.getOne(
             'sessions',
@@ -1520,7 +1829,7 @@ router.post(
                 'halted',
 
               halt_reason:
-                'Live bot stopped by user',
+                'Bot stopped by user',
 
               completed_at:
                 new Date().toISOString(),
@@ -1529,7 +1838,9 @@ router.post(
         }
       }
 
-      res.json(pub());
+      res.json(
+        pub()
+      );
     } catch (error) {
       state.lastError =
         `Bot stopped, but open-position close failed: ${error.message}`;
@@ -1539,6 +1850,7 @@ router.post(
         .json({
           error:
             state.lastError,
+
           ...pub(),
         });
     }
