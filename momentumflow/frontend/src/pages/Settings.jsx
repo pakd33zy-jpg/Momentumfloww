@@ -6,6 +6,8 @@ import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 import { api } from '../lib/api.js';
 import RejectionLogPanel from '../components/RejectionLogPanel.jsx';
 import FastScalpToggle from '../components/FastScalpToggle.jsx';
+import EquityV20Panel from '../components/EquityV20Panel.jsx';
+import StrategyPerformancePanel from '../components/StrategyPerformancePanel.jsx';
 const EMPTY_CREDS = {
   paper: { configured: false, keyIdMasked: '' },
   live: { configured: false, keyIdMasked: '' },
@@ -95,7 +97,7 @@ export default function Settings() {
 
   return (
     <div style={page}>
-      <div style={versionLabel}>MOMENTUMFLOW SETTINGS v11</div>
+      <div style={versionLabel}>MOMENTUMFLOW SETTINGS v20</div>
 
       {errors.length > 0 && (
         <div style={warningCard}>
@@ -190,10 +192,17 @@ export default function Settings() {
     </section>
 
     <section>
+      <h2 style={h2}>Equity v20 Adaptive</h2>
+      <EquityV20Panel />
+    </section>
+
+    <section>
         <h2 style={h2}>
           Strategy Analysis
         </h2>
 
+        <StrategyPerformancePanel />
+        <div style={{ height: 10 }} />
         <RejectionLogPanel />
       </section> <section>
         <h2 style={h2}>Safety behavior</h2>

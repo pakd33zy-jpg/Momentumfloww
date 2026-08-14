@@ -42,7 +42,13 @@ import {
   isCoolingDown,
 } from './strategyEngine.js';
 
-// UNIFIED BOT v19 EXPECTANCY
+import {
+  EQUITY_V20_DEFAULTS,
+  equityPrefilterQuality,
+  evaluateEquityCandidateV20,
+} from './equityStrategyV20.js';
+
+// UNIFIED BOT v20 ADAPTIVE EQUITIES
 //
 // PAPER and LIVE use the same scanner, signals, sizing and execution path.
 // v19 changes:
@@ -89,11 +95,11 @@ const state = {
 const DEFAULTS = {
   pollSeconds: 5,
   maxOpenPositions: 3,
-  equityBatchSize: 120,
+  equityBatchSize: 150,
   universeRefreshMinutes: 15,
 
   minEquityPrice: 1,
-  minDailyDollarVolume: 1000000,
+  minDailyDollarVolume: 5000000,
   stockFeed: 'iex',
 
   fallbackTakeProfitPct: 0.60,
@@ -126,7 +132,17 @@ const cfg = () => ({
 
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
+  ...EQUITY_V20_DEFAULTS,
   ...store.getConfig('strategyConfig', {}),
+
+  equityFocusMode:
+    tradingCfg().equityFocusMode !== false,
+
+  equityV20Enabled:
+    tradingCfg().equityV20Enabled !== false,
+
+  equityFastScalpEnabled:
+    tradingCfg().equityFastScalpEnabled === true,
 });
 
 function maxOpenPositions() {
@@ -238,6 +254,175 @@ function effectiveRiskFraction() {
   );
 }
 
+
+function strategyPerformanceSummary() {
+  const mode =
+    state.mode ||
+    selectedMode();
+
+  const closed =
+    store
+      .getAll('trades')
+      .filter(
+        (trade) =>
+          trade.result !== null &&
+          (
+            trade.execution_mode ||
+            'paper'
+          ) === mode
+      )
+      .slice(-300);
+
+  const groups =
+    new Map();
+
+  for (const trade of closed) {
+    const strategy =
+      String(
+        trade.strategy_name ||
+        trade.entry_signal
+          ?.strategy ||
+        'LEGACY'
+      );
+
+    if (!groups.has(strategy)) {
+      groups.set(
+        strategy,
+        {
+          strategy,
+          trades: 0,
+          wins: 0,
+          losses: 0,
+          pnl: 0,
+          grossWin: 0,
+          grossLoss: 0,
+          lastClosedAt: null,
+        }
+      );
+    }
+
+    const row =
+      groups.get(strategy);
+
+    const pnl =
+      Number(
+        trade.pnl ||
+        0
+      );
+
+    row.trades += 1;
+    row.pnl += pnl;
+
+    if (pnl > 0) {
+      row.wins += 1;
+      row.grossWin += pnl;
+    } else if (pnl < 0) {
+      row.losses += 1;
+      row.grossLoss +=
+        Math.abs(pnl);
+    }
+
+    const closedAt =
+      trade.closed_at ||
+      trade.timestamp ||
+      null;
+
+    if (
+      closedAt &&
+      (
+        !row.lastClosedAt ||
+        new Date(closedAt) >
+          new Date(
+            row.lastClosedAt
+          )
+      )
+    ) {
+      row.lastClosedAt =
+        closedAt;
+    }
+  }
+
+  return [
+    ...groups.values(),
+  ]
+    .map((row) => {
+      const averageWin =
+        row.wins > 0
+          ? row.grossWin /
+            row.wins
+          : 0;
+
+      const averageLoss =
+        row.losses > 0
+          ? row.grossLoss /
+            row.losses
+          : 0;
+
+      const expectancy =
+        row.trades > 0
+          ? row.pnl /
+            row.trades
+          : 0;
+
+      return {
+        strategy:
+          row.strategy,
+        trades:
+          row.trades,
+        wins:
+          row.wins,
+        losses:
+          row.losses,
+        winRate:
+          row.trades > 0
+            ? Number(
+                (
+                  row.wins /
+                  row.trades *
+                  100
+                ).toFixed(2)
+              )
+            : 0,
+        pnl:
+          Number(
+            row.pnl.toFixed(4)
+          ),
+        averageWin:
+          Number(
+            averageWin.toFixed(4)
+          ),
+        averageLoss:
+          Number(
+            averageLoss.toFixed(4)
+          ),
+        expectancy:
+          Number(
+            expectancy.toFixed(4)
+          ),
+        profitFactor:
+          row.grossLoss > 0
+            ? Number(
+                (
+                  row.grossWin /
+                  row.grossLoss
+                ).toFixed(3)
+              )
+            : row.grossWin > 0
+              ? 'Infinity'
+              : 0,
+        sampleEnough:
+          row.trades >= 30,
+        lastClosedAt:
+          row.lastClosedAt,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.pnl) -
+        Number(a.pnl)
+    );
+}
+
 function pub() {
   let effectiveRisk =
     null;
@@ -301,6 +486,9 @@ function pub() {
     scanDiagnostics:
       state.scanDiagnostics,
 
+    strategyPerformance:
+      strategyPerformanceSummary(),
+
     marketOpen:
       state.marketOpen,
 
@@ -361,7 +549,7 @@ function pub() {
     },
 
     strategyVersion:
-      'v19-expectancy',
+      'v20-adaptive-equities',
 
     strategyConfig:
       strategyCfg(),
@@ -975,9 +1163,11 @@ function stockBatch() {
   return batch;
 }
 
+
 function rankSignal(
   signal,
-  preMomentum = 0
+  preMomentum = 0,
+  prefilterQuality = 0
 ) {
   const trend =
     Math.abs(
@@ -997,6 +1187,51 @@ function rankSignal(
       0
     );
 
+  const spread =
+    Number(
+      signal
+        ?.signal
+        ?.spreadPct
+    );
+
+  const strategy =
+    String(
+      signal
+        ?.strategy ||
+      ''
+    );
+
+  const setupBonus =
+    strategy.includes(
+      'VWAP_PULLBACK'
+    )
+      ? 0.65
+      : strategy.includes(
+          'ORB'
+        )
+        ? 0.55
+        : strategy.includes(
+            'TREND_CONTINUATION'
+          )
+          ? 0.45
+          : strategy.includes(
+              'FAST_SCALP'
+            )
+            ? 0.15
+            : 0;
+
+  const spreadBonus =
+    Number.isFinite(
+      spread
+    )
+      ? Math.max(
+          0,
+          1 -
+            spread /
+              0.08
+        )
+      : 0;
+
   return (
     Number(
       signal?.score ||
@@ -1009,24 +1244,37 @@ function rankSignal(
     ) +
 
     Math.min(
-      1,
+      1.25,
       Math.max(
         0,
-        volume - 1
+        volume - 0.75
       )
     ) +
 
     Math.min(
-      0.5,
-
+      0.75,
       Math.abs(
         Number(
           preMomentum ||
           0
         )
-      ) *
-        2
-    )
+      ) * 3
+    ) +
+
+    Math.min(
+      1.25,
+      Math.max(
+        0,
+        Number(
+          prefilterQuality ||
+          0
+        ) *
+          0.15
+      )
+    ) +
+
+    spreadBonus +
+    setupBonus
   );
 }
 
@@ -1177,7 +1425,7 @@ function recordRejectionSnapshot(
     mode,
 
     strategy_version:
-      'v19-expectancy',
+      'v20-adaptive-equities',
 
     market_open:
       Boolean(
@@ -1525,9 +1773,24 @@ async function scan(
         Boolean
       );
 
-  if (
-    cryptoSymbols.length
-  ) {
+  const equityFocusMode =
+  tradingCfg()
+    .equityFocusMode !== false;
+
+if (equityFocusMode) {
+  bump(
+    diag
+      .prefilter
+      .crypto,
+
+    'crypto disabled by equity focus mode'
+  );
+}
+
+if (
+  !equityFocusMode &&
+  cryptoSymbols.length
+) {
     const snapshots =
       await getCryptoSnapshots(
         mode,
@@ -2201,11 +2464,24 @@ async function scan(
         .equityPrefilterPassed +=
         1;
 
-      pre.push({
-        asset,
+      const preQuality =
+      equityPrefilterQuality({
         snapshot,
         momentum,
+        dollarVolume,
+        spread,
+        config: sc,
       });
+
+    pre.push({
+      asset,
+      snapshot,
+      momentum,
+      prefilterQuality:
+        preQuality.quality,
+      dayMovePct:
+        preQuality.dayMovePct,
+    });
     }
 
     pre.sort(
@@ -2213,6 +2489,14 @@ async function scan(
         a,
         b
       ) =>
+        Number(
+          b.prefilterQuality ||
+          0
+        ) -
+        Number(
+          a.prefilterQuality ||
+          0
+        ) ||
         Math.abs(
           b.momentum
         ) -
@@ -2306,27 +2590,50 @@ async function scan(
             : 'SHORT';
 
         const result =
-          evaluateEquityCandidate({
-            asset:
-              item.asset,
+        sc.equityV20Enabled !== false
+          ? evaluateEquityCandidateV20({
+              asset:
+                item.asset,
 
-            snapshot:
-              item.snapshot,
+              snapshot:
+                item.snapshot,
 
-            bars:
-              barsBySymbol[
-                item.asset
-                  .symbol
-              ] ||
-              [],
+              bars:
+                barsBySymbol[
+                  item.asset
+                    .symbol
+                ] ||
+                [],
 
-            marketRegime,
+              marketRegime,
 
-            config:
-              sc,
+              config:
+                sc,
 
-            now,
-          });
+              now,
+              mode,
+            })
+          : evaluateEquityCandidate({
+              asset:
+                item.asset,
+
+              snapshot:
+                item.snapshot,
+
+              bars:
+                barsBySymbol[
+                  item.asset
+                    .symbol
+                ] ||
+                [],
+
+              marketRegime,
+
+              config:
+                sc,
+
+              now,
+            });
 
         const signal =
           result.signal;
@@ -2385,7 +2692,8 @@ async function scan(
         signal.rank =
           rankSignal(
             signal,
-            item.momentum
+            item.momentum,
+            item.prefilterQuality
           );
 
         finalCandidates.push(
@@ -3992,7 +4300,7 @@ async function enter(
       `${mode.toUpperCase()} scanning ` +
       `${state.universe.equities.length + state.universe.crypto.length} ` +
       `Alpaca tradable assets — ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions open — waiting for v19 setup` +
+      `${maxOpenPositions()} positions open — waiting for v20 setup` +
       (
         top
           ? ` — top reject: ${top.reason} (${top.count})`

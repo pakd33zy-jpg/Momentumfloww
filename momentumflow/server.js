@@ -10,6 +10,7 @@ import tradingModeRouter from './tradingMode.js';
 import tradingConfigRouter from './tradingConfig.js';
 import liveBotRouter from './liveBot.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
+import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { store } from './store.js';
 
 const app = express();
@@ -25,6 +26,7 @@ function resetToPaperModeOnBoot() {
 }
 resetToPaperModeOnBoot();
 startFastScalpMonitor();
+startEquityFastScalpMonitor();
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 app.use('/api/credentials', credentialsRouter);

@@ -12,6 +12,9 @@ export const TRADING_DEFAULTS = {
   dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
   consecutiveStopLoss: 3,
   fastScalpEnabled: false,
+  equityFocusMode: true,
+  equityV20Enabled: true,
+  equityFastScalpEnabled: false,
 };
 
 const NUMERIC_KEYS = [
@@ -47,6 +50,9 @@ function normalize(raw = {}) {
 
   for (const k of NUMERIC_KEYS) out[k] = Number(out[k]);
   out.fastScalpEnabled = asBoolean(out.fastScalpEnabled);
+  out.equityFocusMode = asBoolean(out.equityFocusMode);
+  out.equityV20Enabled = asBoolean(out.equityV20Enabled);
+  out.equityFastScalpEnabled = asBoolean(out.equityFastScalpEnabled);
 
   if (raw.updatedAt) out.updatedAt = String(raw.updatedAt);
   return out;
@@ -76,9 +82,15 @@ router.post('/', (req, res) => {
   if (error) return res.status(400).json({ error });
 
   const selectedMode = store.getConfig('tradingMode', { mode: 'paper' }).mode;
-  if (merged.fastScalpEnabled && selectedMode === 'live') {
+  if (
+    (
+      merged.fastScalpEnabled ||
+      merged.equityFastScalpEnabled
+    ) &&
+    selectedMode === 'live'
+  ) {
     return res.status(409).json({
-      error: 'Fast Scalp is PAPER-only. Switch to Paper Mode before enabling it.',
+      error: 'Fast Scalp modes are PAPER-only. Switch to Paper Mode before enabling them.',
     });
   }
 
@@ -92,7 +104,11 @@ router.post('/', (req, res) => {
   store.setConfig('strategyConfig', {
     ...strategyCurrent,
     fastScalpEnabled: merged.fastScalpEnabled,
+    equityFocusMode: merged.equityFocusMode,
+    equityV20Enabled: merged.equityV20Enabled,
+    equityFastScalpEnabled: merged.equityFastScalpEnabled,
     cryptoCooldownMinutes: merged.fastScalpEnabled ? 1 : 30,
+    equityCooldownMinutes: merged.equityFastScalpEnabled ? 1 : 8,
   });
 
   res.json({ ...merged, source: 'railway-store' });

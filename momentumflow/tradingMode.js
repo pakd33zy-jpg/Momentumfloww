@@ -20,9 +20,12 @@ router.post('/', (req, res) => {
 
   if (mode === 'live') {
     const tradingConfig = store.getConfig('tradingConfig', {});
-    if (tradingConfig.fastScalpEnabled === true) {
+    if (
+      tradingConfig.fastScalpEnabled === true ||
+      tradingConfig.equityFastScalpEnabled === true
+    ) {
       return res.status(409).json({
-        error: 'Fast Scalp is PAPER-only. Turn Fast Scalp OFF before switching to LIVE.',
+        error: 'Fast Scalp modes are PAPER-only. Turn both Fast Scalp switches OFF before switching to LIVE.',
       });
     }
 
