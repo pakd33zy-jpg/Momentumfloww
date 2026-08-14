@@ -1,10 +1,17 @@
-// STRATEGY ENGINE v18 BALANCED
-// More opportunities than v17, while keeping trend/VWAP/spread quality gates.
+// STRATEGY ENGINE v18.1 BALANCED EARLY ENTRY
+//
+// v18.1 change:
+// - 15m trend alignment is worth +2 points instead of being an absolute gate.
+// - If 15m is NOT aligned, the setup must prove an early reversal/continuation
+//   with aligned 5m trend + strong current momentum + supporting volume.
+// - VWAP, spread, opposite-regime protection and extension filters remain.
+//
 // No strategy guarantees profit. Validate with genuine Alpaca PAPER fills.
 
 export const STRATEGY_DEFAULTS = {
   equityScoreThreshold: 7,
   cryptoScoreThreshold: 7,
+
   maxDetailedEquities: 18,
   maxDetailedCrypto: 10,
 
@@ -40,8 +47,12 @@ export const STRATEGY_DEFAULTS = {
   cryptoMaxBreakoutDistanceAtr: 1.75,
 
   useEquityTimeWindow: true,
-  equityStartMinutesET: 9 * 60 + 35,
-  equityEndMinutesET: 15 * 60 + 50,
+
+  equityStartMinutesET:
+    9 * 60 + 35,
+
+  equityEndMinutesET:
+    15 * 60 + 50,
 
   atrLookbackBars: 14,
   atrMultiplier: 1.25,
@@ -62,107 +73,159 @@ export const STRATEGY_DEFAULTS = {
   equityMaxHoldMinutes: 25,
   cryptoMaxHoldMinutes: 40,
 
-  closeMomentumStartMinutesET: 15 * 60 + 30,
+  closeMomentumStartMinutesET:
+    15 * 60 + 30,
 };
 
-const ET = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
+const ET =
+  new Intl.DateTimeFormat(
+    'en-US',
+    {
+      timeZone:
+        'America/New_York',
 
-const num = (v, f = 0) =>
-  Number.isFinite(Number(v))
-    ? Number(v)
-    : f;
+      year:
+        'numeric',
 
-const clamp = (v, lo, hi) =>
+      month:
+        '2-digit',
+
+      day:
+        '2-digit',
+
+      hour:
+        '2-digit',
+
+      minute:
+        '2-digit',
+
+      hourCycle:
+        'h23',
+    }
+  );
+
+const num = (
+  value,
+  fallback = 0
+) =>
+  Number.isFinite(
+    Number(
+      value
+    )
+  )
+    ? Number(
+        value
+      )
+    : fallback;
+
+const clamp = (
+  value,
+  low,
+  high
+) =>
   Math.max(
-    lo,
+    low,
     Math.min(
-      hi,
-      v
+      high,
+      value
     )
   );
 
-const avg = (a = []) => {
-  const x =
-    a.filter(
+const avg = (
+  values = []
+) => {
+  const good =
+    values.filter(
       Number.isFinite
     );
 
-  return x.length
-    ? x.reduce(
-        (s, v) =>
-          s + v,
+  return good.length
+    ? good.reduce(
+        (
+          sum,
+          value
+        ) =>
+          sum +
+          value,
         0
-      ) / x.length
+      ) /
+      good.length
     : 0;
 };
 
-const t = (b) =>
-  b?.t ||
-  b?.timestamp ||
+const t = (
+  bar
+) =>
+  bar?.t ||
+  bar?.timestamp ||
   null;
 
-const c = (b) =>
+const c = (
+  bar
+) =>
   num(
-    b?.c,
+    bar?.c,
     NaN
   );
 
-const h = (b) =>
+const h = (
+  bar
+) =>
   num(
-    b?.h,
+    bar?.h,
     NaN
   );
 
-const l = (b) =>
+const l = (
+  bar
+) =>
   num(
-    b?.l,
+    bar?.l,
     NaN
   );
 
-const v = (b) =>
+const v = (
+  bar
+) =>
   num(
-    b?.v,
+    bar?.v,
     0
   );
 
 function etParts(
   value
 ) {
-  const p =
+  const parts =
     Object.fromEntries(
       ET
         .formatToParts(
           value instanceof Date
             ? value
-            : new Date(value)
+            : new Date(
+                value
+              )
         )
         .map(
-          x => [
-            x.type,
-            x.value,
+          (
+            part
+          ) => [
+            part.type,
+            part.value,
           ]
         )
     );
 
   return {
     dateKey:
-      `${p.year}-${p.month}-${p.day}`,
+      `${parts.year}-${parts.month}-${parts.day}`,
 
     minutes:
       Number(
-        p.hour
+        parts.hour
       ) *
         60 +
       Number(
-        p.minute
+        parts.minute
       ),
   };
 }
@@ -178,11 +241,17 @@ function completedBars(
     );
 
   return bars.filter(
-    bar => {
+    (
+      bar
+    ) => {
       const ms =
-        t(bar)
+        t(
+          bar
+        )
           ? new Date(
-              t(bar)
+              t(
+                bar
+              )
             ).getTime()
           : NaN;
 
@@ -211,7 +280,9 @@ function currentPrice(
     snapshot
       ?.minuteBar
       ?.c ??
-    bars.at(-1)
+    bars.at(
+      -1
+    )
       ?.c ??
     snapshot
       ?.dailyBar
@@ -225,7 +296,7 @@ export function mergeCurrentMinuteBar(
   bars = [],
   snapshot = null
 ) {
-  const out =
+  const output =
     Array.isArray(
       bars
     )
@@ -234,59 +305,73 @@ export function mergeCurrentMinuteBar(
         ]
       : [];
 
-  const mb =
+  const minuteBar =
     snapshot
       ?.minuteBar;
 
   if (
-    !mb ||
+    !minuteBar ||
     !Number.isFinite(
       Number(
-        mb?.c
+        minuteBar
+          ?.c
       )
     )
   ) {
-    return out;
+    return output;
   }
 
   const stamp =
     t(
-      mb
+      minuteBar
     );
 
-  const i =
+  const index =
     stamp
-      ? out.findIndex(
-          x =>
-            t(x) ===
+      ? output.findIndex(
+          (
+            bar
+          ) =>
+            t(
+              bar
+            ) ===
             stamp
         )
       : -1;
 
   if (
-    i >= 0
+    index >= 0
   ) {
-    out[i] =
-      mb;
+    output[
+      index
+    ] =
+      minuteBar;
   } else {
-    out.push(
-      mb
+    output.push(
+      minuteBar
     );
   }
 
-  out.sort(
-    (a, b) =>
+  output.sort(
+    (
+      a,
+      b
+    ) =>
       new Date(
-        t(a) ||
+        t(
+          a
+        ) ||
         0
-      ) -
+      ).getTime() -
       new Date(
-        t(b) ||
+        t(
+          b
+        ) ||
         0
-      )
+      ).getTime()
   );
 
-  return out;
+  return output;
 }
 
 export function spreadPct(
@@ -360,27 +445,30 @@ export function minuteMomentumPct(
       snapshot
         ?.latestTrade
         ?.p,
+
       NaN
     );
 
-  return (
-    Number.isFinite(
+  if (
+    !Number.isFinite(
       open
-    ) &&
-    Number.isFinite(
+    ) ||
+    !Number.isFinite(
       close
-    ) &&
-    open > 0
-  )
-    ? (
-        (
-          close -
-          open
-        ) /
-        open
-      ) *
-      100
-    : null;
+    ) ||
+    open <= 0
+  ) {
+    return null;
+  }
+
+  return (
+    (
+      close -
+      open
+    ) /
+    open
+  ) *
+    100;
 }
 
 export function dailyDollarVolume(
@@ -425,12 +513,14 @@ function trendPct(
     return 0;
   }
 
-  const a =
+  const current =
     c(
-      bars.at(-1)
+      bars.at(
+        -1
+      )
     );
 
-  const b =
+  const previous =
     c(
       bars[
         Math.max(
@@ -442,24 +532,26 @@ function trendPct(
       ]
     );
 
+  if (
+    !Number.isFinite(
+      current
+    ) ||
+    !Number.isFinite(
+      previous
+    ) ||
+    previous <= 0
+  ) {
+    return 0;
+  }
+
   return (
-    Number.isFinite(
-      a
-    ) &&
-    Number.isFinite(
-      b
-    ) &&
-    b > 0
-  )
-    ? (
-        (
-          a -
-          b
-        ) /
-        b
-      ) *
-      100
-    : 0;
+    (
+      current -
+      previous
+    ) /
+    previous
+  ) *
+    100;
 }
 
 function volumeRatio(
@@ -478,7 +570,9 @@ function volumeRatio(
 
   const current =
     v(
-      bars.at(-1)
+      bars.at(
+        -1
+      )
     );
 
   const base =
@@ -497,8 +591,10 @@ function volumeRatio(
           v
         )
         .filter(
-          x =>
-            x >
+          (
+            value
+          ) =>
+            value >
             0
         )
     );
@@ -522,7 +618,9 @@ function sessionBarsET(
     bars ||
     []
   ).filter(
-    bar => {
+    (
+      bar
+    ) => {
       if (
         !t(
           bar
@@ -531,17 +629,19 @@ function sessionBarsET(
         return false;
       }
 
-      const p =
+      const parts =
         etParts(
-          t(bar)
+          t(
+            bar
+          )
         );
 
       return (
-        p.dateKey ===
+        parts.dateKey ===
           today &&
-        p.minutes >=
+        parts.minutes >=
           570 &&
-        p.minutes <=
+        parts.minutes <=
           960
       );
     }
@@ -550,29 +650,29 @@ function sessionBarsET(
 
 function inEquityWindow(
   now,
-  cfg
+  config
 ) {
   if (
-    !cfg
+    !config
       .useEquityTimeWindow
   ) {
     return true;
   }
 
-  const m =
+  const minutes =
     etParts(
       now
     ).minutes;
 
   return (
-    m >=
+    minutes >=
       Number(
-        cfg
+        config
           .equityStartMinutesET
       ) &&
-    m <=
+    minutes <=
       Number(
-        cfg
+        config
           .equityEndMinutesET
       )
   );
@@ -581,59 +681,69 @@ function inEquityWindow(
 function vwap(
   bars = []
 ) {
-  let pv =
+  let priceVolume =
     0;
 
-  let vol =
+  let totalVolume =
     0;
 
   for (
     const bar of
     bars
   ) {
-    const hi =
-      h(bar);
+    const high =
+      h(
+        bar
+      );
 
-    const lo =
-      l(bar);
+    const low =
+      l(
+        bar
+      );
 
-    const cl =
-      c(bar);
+    const close =
+      c(
+        bar
+      );
 
-    const qty =
-      v(bar);
+    const volume =
+      v(
+        bar
+      );
 
     if (
       ![
-        hi,
-        lo,
-        cl,
+        high,
+        low,
+        close,
       ].every(
         Number.isFinite
       ) ||
-      qty <= 0
+      volume <= 0
     ) {
       continue;
     }
 
-    pv +=
+    const typical =
       (
-        (
-          hi +
-          lo +
-          cl
-        ) /
-        3
-      ) *
-      qty;
+        high +
+        low +
+        close
+      ) /
+      3;
 
-    vol +=
-      qty;
+    priceVolume +=
+      typical *
+      volume;
+
+    totalVolume +=
+      volume;
   }
 
-  return vol > 0
-    ? pv /
-      vol
+  return totalVolume >
+    0
+    ? priceVolume /
+      totalVolume
     : null;
 }
 
@@ -651,7 +761,7 @@ function atrAbsolute(
     return 0;
   }
 
-  const s =
+  const slice =
     bars.slice(
       -(
         lookback +
@@ -659,28 +769,32 @@ function atrAbsolute(
       )
     );
 
-  const tr =
+  const ranges =
     [];
 
   for (
     let i = 1;
     i <
-    s.length;
-    i++
+      slice.length;
+    i += 1
   ) {
-    const hi =
+    const high =
       h(
-        s[i]
+        slice[
+          i
+        ]
       );
 
-    const lo =
+    const low =
       l(
-        s[i]
+        slice[
+          i
+        ]
       );
 
-    const pc =
+    const previousClose =
       c(
-        s[
+        slice[
           i -
           1
         ]
@@ -688,9 +802,9 @@ function atrAbsolute(
 
     if (
       ![
-        hi,
-        lo,
-        pc,
+        high,
+        low,
+        previousClose,
       ].every(
         Number.isFinite
       )
@@ -698,26 +812,26 @@ function atrAbsolute(
       continue;
     }
 
-    tr.push(
+    ranges.push(
       Math.max(
-        hi -
-          lo,
+        high -
+          low,
 
         Math.abs(
-          hi -
-          pc
+          high -
+          previousClose
         ),
 
         Math.abs(
-          lo -
-          pc
+          low -
+          previousClose
         )
       )
     );
   }
 
   return avg(
-    tr
+    ranges
   );
 }
 
@@ -725,7 +839,7 @@ function atrPct(
   bars,
   lookback = 14
 ) {
-  const a =
+  const absolute =
     atrAbsolute(
       bars,
       lookback
@@ -733,22 +847,26 @@ function atrPct(
 
   const price =
     c(
-      bars?.at(-1)
+      bars?.at(
+        -1
+      )
     );
 
-  return (
-    a > 0 &&
-    Number.isFinite(
+  if (
+    absolute <= 0 ||
+    !Number.isFinite(
       price
-    ) &&
-    price > 0
-  )
-    ? (
-        a /
-        price
-      ) *
-      100
-    : 0;
+    ) ||
+    price <= 0
+  ) {
+    return 0;
+  }
+
+  return (
+    absolute /
+    price
+  ) *
+    100;
 }
 
 function rollingBreakout(
@@ -756,13 +874,26 @@ function rollingBreakout(
   lookback = 8
 ) {
   const none = {
-    available: false,
-    long: false,
-    short: false,
-    confirmedLong: false,
-    confirmedShort: false,
-    high: null,
-    low: null,
+    available:
+      false,
+
+    long:
+      false,
+
+    short:
+      false,
+
+    confirmedLong:
+      false,
+
+    confirmedShort:
+      false,
+
+    high:
+      null,
+
+    low:
+      null,
   };
 
   if (
@@ -777,10 +908,14 @@ function rollingBreakout(
   }
 
   const current =
-    bars.at(-1);
+    bars.at(
+      -1
+    );
 
   const previous =
-    bars.at(-2);
+    bars.at(
+      -2
+    );
 
   const history =
     bars.slice(
@@ -811,12 +946,12 @@ function rollingBreakout(
         Number.isFinite
       );
 
-  const cc =
+  const currentClose =
     c(
       current
     );
 
-  const pc =
+  const previousClose =
     c(
       previous
     );
@@ -825,7 +960,7 @@ function rollingBreakout(
     !highs.length ||
     !lows.length ||
     !Number.isFinite(
-      cc
+      currentClose
     )
   ) {
     return none;
@@ -842,32 +977,33 @@ function rollingBreakout(
     );
 
   return {
-    available: true,
+    available:
+      true,
 
     long:
-      cc >
+      currentClose >
       high,
 
     short:
-      cc <
+      currentClose <
       low,
 
     confirmedLong:
       Number.isFinite(
-        pc
+        previousClose
       ) &&
-      pc >
+      previousClose >
         high &&
-      cc >
+      currentClose >
         high,
 
     confirmedShort:
       Number.isFinite(
-        pc
+        previousClose
       ) &&
-      pc <
+      previousClose <
         low &&
-      cc <
+      currentClose <
         low,
 
     high,
@@ -881,13 +1017,26 @@ function openingRange(
   minutes = 5
 ) {
   const none = {
-    available: false,
-    long: false,
-    short: false,
-    confirmedLong: false,
-    confirmedShort: false,
-    high: null,
-    low: null,
+    available:
+      false,
+
+    long:
+      false,
+
+    short:
+      false,
+
+    confirmedLong:
+      false,
+
+    confirmedShort:
+      false,
+
+    high:
+      null,
+
+    low:
+      null,
   };
 
   const session =
@@ -903,28 +1052,40 @@ function openingRange(
       5
     );
 
-  const open =
+  const opening =
     session.filter(
-      b =>
-        t(b) &&
+      (
+        bar
+      ) =>
+        t(
+          bar
+        ) &&
         etParts(
-          t(b)
+          t(
+            bar
+          )
         ).minutes <
           cutoff
     );
 
   const after =
     session.filter(
-      b =>
-        t(b) &&
+      (
+        bar
+      ) =>
+        t(
+          bar
+        ) &&
         etParts(
-          t(b)
+          t(
+            bar
+          )
         ).minutes >=
           cutoff
     );
 
   if (
-    open.length <
+    opening.length <
       3 ||
     !after.length
   ) {
@@ -932,7 +1093,7 @@ function openingRange(
   }
 
   const highs =
-    open
+    opening
       .map(
         h
       )
@@ -941,7 +1102,7 @@ function openingRange(
       );
 
   const lows =
-    open
+    opening
       .map(
         l
       )
@@ -966,52 +1127,56 @@ function openingRange(
       ...lows
     );
 
-  const cc =
+  const currentClose =
     c(
-      after.at(-1)
+      after.at(
+        -1
+      )
     );
 
-  const pc =
+  const previousClose =
     c(
-      after.at(-2)
+      after.at(
+        -2
+      )
     );
 
   return {
     available:
       Number.isFinite(
-        cc
+        currentClose
       ),
 
     long:
       Number.isFinite(
-        cc
+        currentClose
       ) &&
-      cc >
+      currentClose >
         high,
 
     short:
       Number.isFinite(
-        cc
+        currentClose
       ) &&
-      cc <
+      currentClose <
         low,
 
     confirmedLong:
       Number.isFinite(
-        pc
+        previousClose
       ) &&
-      pc >
+      previousClose >
         high &&
-      cc >
+      currentClose >
         high,
 
     confirmedShort:
       Number.isFinite(
-        pc
+        previousClose
       ) &&
-      pc <
+      previousClose <
         low &&
-      cc <
+      currentClose <
         low,
 
     high,
@@ -1022,21 +1187,21 @@ function openingRange(
 function exitPlan(
   assetClass,
   bars,
-  cfg
+  config
 ) {
   const atr =
     atrPct(
       bars,
       Number(
-        cfg
+        config
           .atrLookbackBars ||
         14
       )
     );
 
-  const mult =
+  const multiplier =
     Number(
-      cfg
+      config
         .atrMultiplier ||
       1.25
     );
@@ -1048,27 +1213,27 @@ function exitPlan(
   const minStop =
     Number(
       crypto
-        ? cfg
+        ? config
             .cryptoMinStopPct
-        : cfg
+        : config
             .equityMinStopPct
     );
 
   const maxStop =
     Number(
       crypto
-        ? cfg
+        ? config
             .cryptoMaxStopPct
-        : cfg
+        : config
             .equityMaxStopPct
     );
 
-  const minTp =
+  const minTakeProfit =
     Number(
       crypto
-        ? cfg
+        ? config
             .cryptoMinTakeProfitPct
-        : cfg
+        : config
             .equityMinTakeProfitPct
     );
 
@@ -1076,20 +1241,22 @@ function exitPlan(
     clamp(
       Math.max(
         atr *
-          mult,
+          multiplier,
+
         minStop
       ),
+
       minStop,
       maxStop
     );
 
-  const tp =
+  const takeProfit =
     Math.max(
-      minTp,
+      minTakeProfit,
 
       stop *
         Number(
-          cfg
+          config
             .rewardRiskRatio
         )
     );
@@ -1111,7 +1278,7 @@ function exitPlan(
 
     takeProfitPct:
       Number(
-        tp.toFixed(
+        takeProfit.toFixed(
           4
         )
       ),
@@ -1121,7 +1288,7 @@ function exitPlan(
         (
           stop *
           Number(
-            cfg
+            config
               .trailingTriggerR
           )
         ).toFixed(
@@ -1134,7 +1301,7 @@ function exitPlan(
         (
           stop *
           Number(
-            cfg
+            config
               .trailingDistanceR
           )
         ).toFixed(
@@ -1145,9 +1312,9 @@ function exitPlan(
     maxHoldMinutes:
       Number(
         crypto
-          ? cfg
+          ? config
               .cryptoMaxHoldMinutes
-          : cfg
+          : config
               .equityMaxHoldMinutes
       ),
   };
@@ -1190,23 +1357,29 @@ export function buildEquityMarketRegime(
 
   const longs =
     values.filter(
-      x =>
-        x >
+      (
+        value
+      ) =>
+        value >
         0
     ).length;
 
   const shorts =
     values.filter(
-      x =>
-        x <
+      (
+        value
+      ) =>
+        value <
         0
     ).length;
 
   return {
     direction:
-      longs >= 3
+      longs >=
+      3
         ? 'LONG'
-        : shorts >= 3
+        : shorts >=
+            3
           ? 'SHORT'
           : 'NEUTRAL',
 
@@ -1257,11 +1430,15 @@ export function buildCryptoMarketRegime(
 
   return {
     direction:
-      btc5 > 0 &&
-      btc15 > 0
+      btc5 >
+        0 &&
+      btc15 >
+        0
         ? 'LONG'
-        : btc5 < 0 &&
-            btc15 < 0
+        : btc5 <
+            0 &&
+          btc15 <
+            0
           ? 'SHORT'
           : 'NEUTRAL',
 
@@ -1285,9 +1462,14 @@ const reject = (
   reason,
   extra = {}
 ) => ({
-  eligible: false,
-  score: 0,
+  eligible:
+    false,
+
+  score:
+    0,
+
   reason,
+
   ...extra,
 });
 
@@ -1355,57 +1537,38 @@ function scoreDirection({
     );
   }
 
-  const t5 =
+  const trend5 =
     trendPct(
       signalBars,
       5
     );
 
-  const t15 =
+  const trend15 =
     trendPct(
       signalBars,
       15
     );
 
-  const a5 =
+  const aligned5 =
     long
-      ? t5 > 0
-      : t5 < 0;
+      ? trend5 >
+        0
+      : trend5 <
+        0;
 
-  const a15 =
+  const aligned15 =
     long
-      ? t15 > 0
-      : t15 < 0;
-
-  if (
-    !a15
-  ) {
-    return reject(
-      '15m trend is not aligned',
-      {
-        trend5Pct:
-          Number(
-            t5.toFixed(
-              4
-            )
-          ),
-
-        trend15Pct:
-          Number(
-            t15.toFixed(
-              4
-            )
-          ),
-      }
-    );
-  }
+      ? trend15 >
+        0
+      : trend15 <
+        0;
 
   const momentum =
     minuteMomentumPct(
       snapshot
     );
 
-  const minMom =
+  const minMomentum =
     Number(
       assetClass ===
       'crypto'
@@ -1415,7 +1578,7 @@ function scoreDirection({
             .equityMinEntryMomentumPct
     );
 
-  const strongMom =
+  const strongMomentum =
     Number(
       assetClass ===
       'crypto'
@@ -1430,16 +1593,30 @@ function scoreDirection({
     (
       long
         ? momentum <
-          minMom
+          minMomentum
         : momentum >
-          -minMom
+          -minMomentum
     )
   ) {
     return reject(
-      `entry momentum below ${minMom}% threshold`,
+      `entry momentum below ${minMomentum}% threshold`,
       {
         minuteMomentumPct:
           momentum,
+
+        trend5Pct:
+          Number(
+            trend5.toFixed(
+              4
+            )
+          ),
+
+        trend15Pct:
+          Number(
+            trend15.toFixed(
+              4
+            )
+          ),
       }
     );
   }
@@ -1488,7 +1665,22 @@ function scoreDirection({
       direction
   ) {
     return reject(
-      `market regime is ${regime.direction}`
+      `market regime is ${regime.direction}`,
+      {
+        trend5Pct:
+          Number(
+            trend5.toFixed(
+              4
+            )
+          ),
+
+        trend15Pct:
+          Number(
+            trend15.toFixed(
+              4
+            )
+          ),
+      }
     );
   }
 
@@ -1524,11 +1716,33 @@ function scoreDirection({
     !vwapAligned
   ) {
     return reject(
-      'price is not aligned with VWAP'
+      'price is not aligned with VWAP',
+      {
+        trend5Pct:
+          Number(
+            trend5.toFixed(
+              4
+            )
+          ),
+
+        trend15Pct:
+          Number(
+            trend15.toFixed(
+              4
+            )
+          ),
+
+        minuteMomentumPct:
+          Number(
+            momentum.toFixed(
+              4
+            )
+          ),
+      }
     );
   }
 
-  const vr =
+  const recentVolume =
     volumeRatio(
       signalBars,
       Number(
@@ -1537,7 +1751,79 @@ function scoreDirection({
       )
     );
 
-  const rb =
+  // ========================================
+  // v18.1 EARLY ENTRY CONFIRMATION
+  // ========================================
+  //
+  // 15m is no longer an automatic rejection.
+  //
+  // If the slower 15m trend has NOT aligned yet,
+  // require:
+  // - 5m trend aligned
+  // - strong current momentum
+  // - at least acceptable relative volume
+  //
+  // This allows earlier entries while requiring
+  // extra evidence before trading against the
+  // slower trend measurement.
+
+  const strongMomentumAligned =
+    Math.abs(
+      momentum
+    ) >=
+      strongMomentum;
+
+  const volumeSupport =
+    recentVolume >=
+    Number(
+      config
+        .recentVolumeOkayRatio
+    );
+
+  const earlyEntryConfirmed =
+    aligned5 &&
+    strongMomentumAligned &&
+    volumeSupport;
+
+  if (
+    !aligned15 &&
+    !earlyEntryConfirmed
+  ) {
+    return reject(
+      '15m trend not aligned and early-entry confirmation is weak',
+      {
+        trend5Pct:
+          Number(
+            trend5.toFixed(
+              4
+            )
+          ),
+
+        trend15Pct:
+          Number(
+            trend15.toFixed(
+              4
+            )
+          ),
+
+        minuteMomentumPct:
+          Number(
+            momentum.toFixed(
+              4
+            )
+          ),
+
+        recentVolumeRatio:
+          Number(
+            recentVolume.toFixed(
+              3
+            )
+          ),
+      }
+    );
+  }
+
+  const rolling =
     rollingBreakout(
       signalBars,
       Number(
@@ -1560,8 +1846,10 @@ function scoreDirection({
       : null;
 
   const orbAligned =
-    !!orb
-      ?.available &&
+    Boolean(
+      orb
+        ?.available
+    ) &&
     (
       long
         ? orb.long
@@ -1569,8 +1857,10 @@ function scoreDirection({
     );
 
   const orbConfirmed =
-    !!orb
-      ?.available &&
+    Boolean(
+      orb
+        ?.available
+    ) &&
     (
       long
         ? orb
@@ -1579,37 +1869,30 @@ function scoreDirection({
             .confirmedShort
     );
 
-  const rollAligned =
+  const rollingAligned =
     long
-      ? rb.long
-      : rb.short;
+      ? rolling.long
+      : rolling.short;
 
-  const rollConfirmed =
+  const rollingConfirmed =
     long
-      ? rb
+      ? rolling
           .confirmedLong
-      : rb
+      : rolling
           .confirmedShort;
 
   const breakoutAligned =
     orbAligned ||
-    rollAligned;
+    rollingAligned;
 
   const breakoutConfirmed =
     orbConfirmed ||
-    rollConfirmed;
+    rollingConfirmed;
 
   const continuation =
-    a5 &&
-    vr >=
-      Number(
-        config
-          .recentVolumeOkayRatio
-      ) &&
-    Math.abs(
-      momentum
-    ) >=
-      strongMom;
+    aligned5 &&
+    volumeSupport &&
+    strongMomentumAligned;
 
   if (
     !breakoutAligned &&
@@ -1620,14 +1903,14 @@ function scoreDirection({
       {
         trend5Pct:
           Number(
-            t5.toFixed(
+            trend5.toFixed(
               4
             )
           ),
 
         trend15Pct:
           Number(
-            t15.toFixed(
+            trend15.toFixed(
               4
             )
           ),
@@ -1641,7 +1924,7 @@ function scoreDirection({
 
         recentVolumeRatio:
           Number(
-            vr.toFixed(
+            recentVolume.toFixed(
               3
             )
           ),
@@ -1654,21 +1937,21 @@ function scoreDirection({
       ? orbConfirmed
         ? 'ORB_CONFIRMED'
         : 'ORB'
-      : rollAligned
-        ? rollConfirmed
+      : rollingAligned
+        ? rollingConfirmed
           ? 'ROLLING_CONFIRMED'
           : 'ROLLING'
         : 'CONTINUATION';
 
-  const level =
+  const breakoutLevel =
     orbAligned
       ? long
         ? orb.high
         : orb.low
-      : rollAligned
+      : rollingAligned
         ? long
-          ? rb.high
-          : rb.low
+          ? rolling.high
+          : rolling.low
         : null;
 
   const atr =
@@ -1692,7 +1975,7 @@ function scoreDirection({
     );
   }
 
-  const vwapDist =
+  const vwapDistanceAtr =
     Number.isFinite(
       sessionVwap
     )
@@ -1703,7 +1986,7 @@ function scoreDirection({
         atr
       : Infinity;
 
-  const maxVwapDist =
+  const maxVwapDistanceAtr =
     Number(
       assetClass ===
       'crypto'
@@ -1714,30 +1997,30 @@ function scoreDirection({
     );
 
   if (
-    vwapDist >
-    maxVwapDist
+    vwapDistanceAtr >
+    maxVwapDistanceAtr
   ) {
     return reject(
-      `too extended from VWAP (${vwapDist.toFixed(2)} ATR)`
+      `too extended from VWAP (${vwapDistanceAtr.toFixed(2)} ATR)`
     );
   }
 
-  let breakoutDist =
+  let breakoutDistanceAtr =
     null;
 
   if (
     Number.isFinite(
-      level
+      breakoutLevel
     )
   ) {
-    breakoutDist =
+    breakoutDistanceAtr =
       Math.abs(
         price -
-        level
+        breakoutLevel
       ) /
       atr;
 
-    const maxBreakoutDist =
+    const maxBreakoutDistanceAtr =
       Number(
         assetClass ===
         'crypto'
@@ -1748,20 +2031,27 @@ function scoreDirection({
       );
 
     if (
-      breakoutDist >
-      maxBreakoutDist
+      breakoutDistanceAtr >
+      maxBreakoutDistanceAtr
     ) {
       return reject(
-        `late breakout chase (${breakoutDist.toFixed(2)} ATR)`
+        `late breakout chase (${breakoutDistanceAtr.toFixed(2)} ATR)`
       );
     }
   }
 
   const components = {
-    trend15: 2,
+    // v18.1:
+    // aligned 15m earns +2.
+    // non-aligned 15m can still qualify,
+    // but only after the early-entry hard confirmation above.
+    trend15:
+      aligned15
+        ? 2
+        : 0,
 
     trend5:
-      a5
+      aligned5
         ? 1
         : 0,
 
@@ -1773,13 +2063,13 @@ function scoreDirection({
           : 0,
 
     volume:
-      vr >=
+      recentVolume >=
       Number(
         config
           .recentVolumeStrongRatio
       )
         ? 2
-        : vr >=
+        : recentVolume >=
             Number(
               config
                 .recentVolumeOkayRatio
@@ -1808,10 +2098,7 @@ function scoreDirection({
         : 0,
 
     momentum:
-      Math.abs(
-        momentum
-      ) >=
-      strongMom
+      strongMomentumAligned
         ? 1
         : 0,
 
@@ -1825,8 +2112,12 @@ function scoreDirection({
         components
       )
       .reduce(
-        (s, x) =>
-          s + x,
+        (
+          sum,
+          value
+        ) =>
+          sum +
+          value,
         0
       );
 
@@ -1891,7 +2182,8 @@ function scoreDirection({
   }
 
   return {
-    eligible: true,
+    eligible:
+      true,
 
     score:
       Math.min(
@@ -1909,16 +2201,24 @@ function scoreDirection({
         ? 'breakout'
         : 'continuation',
 
+    earlyEntry:
+      !aligned15,
+
+    earlyEntryConfirmed:
+      !aligned15
+        ? earlyEntryConfirmed
+        : false,
+
     trend5Pct:
       Number(
-        t5.toFixed(
+        trend5.toFixed(
           4
         )
       ),
 
     trend15Pct:
       Number(
-        t15.toFixed(
+        trend15.toFixed(
           4
         )
       ),
@@ -1932,7 +2232,7 @@ function scoreDirection({
 
     recentVolumeRatio:
       Number(
-        vr.toFixed(
+        recentVolume.toFixed(
           3
         )
       ),
@@ -1959,16 +2259,17 @@ function scoreDirection({
 
     vwapDistanceAtr:
       Number(
-        vwapDist.toFixed(
+        vwapDistanceAtr.toFixed(
           3
         )
       ),
 
     breakoutDistanceAtr:
-      breakoutDist == null
+      breakoutDistanceAtr ==
+      null
         ? null
         : Number(
-            breakoutDist.toFixed(
+            breakoutDistanceAtr.toFixed(
               3
             )
           ),
@@ -1977,10 +2278,10 @@ function scoreDirection({
 
     breakoutLevel:
       Number.isFinite(
-        level
+        breakoutLevel
       )
         ? Number(
-            level.toFixed(
+            breakoutLevel.toFixed(
               6
             )
           )
@@ -1990,7 +2291,7 @@ function scoreDirection({
       orb,
 
     rollingBreakout:
-      rb,
+      rolling,
 
     regime,
 
@@ -2015,18 +2316,28 @@ function makeSignal(
     'crypto'
       ? detail.trigger ===
         'breakout'
-        ? 'CRYPTO_BREAKOUT_BALANCED'
-        : 'CRYPTO_CONTINUATION_BALANCED'
+        ? detail.earlyEntry
+          ? 'CRYPTO_BREAKOUT_EARLY'
+          : 'CRYPTO_BREAKOUT_BALANCED'
+        : detail.earlyEntry
+          ? 'CRYPTO_CONTINUATION_EARLY'
+          : 'CRYPTO_CONTINUATION_BALANCED'
       : detail
           .breakoutType
           ?.startsWith(
             'ORB'
           )
-        ? 'EQUITY_ORB_BALANCED'
+        ? detail.earlyEntry
+          ? 'EQUITY_ORB_EARLY'
+          : 'EQUITY_ORB_BALANCED'
         : detail.trigger ===
             'breakout'
-          ? 'EQUITY_BREAKOUT_BALANCED'
-          : 'EQUITY_CONTINUATION_BALANCED';
+          ? detail.earlyEntry
+            ? 'EQUITY_BREAKOUT_EARLY'
+            : 'EQUITY_BREAKOUT_BALANCED'
+          : detail.earlyEntry
+            ? 'EQUITY_CONTINUATION_EARLY'
+            : 'EQUITY_CONTINUATION_BALANCED';
 
   return {
     symbol:
@@ -2073,7 +2384,8 @@ export function evaluateEquityCandidate({
     !snapshot
   ) {
     return {
-      signal: null,
+      signal:
+        null,
 
       diagnostics: {
         long:
@@ -2160,7 +2472,10 @@ export function evaluateEquityCandidate({
   }
 
   choices.sort(
-    (a, b) =>
+    (
+      a,
+      b
+    ) =>
       b.detail
         .score -
       a.detail
@@ -2168,7 +2483,9 @@ export function evaluateEquityCandidate({
   );
 
   const chosen =
-    choices[0];
+    choices[
+      0
+    ];
 
   const price =
     currentPrice(
@@ -2194,7 +2511,8 @@ export function evaluateEquityCandidate({
     price <= 0
   ) {
     return {
-      signal: null,
+      signal:
+        null,
 
       diagnostics: {
         long,
@@ -2243,7 +2561,8 @@ export function evaluateCryptoCandidate({
     !snapshot
   ) {
     return {
-      signal: null,
+      signal:
+        null,
 
       diagnostics: {
         long:
@@ -2295,7 +2614,8 @@ export function evaluateCryptoCandidate({
     price <= 0
   ) {
     return {
-      signal: null,
+      signal:
+        null,
 
       diagnostics: {
         long:
@@ -2356,7 +2676,9 @@ export function isCoolingDown(
     trades ||
     []
   ).some(
-    trade => {
+    (
+      trade
+    ) => {
       if (
         String(
           trade.market ||
