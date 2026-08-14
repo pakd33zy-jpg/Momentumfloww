@@ -3954,7 +3954,6 @@ async function enter(
     );
 
   if (!best) {
-    if (!best) {
     const strategyEquity =
       state
         .scanDiagnostics
