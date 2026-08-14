@@ -1,0 +1,588 @@
+name: Install Market Volatility Graph
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/install-volatility-graph.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install volatility graph
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f"Could not find patch anchor: {label}")
+              return text.replace(old, new, 1)
+
+          p = Path("momentumflow/market.js")
+          s = p.read_text(encoding="utf-8")
+
+          if "getStockBars" not in s:
+              s = replace_once(
+                  s,
+                  "import {\n  getStockSnapshots,\n  getCryptoSnapshots,\n} from './alpacaClient.js';",
+                  "import {\n  getStockSnapshots,\n  getCryptoSnapshots,\n  getStockBars,\n} from './alpacaClient.js';",
+                  "market imports",
+              )
+
+          if "router.get(\n  '/volatility'," not in s:
+              endpoint = '''
+router.get(
+  '/volatility',
+  async (req, res) => {
+    try {
+      const mode = selectedMode();
+      const now = new Date();
+      const start = new Date(
+        now.getTime() -
+        4 * 24 * 60 * 60 * 1000
+      );
+
+      const data = await getStockBars(
+        mode,
+        ['SPY'],
+        {
+          timeframe: '1Min',
+          start,
+          end: now,
+          limit: 10000,
+          feed: 'iex',
+          sort: 'asc',
+          maxPages: 5,
+        }
+      );
+
+      const bars =
+        Array.isArray(data?.SPY)
+          ? data.SPY
+          : [];
+
+      const clean = bars
+        .map((bar) => ({
+          time:
+            bar?.t ||
+            bar?.timestamp ||
+            null,
+          close:
+            Number(bar?.c),
+        }))
+        .filter(
+          (bar) =>
+            bar.time &&
+            Number.isFinite(bar.close) &&
+            bar.close > 0
+        )
+        .slice(-180);
+
+      const returns = [];
+
+      for (let i = 1; i < clean.length; i += 1) {
+        const prev = clean[i - 1].close;
+        const curr = clean[i].close;
+
+        if (prev > 0 && curr > 0) {
+          returns.push({
+            time: clean[i].time,
+            value: Math.log(curr / prev),
+          });
+        }
+      }
+
+      const windowSize = 20;
+      const points = [];
+
+      for (
+        let i = windowSize - 1;
+        i < returns.length;
+        i += 1
+      ) {
+        const window = returns
+          .slice(i - windowSize + 1, i + 1)
+          .map((item) => item.value);
+
+        const mean =
+          window.reduce(
+            (sum, value) => sum + value,
+            0
+          ) / window.length;
+
+        const variance =
+          window.reduce(
+            (sum, value) =>
+              sum + (value - mean) ** 2,
+            0
+          ) /
+          Math.max(1, window.length - 1);
+
+        const annualizedPct =
+          Math.sqrt(variance) *
+          Math.sqrt(390 * 252) *
+          100;
+
+        points.push({
+          time: returns[i].time,
+          value: Number(
+            annualizedPct.toFixed(2)
+          ),
+        });
+      }
+
+      const trimmed =
+        points.slice(-120);
+
+      res.json({
+        symbol: 'SPY',
+        metric:
+          '20-minute annualized realized volatility',
+        source:
+          `alpaca_${mode}_iex`,
+        current:
+          trimmed.at(-1)?.value ?? null,
+        points: trimmed,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err.message,
+      });
+    }
+  }
+);
+'''
+              s = replace_once(
+                  s,
+                  "\nexport default router;",
+                  endpoint + "\nexport default router;",
+                  "market export",
+              )
+
+          p.write_text(s, encoding="utf-8")
+
+          p = Path(
+              "momentumflow/frontend/src/lib/api.js"
+          )
+          s = p.read_text(encoding="utf-8")
+
+          if "getMarketVolatility" not in s:
+              s = replace_once(
+                  s,
+                  "  getMarketGrid: () =>\n    request('/market/grid'),\n",
+                  "  getMarketGrid: () =>\n"
+                  "    request('/market/grid'),\n\n"
+                  "  getMarketVolatility: () =>\n"
+                  "    request('/market/volatility'),\n",
+                  "frontend market api",
+              )
+
+          p.write_text(s, encoding="utf-8")
+
+          component = r'''import {
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+
+import {
+  api,
+} from '../lib/api.js';
+
+function labelTime(value) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleTimeString(
+    [],
+    {
+      hour: 'numeric',
+      minute: '2-digit',
+    }
+  );
+}
+
+export default function MarketVolatilityCard() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      try {
+        const next =
+          await api.getMarketVolatility();
+
+        if (active) {
+          setData(next);
+          setError('');
+        }
+      } catch (err) {
+        if (active) {
+          setError(
+            err.message ||
+            'Volatility data unavailable'
+          );
+        }
+      }
+    }
+
+    load();
+    const timer = setInterval(load, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const chart = useMemo(() => {
+    const points =
+      Array.isArray(data?.points)
+        ? data.points
+        : [];
+
+    if (points.length < 2) {
+      return null;
+    }
+
+    const width = 1000;
+    const height = 240;
+    const padX = 28;
+    const padY = 22;
+
+    const values = points
+      .map((point) => Number(point.value))
+      .filter(Number.isFinite);
+
+    if (values.length < 2) {
+      return null;
+    }
+
+    let min = Math.min(...values);
+    let max = Math.max(...values);
+
+    if (max === min) {
+      max += 1;
+      min -= 1;
+    }
+
+    const plotWidth =
+      width - padX * 2;
+    const plotHeight =
+      height - padY * 2;
+
+    const xy = points.map(
+      (point, index) => {
+        const value =
+          Number(point.value);
+
+        const x =
+          padX +
+          (
+            index /
+            Math.max(1, points.length - 1)
+          ) *
+            plotWidth;
+
+        const y =
+          padY +
+          (
+            1 -
+            (value - min) /
+              (max - min)
+          ) *
+            plotHeight;
+
+        return {
+          ...point,
+          x,
+          y,
+        };
+      }
+    );
+
+    const path = xy
+      .map(
+        (point, index) =>
+          `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(
+            1
+          )} ${point.y.toFixed(1)}`
+      )
+      .join(' ');
+
+    return {
+      width,
+      height,
+      min,
+      max,
+      path,
+      first: xy[0],
+      last: xy.at(-1),
+    };
+  }, [data]);
+
+  const current =
+    Number(data?.current);
+
+  return (
+    <div
+      style={{
+        background: '#050505',
+        border: '1px solid #242424',
+        borderRadius: '12px',
+        padding: '18px',
+        marginBottom: '25px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: '16px',
+          marginBottom: '12px',
+        }}
+      >
+        <div>
+          <div
+            style={{
+              color: '#f8fafc',
+              fontSize: '18px',
+              fontWeight: 800,
+            }}
+          >
+            MARKET VOLATILITY
+          </div>
+
+          <div
+            style={{
+              color: '#8b8b8b',
+              fontSize: '12px',
+              marginTop: '4px',
+            }}
+          >
+            SPY - 20-minute realized volatility - Alpaca IEX
+          </div>
+        </div>
+
+        <div style={{ textAlign: 'right' }}>
+          <div
+            style={{
+              color: '#ef4444',
+              fontSize: '24px',
+              fontWeight: 800,
+            }}
+          >
+            {Number.isFinite(current)
+              ? `${current.toFixed(1)}%`
+              : '--'}
+          </div>
+
+          <div
+            style={{
+              color: '#737373',
+              fontSize: '11px',
+            }}
+          >
+            annualized
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          background: '#000',
+          border: '1px solid #171717',
+          borderRadius: '10px',
+          overflow: 'hidden',
+        }}
+      >
+        {chart ? (
+          <svg
+            viewBox={`0 0 ${chart.width} ${chart.height}`}
+            width="100%"
+            height="240"
+            role="img"
+            aria-label="SPY market volatility"
+          >
+            {[0.25, 0.5, 0.75].map(
+              (ratio) => (
+                <line
+                  key={ratio}
+                  x1="0"
+                  x2={chart.width}
+                  y1={chart.height * ratio}
+                  y2={chart.height * ratio}
+                  stroke="#171717"
+                  strokeWidth="1"
+                />
+              )
+            )}
+
+            <path
+              d={chart.path}
+              fill="none"
+              stroke="#ef4444"
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+
+            <circle
+              cx={chart.last.x}
+              cy={chart.last.y}
+              r="5"
+              fill="#ef4444"
+            />
+
+            <text
+              x="12"
+              y="18"
+              fill="#737373"
+              fontSize="13"
+            >
+              High {chart.max.toFixed(1)}%
+            </text>
+
+            <text
+              x="12"
+              y={chart.height - 8}
+              fill="#737373"
+              fontSize="13"
+            >
+              Low {chart.min.toFixed(1)}%
+            </text>
+
+            <text
+              x="35"
+              y={chart.height - 8}
+              fill="#737373"
+              fontSize="12"
+            >
+              {labelTime(chart.first.time)}
+            </text>
+
+            <text
+              x={chart.width - 35}
+              y={chart.height - 8}
+              textAnchor="end"
+              fill="#737373"
+              fontSize="12"
+            >
+              {labelTime(chart.last.time)}
+            </text>
+          </svg>
+        ) : (
+          <div
+            style={{
+              height: '240px',
+              display: 'grid',
+              placeItems: 'center',
+              color: error
+                ? '#f87171'
+                : '#737373',
+              fontSize: '13px',
+            }}
+          >
+            {error ||
+              'Loading volatility data...'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+'''
+          Path(
+              "momentumflow/frontend/src/components/MarketVolatilityCard.jsx"
+          ).write_text(
+              component,
+              encoding="utf-8",
+          )
+
+          p = Path(
+              "momentumflow/frontend/src/pages/Dashboard.jsx"
+          )
+          s = p.read_text(encoding="utf-8")
+
+          if "MarketVolatilityCard" not in s:
+              s = replace_once(
+                  s,
+                  "import TradingConfigPanel\n"
+                  "  from '../components/TradingConfigPanel.jsx';\n",
+                  "import TradingConfigPanel\n"
+                  "  from '../components/TradingConfigPanel.jsx';\n\n"
+                  "import MarketVolatilityCard\n"
+                  "  from '../components/MarketVolatilityCard.jsx';\n",
+                  "dashboard import",
+              )
+
+              marker = "      <button\n        onClick={() =>\n          setShowSettings(\n"
+              s = replace_once(
+                  s,
+                  marker,
+                  "      <MarketVolatilityCard />\n\n" + marker,
+                  "dashboard chart placement",
+              )
+
+          p.write_text(s, encoding="utf-8")
+
+          print("Market volatility graph installed.")
+          PY
+
+      - name: Validate backend JavaScript
+        run: |
+          node --check momentumflow/market.js
+          node --check momentumflow/server.js
+
+      - name: Validate frontend build
+        working-directory: momentumflow/frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Remove generated build output
+        shell: bash
+        run: |
+          git restore momentumflow/frontend/dist 2>/dev/null || true
+          git restore momentumflow/frontend/package-lock.json 2>/dev/null || true
+          git clean -fd momentumflow/frontend/dist 2>/dev/null || true
+
+      - name: Commit volatility graph
+        shell: bash
+        run: |
+          git config user.name "MomentumFlow Installer"
+          git config user.email "actions@users.noreply.github.com"
+
+          git add \
+            momentumflow/market.js \
+            momentumflow/frontend/src/lib/api.js \
+            momentumflow/frontend/src/components/MarketVolatilityCard.jsx \
+            momentumflow/frontend/src/pages/Dashboard.jsx
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Add SPY market volatility graph"
+          git push origin HEAD:main
