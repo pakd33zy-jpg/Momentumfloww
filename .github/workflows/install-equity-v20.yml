@@ -291,11 +291,8 @@ jobs:
               "waiting for v20 setup",
           )
 
-          if "crypto disabled by equity focus mode" not in s:
-              old = """  if (
-            cryptoSymbols.length
-          ) {
-          """
+    if "crypto disabled by equity focus mode" not in s:
+        old = "  if(\n    cryptoSymbols.length\n  ) {\n"
 
               new = """  const equityFocusMode =
             tradingCfg()
