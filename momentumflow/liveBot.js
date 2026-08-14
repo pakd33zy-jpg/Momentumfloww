@@ -1082,7 +1082,171 @@ function topReasons(
       })
     );
 }
+const REJECTION_LOG_INTERVAL_MS =
+  60 * 1000;
 
+const REJECTION_LOG_LIMIT =
+  500;
+
+function readRejectionLog(
+  limit = 100
+) {
+  const safeLimit =
+    Math.max(
+      1,
+      Math.min(
+        REJECTION_LOG_LIMIT,
+        Number(
+          limit ||
+          100
+        )
+      )
+    );
+
+  return store
+    .getAll(
+      'rejectionLog'
+    )
+    .slice(
+      -safeLimit
+    )
+    .reverse();
+}
+
+function recordRejectionSnapshot(
+  mode,
+  diagnostics,
+  nearMisses,
+  topCandidates
+) {
+  if (!diagnostics) {
+    return;
+  }
+
+  const now =
+    Date.now();
+
+  const entries =
+    store.getAll(
+      'rejectionLog'
+    );
+
+  const last =
+    entries.at(
+      -1
+    );
+
+  const lastTime =
+    last?.timestamp
+      ? new Date(
+          last.timestamp
+        ).getTime()
+      : 0;
+
+  // Only save one snapshot per minute.
+  // The bot still scans every few seconds.
+  if (
+    last &&
+    last.mode === mode &&
+    Number.isFinite(
+      lastTime
+    ) &&
+    now -
+      lastTime <
+      REJECTION_LOG_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  const counts =
+    diagnostics.counts ||
+    {};
+
+  const entry = {
+    id:
+      `reject-${now}`,
+
+    timestamp:
+      new Date(
+        now
+      ).toISOString(),
+
+    session_id:
+      state.sessionId,
+
+    mode,
+
+    strategy_version:
+      'v19-expectancy',
+
+    market_open:
+      Boolean(
+        diagnostics.marketOpen
+      ),
+
+    open_positions:
+      state.openTradeIds.length,
+
+    qualified:
+      Number(
+        counts.equityQualified ||
+        0
+      ) +
+      Number(
+        counts.cryptoQualified ||
+        0
+      ),
+
+    counts,
+
+    top_prefilter_rejections:
+      diagnostics
+        .topPrefilterRejections ||
+      {
+        equities: [],
+        crypto: [],
+      },
+
+    top_strategy_rejections:
+      diagnostics
+        .topStrategyRejections ||
+      {
+        equities: [],
+        crypto: [],
+      },
+
+    near_misses:
+      Array.isArray(
+        nearMisses
+      )
+        ? nearMisses.slice(
+            0,
+            10
+          )
+        : [],
+
+    top_candidates:
+      Array.isArray(
+        topCandidates
+      )
+        ? topCandidates.slice(
+            0,
+            5
+          )
+        : [],
+  };
+
+  entries.push(
+    entry
+  );
+
+  store.saveAll(
+    'rejectionLog',
+    entries.slice(
+      -REJECTION_LOG_LIMIT
+    )
+  );
+}
 function candidateDiagnosticReason(
   result,
   preferredDirection
@@ -2416,7 +2580,12 @@ async function scan(
         ),
     },
   };
-
+  recordRejectionSnapshot(
+    mode,
+    state.scanDiagnostics,
+    state.nearMisses,
+    state.topCandidates
+  );
   return (
     finalCandidates[0] ||
     null
@@ -3775,34 +3944,40 @@ async function enter(
 
     stop(
       `Safety halt: ${halt.reason}`
-    );
-
-    return false;
-  }
-
-  const best =
-    await scan(
-      mode
-    );
-
-  if (!best) {
-    const topEquity =
+    if (!best) {
+    const strategyEquity =
       state
         .scanDiagnostics
         ?.topStrategyRejections
         ?.equities
         ?.[0];
 
-    const topCrypto =
+    const strategyCrypto =
       state
         .scanDiagnostics
         ?.topStrategyRejections
         ?.crypto
         ?.[0];
 
+    const prefilterEquity =
+      state
+        .scanDiagnostics
+        ?.topPrefilterRejections
+        ?.equities
+        ?.[0];
+
+    const prefilterCrypto =
+      state
+        .scanDiagnostics
+        ?.topPrefilterRejections
+        ?.crypto
+        ?.[0];
+
     const top =
-      topEquity ||
-      topCrypto;
+      strategyEquity ||
+      strategyCrypto ||
+      prefilterEquity ||
+      prefilterCrypto;
 
     state.lastDecision =
       `${mode.toUpperCase()} scanning ` +
@@ -4438,7 +4613,54 @@ router.get(
     );
   }
 );
+// ========================================
+// STRATEGY REJECTION LOG
+// ========================================
 
+router.get(
+  '/rejection-log',
+
+  (
+    req,
+    res
+  ) => {
+    const limit =
+      Math.max(
+        1,
+        Math.min(
+          500,
+          Number(
+            req.query.limit ||
+            100
+          )
+        )
+      );
+
+    res.json(
+      readRejectionLog(
+        limit
+      )
+    );
+  }
+);
+
+router.delete(
+  '/rejection-log',
+
+  (
+    req,
+    res
+  ) => {
+    store.saveAll(
+      'rejectionLog',
+      []
+    );
+
+    res.json({
+      ok: true,
+    });
+  }
+);
 function localRemainingQty(
   trade
 ) {
