@@ -11,7 +11,25 @@ export const TRADING_DEFAULTS = {
   winRateTarget: 0.875,        // legacy paper simulator only
   dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
   consecutiveStopLoss: 3,
+  fastScalpEnabled: false,
 };
+
+const NUMERIC_KEYS = [
+  'startingCapital',
+  'riskPerTrade',
+  'maxTradesPerSession',
+  'maxTradesPerMarket',
+  'winRateTarget',
+  'dailyLossLimit',
+  'consecutiveStopLoss',
+];
+
+function asBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1') return true;
+  if (value === 0 || value === '0') return false;
+  return String(value || '').toLowerCase() === 'true';
+}
 
 function normalize(raw = {}) {
   const out = { ...TRADING_DEFAULTS, ...raw };
@@ -27,7 +45,9 @@ function normalize(raw = {}) {
     out.riskPerTrade = Number(raw.riskPerTradePct) / 100;
   }
 
-  for (const k of Object.keys(TRADING_DEFAULTS)) out[k] = Number(out[k]);
+  for (const k of NUMERIC_KEYS) out[k] = Number(out[k]);
+  out.fastScalpEnabled = asBoolean(out.fastScalpEnabled);
+
   if (raw.updatedAt) out.updatedAt = String(raw.updatedAt);
   return out;
 }
@@ -55,9 +75,26 @@ router.post('/', (req, res) => {
   const error = validate(merged);
   if (error) return res.status(400).json({ error });
 
-  // Server timestamp lets the frontend decide which copy is newest after a Railway restart.
+  const selectedMode = store.getConfig('tradingMode', { mode: 'paper' }).mode;
+  if (merged.fastScalpEnabled && selectedMode === 'live') {
+    return res.status(409).json({
+      error: 'Fast Scalp is PAPER-only. Switch to Paper Mode before enabling it.',
+    });
+  }
+
   merged.updatedAt = new Date().toISOString();
   store.setConfig('tradingConfig', merged);
+
+  // liveBot reads strategyConfig, so mirror the toggle and use a short
+  // cooldown while scalping. Turning Fast Scalp off restores v19's
+  // normal 30-minute crypto cooldown.
+  const strategyCurrent = store.getConfig('strategyConfig', {});
+  store.setConfig('strategyConfig', {
+    ...strategyCurrent,
+    fastScalpEnabled: merged.fastScalpEnabled,
+    cryptoCooldownMinutes: merged.fastScalpEnabled ? 1 : 30,
+  });
+
   res.json({ ...merged, source: 'railway-store' });
 });
 

@@ -9,6 +9,7 @@ import chatRouter from './chat.js';
 import tradingModeRouter from './tradingMode.js';
 import tradingConfigRouter from './tradingConfig.js';
 import liveBotRouter from './liveBot.js';
+import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { store } from './store.js';
 
 const app = express();
@@ -23,6 +24,7 @@ function resetToPaperModeOnBoot() {
   console.log(`[boot] LIVE_TRADING_ENABLED=${String(process.env.LIVE_TRADING_ENABLED).toLowerCase() === 'true'}`);
 }
 resetToPaperModeOnBoot();
+startFastScalpMonitor();
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 app.use('/api/credentials', credentialsRouter);

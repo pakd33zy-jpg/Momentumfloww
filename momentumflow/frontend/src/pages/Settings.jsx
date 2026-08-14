@@ -5,6 +5,7 @@ import TradingModeToggle from '../components/TradingModeToggle.jsx';
 import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 import { api } from '../lib/api.js';
 import RejectionLogPanel from '../components/RejectionLogPanel.jsx';
+import FastScalpToggle from '../components/FastScalpToggle.jsx';
 const EMPTY_CREDS = {
   paper: { configured: false, keyIdMasked: '' },
   live: { configured: false, keyIdMasked: '' },
@@ -184,6 +185,11 @@ export default function Settings() {
       </section>
 
            <section>
+      <h2 style={h2}>Fast Scalp</h2>
+      <FastScalpToggle />
+    </section>
+
+    <section>
         <h2 style={h2}>
           Strategy Analysis
         </h2>

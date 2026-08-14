@@ -12,9 +12,6 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/trading-mode — body: { mode: 'paper' | 'live' }
-// Switching to 'live' is refused unless the Live Gate is already fully unlocked —
-// this mirrors the same hard check used by the live trade endpoint itself, so the
-// mode switch can't become a second, weaker path into live trading.
 router.post('/', (req, res) => {
   const { mode } = req.body || {};
   if (!['paper', 'live'].includes(mode)) {
@@ -22,14 +19,31 @@ router.post('/', (req, res) => {
   }
 
   if (mode === 'live') {
+    const tradingConfig = store.getConfig('tradingConfig', {});
+    if (tradingConfig.fastScalpEnabled === true) {
+      return res.status(409).json({
+        error: 'Fast Scalp is PAPER-only. Turn Fast Scalp OFF before switching to LIVE.',
+      });
+    }
+
     const consents = store.getConfig('liveGateConsents', {});
-    const gate = evaluateLiveGate({ consents, hasLiveCredentials: hasCredentials('live') });
+    const gate = evaluateLiveGate({
+      consents,
+      hasLiveCredentials: hasCredentials('live'),
+    });
+
     if (!gate.allowed) {
-      return res.status(403).json({ error: `Can't switch to live: ${gate.reason}` });
+      return res.status(403).json({
+        error: `Can't switch to live: ${gate.reason}`,
+      });
     }
   }
 
-  const updated = store.setConfig('tradingMode', { mode, updated_at: new Date().toISOString() });
+  const updated = store.setConfig('tradingMode', {
+    mode,
+    updated_at: new Date().toISOString(),
+  });
+
   res.json(updated);
 });
 

@@ -16,6 +16,25 @@ export const STRATEGY_DEFAULTS = {
   equityScoreThreshold: 7,
   cryptoScoreThreshold: 8,
 
+  // PAPER-only 1-minute crypto Fast Scalp.
+  // It buys strong upward impulses, never opens a crypto short, and
+  // uses a separate reversal monitor to exit back to cash quickly.
+  fastScalpEnabled: false,
+  fastScalpScoreThreshold: 8,
+  fastScalpEntryMomentumPct: 0.65,
+  fastScalpMaxSpreadPct: 0.12,
+  fastScalpEstimatedRoundTripCostPct: 0.50,
+  fastScalpProfitBufferPct: 0.12,
+  fastScalpStopLossPct: 0.45,
+  fastScalpTakeProfitPct: 1.10,
+  fastScalpTrailTriggerPct: 0.70,
+  fastScalpTrailDistancePct: 0.18,
+  fastScalpTrailFloorPct: 0.55,
+  fastScalpMaxHoldMinutes: 6,
+  fastScalpReversalMomentumPct: -0.08,
+  fastScalpFadeMomentumPct: 0.02,
+  fastScalpCostLockPct: 0.60,
+
   maxDetailedEquities: 24,
   maxDetailedCrypto: 12,
 
@@ -2777,6 +2796,293 @@ export function buildEquitySignal(
   ).signal;
 }
 
+function evaluateCryptoFastScalpCandidate({
+  asset,
+  snapshot,
+  bars,
+  btcRegime,
+  config,
+  now,
+}) {
+  if (!asset || !snapshot) {
+    const detail = reject('FAST SCALP: missing asset or snapshot');
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const all = mergeCurrentMinuteBar(
+    bars || [],
+    snapshot
+  );
+
+  const signalBars = completedBars(
+    all,
+    now
+  );
+
+  if (signalBars.length < 6) {
+    const detail = reject(
+      'FAST SCALP: not enough completed 1-minute bars'
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const price = currentPrice(
+    snapshot,
+    all
+  );
+
+  if (!Number.isFinite(price) || price <= 0) {
+    const detail = reject('FAST SCALP: invalid current price');
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const momentum = minuteMomentumPct(snapshot);
+  const spread = spreadPct(snapshot);
+
+  if (spread == null) {
+    const detail = reject('FAST SCALP: spread unavailable');
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const maxSpread = Math.max(
+    0.01,
+    Number(config.fastScalpMaxSpreadPct ?? 0.12)
+  );
+
+  if (spread > maxSpread) {
+    const detail = reject(
+      `FAST SCALP: spread ${spread.toFixed(3)}% > ${maxSpread}%`,
+      {
+        spreadPct: Number(spread.toFixed(4)),
+        minuteMomentumPct: momentum,
+      }
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const estimatedCost = Math.max(
+    0,
+    Number(config.fastScalpEstimatedRoundTripCostPct ?? 0.50)
+  );
+
+  const profitBuffer = Math.max(
+    0,
+    Number(config.fastScalpProfitBufferPct ?? 0.12)
+  );
+
+  const entryFloor = Math.max(
+    0.01,
+    Number(config.fastScalpEntryMomentumPct ?? 0.65)
+  );
+
+  // Require the current 1-minute impulse to be large enough to clear
+  // estimated round-trip fees, the current spread, and a profit buffer.
+  const requiredImpulse = Math.max(
+    entryFloor,
+    estimatedCost + spread + profitBuffer
+  );
+
+  const trend3 = trendPct(signalBars, 3);
+  const trend5 = trendPct(signalBars, 5);
+  const trend15 = trendPct(signalBars, 15);
+
+  const previousClose = c(signalBars.at(-2));
+  const latestClose = c(signalBars.at(-1));
+
+  const completedMove =
+    Number.isFinite(previousClose) &&
+    Number.isFinite(latestClose) &&
+    previousClose > 0
+      ? ((latestClose - previousClose) / previousClose) * 100
+      : 0;
+
+  if (
+    momentum == null ||
+    momentum < requiredImpulse
+  ) {
+    const shown =
+      momentum == null
+        ? 'unavailable'
+        : `${momentum.toFixed(3)}%`;
+
+    const detail = reject(
+      `FAST SCALP: impulse ${shown} below cost-aware ${requiredImpulse.toFixed(3)}%`,
+      {
+        minuteMomentumPct: momentum,
+        trend5Pct: Number(trend5.toFixed(4)),
+        trend15Pct: Number(trend15.toFixed(4)),
+        spreadPct: Number(spread.toFixed(4)),
+      }
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  // A very strong live impulse may reverse a weak prior sell candle,
+  // but don't buy directly into a large completed dump unless the new
+  // impulse is clearly stronger than the normal entry requirement.
+  if (
+    completedMove < -0.30 &&
+    momentum < requiredImpulse + 0.25
+  ) {
+    const detail = reject(
+      'FAST SCALP: impulse not strong enough to reverse last completed selloff',
+      {
+        minuteMomentumPct: Number(momentum.toFixed(4)),
+        trend5Pct: Number(trend5.toFixed(4)),
+        trend15Pct: Number(trend15.toFixed(4)),
+        spreadPct: Number(spread.toFixed(4)),
+      }
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
+  const recentVolume = volumeRatio(signalBars, 6);
+
+  const components = {
+    costCoverage: 4,
+    impulse: 2,
+    tightSpread: spread <= maxSpread * 0.5 ? 1 : 0,
+    localTurn: trend3 > 0 || completedMove > 0 ? 1 : 0,
+    acceleration: momentum >= requiredImpulse + 0.20 ? 1 : 0,
+    volume: recentVolume >= 1.05 ? 1 : 0,
+  };
+
+  const score = Math.min(
+    10,
+    8 +
+      (components.acceleration ? 1 : 0) +
+      (components.localTurn ? 1 : 0)
+  );
+
+  const threshold = Number(
+    config.fastScalpScoreThreshold ?? 8
+  );
+
+  const detail = {
+    eligible: true,
+    score,
+    reason: null,
+    components,
+    trigger: 'fast_scalp',
+    earlyEntry: true,
+    earlyEntryConfirmed: true,
+    trend5Pct: Number(trend5.toFixed(4)),
+    trend15Pct: Number(trend15.toFixed(4)),
+    minuteMomentumPct: Number(momentum.toFixed(4)),
+    recentVolumeRatio: Number(recentVolume.toFixed(3)),
+    spreadPct: Number(spread.toFixed(4)),
+    vwap: null,
+    vwapDistanceAtr: null,
+    breakoutDistanceAtr: null,
+    breakoutType: 'FAST_SCALP_1M',
+    breakoutLevel: null,
+    openingRange: null,
+    rollingBreakout: null,
+    regime: btcRegime,
+    requiredImpulsePct: Number(requiredImpulse.toFixed(4)),
+    completedBarMovePct: Number(completedMove.toFixed(4)),
+    exitPlan: {
+      atrPct: null,
+      stopLossPct: Number(
+        config.fastScalpStopLossPct ?? 0.45
+      ),
+      takeProfitPct: Number(
+        config.fastScalpTakeProfitPct ?? 1.10
+      ),
+      estimatedRoundTripCostPct: estimatedCost,
+      netRewardRiskRatio: null,
+      trailTriggerPct: Number(
+        config.fastScalpTrailTriggerPct ?? 0.70
+      ),
+      trailDistancePct: Number(
+        config.fastScalpTrailDistancePct ?? 0.18
+      ),
+      trailFloorPct: Number(
+        config.fastScalpTrailFloorPct ?? 0.55
+      ),
+      breakoutFailureWindowMinutes: 0,
+      breakoutFailureAtr: 0,
+      maxHoldMinutes: Number(
+        config.fastScalpMaxHoldMinutes ?? 6
+      ),
+    },
+  };
+
+  if (score < threshold) {
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold,
+      },
+    };
+  }
+
+  return {
+    signal: {
+      symbol: asset.symbol,
+      name: asset.name || asset.symbol,
+      assetClass: 'crypto',
+      fractionable: true,
+      direction: 'LONG',
+      score,
+      price,
+      strategy: 'CRYPTO_FAST_SCALP',
+      signal: detail,
+    },
+    diagnostics: {
+      long: detail,
+      threshold,
+    },
+  };
+}
+
 export function evaluateCryptoCandidate({
   asset,
   snapshot,
@@ -2785,6 +3091,17 @@ export function evaluateCryptoCandidate({
   config = STRATEGY_DEFAULTS,
   now = new Date(),
 }) {
+  if (config.fastScalpEnabled === true) {
+  return evaluateCryptoFastScalpCandidate({
+    asset,
+    snapshot,
+    bars,
+    btcRegime,
+    config,
+    now,
+  });
+}
+
   if (
     !asset ||
     !snapshot
