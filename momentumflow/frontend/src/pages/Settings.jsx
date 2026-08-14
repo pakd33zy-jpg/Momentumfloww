@@ -4,7 +4,7 @@ import LiveGateChecklist from '../components/LiveGateChecklist.jsx';
 import TradingModeToggle from '../components/TradingModeToggle.jsx';
 import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 import { api } from '../lib/api.js';
-
+import RejectionLogPanel from '../components/RejectionLogPanel.jsx';
 const EMPTY_CREDS = {
   paper: { configured: false, keyIdMasked: '' },
   live: { configured: false, keyIdMasked: '' },
@@ -183,7 +183,13 @@ export default function Settings() {
         <TradingConfigPanel />
       </section>
 
-      <section>
+           <section>
+        <h2 style={h2}>
+          Strategy Analysis
+        </h2>
+
+        <RejectionLogPanel />
+      </section> <section>
         <h2 style={h2}>Safety behavior</h2>
         <div style={card}>
           <SafetyRow>Daily loss halt uses your saved Daily Loss Halt setting.</SafetyRow>
