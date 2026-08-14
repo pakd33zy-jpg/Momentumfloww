@@ -3941,9 +3941,19 @@ async function enter(
             .toISOString(),
       }
     );
-
     stop(
       `Safety halt: ${halt.reason}`
+    );
+
+    return false;
+  }
+
+  const best =
+    await scan(
+      mode
+    );
+
+  if (!best) {
     if (!best) {
     const strategyEquity =
       state
