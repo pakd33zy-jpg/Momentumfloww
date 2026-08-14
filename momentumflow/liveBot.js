@@ -37,30 +37,24 @@ import {
   spreadPct,
   buildEquityMarketRegime,
   buildCryptoMarketRegime,
-  buildEquitySignal,
-  buildCryptoSignal,
+  evaluateEquityCandidate,
+  evaluateCryptoCandidate,
   isCoolingDown,
 } from './strategyEngine.js';
 
-// UNIFIED BOT v17 PRECISION
+// UNIFIED BOT v18 BALANCED
 //
-// PAPER and LIVE use the same scanner, strategy, sizing,
-// entry handling, position management, and exits.
+// PAPER and LIVE use the same scanner, signals, sizing and execution path.
+// v18 changes:
+// - supports STRATEGY ENGINE v18 BALANCED
+// - larger staged scan
+// - rejection diagnostics + near misses
+// - stop-distance risk sizing with hard equity/notional caps
+// - terminal partial entry fills are tracked using actual filled quantity
+// - partial exit progress persists between retries
+// - startup checks local quantity against the Alpaca position
 //
-// v17:
-// - compatible with STRATEGY ENGINE v17 PRECISION
-// - up to 3 simultaneous positions by default
-// - staged equity/crypto scanning
-// - LONG + easy-to-borrow SHORT equities
-// - LONG-only crypto
-// - dynamic strategy stop / take-profit / trailing / max-hold exits
-// - terminal partial ENTRY fills tracked using actual filled quantity
-// - open entry remainder cancelled and rechecked before recording trade
-// - partial EXIT fills retried safely
-// - startup recovery requires local open trades to match broker positions
-//
-// No strategy guarantees profit.
-// Validate with Alpaca PAPER before using LIVE.
+// No strategy guarantees profit. Validate in Alpaca PAPER first.
 
 const router = express.Router();
 
@@ -75,11 +69,12 @@ const state = {
 
   openTradeIds: [],
   exitRetryPending: false,
-
   lastDecision: 'stopped',
 
   signalSnapshot: {},
   topCandidates: [],
+  nearMisses: [],
+  scanDiagnostics: null,
 
   universe: {
     equities: [],
@@ -93,110 +88,79 @@ const state = {
 
 const DEFAULTS = {
   pollSeconds: 5,
-
   maxOpenPositions: 3,
-
-  equityBatchSize: 75,
-
+  equityBatchSize: 120,
   universeRefreshMinutes: 15,
 
   minEquityPrice: 1,
-
   minDailyDollarVolume: 1000000,
-
   stockFeed: 'iex',
 
   fallbackTakeProfitPct: 0.60,
-
   fallbackStopLossPct: 0.40,
-
   fallbackMaxHoldMinutes: 15,
 
   entryWaitMs: 15000,
-
   entryCancelWaitMs: 30000,
-
   exitWaitMs: 15000,
-
   exitCancelWaitMs: 5000,
-
   maxExitAttempts: 3,
+
+  // riskPerTrade is interpreted as requested ACCOUNT risk.
+  // The bot caps effective risk even if Settings is higher.
+  maxRiskFraction: 0.01,
+
+  // Prevent tiny stops from creating huge leveraged positions.
+  maxPositionFractionOfEquity: 0.50,
 };
 
 const tradingCfg = () => ({
   riskPerTrade: 0.02,
-
-  ...store.getConfig(
-    'tradingConfig',
-    {}
-  ),
+  ...store.getConfig('tradingConfig', {}),
 });
 
 const cfg = () => ({
   ...DEFAULTS,
-
-  ...store.getConfig(
-    'liveBotConfig',
-    {}
-  ),
+  ...store.getConfig('liveBotConfig', {}),
 });
 
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
-
-  ...store.getConfig(
-    'strategyConfig',
-    {}
-  ),
+  ...store.getConfig('strategyConfig', {}),
 });
 
 function maxOpenPositions() {
-  const value =
-    Math.trunc(
-      Number(
-        cfg().maxOpenPositions ??
-        3
-      )
-    );
-
-  if (
-    !Number.isFinite(
-      value
-    )
-  ) {
-    return 3;
-  }
-
-  return Math.max(
-    1,
-    Math.min(
-      10,
-      value
+  const value = Math.trunc(
+    Number(
+      cfg().maxOpenPositions ??
+      3
     )
   );
+
+  return Number.isFinite(value)
+    ? Math.max(
+        1,
+        Math.min(
+          10,
+          value
+        )
+      )
+    : 3;
 }
 
 function selectedMode() {
-  const value =
-    store.getConfig(
-      'tradingMode',
-      {
-        mode: 'paper',
-      }
-    ).mode;
-
-  return value === 'live'
+  return store.getConfig(
+    'tradingMode',
+    {
+      mode: 'paper',
+    }
+  ).mode === 'live'
     ? 'live'
     : 'paper';
 }
 
-function accessCheck(
-  mode
-) {
-  if (
-    mode ===
-    'live'
-  ) {
+function accessCheck(mode) {
+  if (mode === 'live') {
     return evaluateLiveGate({
       consents:
         store.getConfig(
@@ -218,7 +182,6 @@ function accessCheck(
   ) {
     return {
       allowed: false,
-
       reason:
         'No Alpaca paper credentials on file.',
     };
@@ -230,7 +193,62 @@ function accessCheck(
   };
 }
 
+function effectiveRiskFraction() {
+  const requested =
+    Number(
+      tradingCfg()
+        .riskPerTrade ??
+      0.02
+    );
+
+  const cap =
+    Number(
+      cfg()
+        .maxRiskFraction ??
+      0.01
+    );
+
+  if (
+    !Number.isFinite(
+      requested
+    ) ||
+    requested <= 0 ||
+    requested > 1
+  ) {
+    throw new Error(
+      'Risk per trade must be between 0 and 1 (0.02 = 2%).'
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      cap
+    ) ||
+    cap <= 0 ||
+    cap > 1
+  ) {
+    throw new Error(
+      'liveBotConfig.maxRiskFraction must be between 0 and 1.'
+    );
+  }
+
+  return Math.min(
+    requested,
+    cap
+  );
+}
+
 function pub() {
+  let effectiveRisk =
+    null;
+
+  try {
+    effectiveRisk =
+      effectiveRiskFraction();
+  } catch {
+    // Status should still render if a saved risk setting is invalid.
+  }
+
   return {
     running:
       state.running,
@@ -277,6 +295,12 @@ function pub() {
     topCandidates:
       state.topCandidates,
 
+    nearMisses:
+      state.nearMisses,
+
+    scanDiagnostics:
+      state.scanDiagnostics,
+
     marketOpen:
       state.marketOpen,
 
@@ -309,15 +333,18 @@ function pub() {
       maxOpenPositions:
         maxOpenPositions(),
 
-      riskPerTrade:
+      requestedRiskPerTrade:
         Number(
           tradingCfg()
             .riskPerTrade ??
           0.02
         ),
 
+      effectiveRiskPerTrade:
+        effectiveRisk,
+
       sizingMode:
-        'alpaca_account_equity_fraction',
+        'stop_risk_with_equity_notional_cap',
 
       equityDirections:
         'LONG_AND_SHORT',
@@ -326,17 +353,15 @@ function pub() {
         'LONG_ONLY',
 
       execution:
-        state.mode ===
-        'paper'
+        state.mode === 'paper'
           ? 'ALPACA_PAPER'
-          : state.mode ===
-              'live'
+          : state.mode === 'live'
             ? 'ALPACA_LIVE'
             : null,
     },
 
     strategyVersion:
-      'v17-precision',
+      'v18-balanced',
 
     strategyConfig:
       strategyCfg(),
@@ -378,7 +403,8 @@ function schedule() {
       2,
 
       Number(
-        cfg().pollSeconds ||
+        cfg()
+          .pollSeconds ||
         5
       )
     );
@@ -557,7 +583,40 @@ function saveTradePatch(
     trades
   );
 
-  return trades[index];
+  return trades[
+    index
+  ];
+}
+
+function getExitProgress(
+  trade
+) {
+  return {
+    qty:
+      Number(
+        trade
+          ?.partial_exit_qty ||
+        0
+      ),
+
+    value:
+      Number(
+        trade
+          ?.partial_exit_value ||
+        0
+      ),
+
+    orderIds:
+      Array.isArray(
+        trade
+          ?.partial_exit_order_ids
+      )
+        ? [
+            ...trade
+              .partial_exit_order_ids,
+          ]
+        : [],
+  };
 }
 
 function isOrderStillOpen(
@@ -650,6 +709,108 @@ async function settleOrder({
   return order;
 }
 
+function recordExitOrderProgress(
+  trade,
+  order
+) {
+  const latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const progress =
+    getExitProgress(
+      latest
+    );
+
+  const orderId =
+    String(
+      order
+        ?.id ||
+      ''
+    );
+
+  if (!orderId) {
+    throw new Error(
+      `Exit order for ${trade.market} has no order id.`
+    );
+  }
+
+  if (
+    progress
+      .orderIds
+      .includes(
+        orderId
+      )
+  ) {
+    return latest;
+  }
+
+  const fillQty =
+    Number(
+      order
+        ?.filled_qty ||
+      0
+    );
+
+  const fillPrice =
+    Number(
+      order
+        ?.filled_avg_price
+    );
+
+  const patch = {
+    last_exit_order_status:
+      order
+        ?.status ||
+      null,
+  };
+
+  if (
+    fillQty > 0
+  ) {
+    if (
+      !Number.isFinite(
+        fillPrice
+      ) ||
+      fillPrice <= 0
+    ) {
+      throw new Error(
+        `Exit order ${orderId} filled ${fillQty} but has no valid filled_avg_price.`
+      );
+    }
+
+    patch.partial_exit_qty =
+      Number(
+        (
+          progress.qty +
+          fillQty
+        ).toFixed(
+          12
+        )
+      );
+
+    patch.partial_exit_value =
+      progress.value +
+      fillQty *
+        fillPrice;
+
+    patch.partial_exit_order_ids = [
+      ...progress
+        .orderIds,
+
+      orderId,
+    ];
+  }
+
+  return saveTradePatch(
+    trade.id,
+    patch
+  );
+}
+
 async function refreshUniverse(
   mode,
   force = false
@@ -671,7 +832,8 @@ async function refreshUniverse(
     !force &&
     age <
       Number(
-        c.universeRefreshMinutes
+        c
+          .universeRefreshMinutes
       ) *
         60000
   ) {
@@ -856,6 +1018,7 @@ function rankSignal(
 
     Math.min(
       0.5,
+
       Math.abs(
         Number(
           preMomentum ||
@@ -865,6 +1028,207 @@ function rankSignal(
         2
     )
   );
+}
+
+function bump(
+  map,
+  reason,
+  amount = 1
+) {
+  const key =
+    String(
+      reason ||
+      'unknown'
+    );
+
+  map[key] =
+    Number(
+      map[key] ||
+      0
+    ) +
+    amount;
+}
+
+function topReasons(
+  map,
+  limit = 8
+) {
+  return Object
+    .entries(
+      map ||
+      {}
+    )
+    .sort(
+      (
+        a,
+        b
+      ) =>
+        b[1] -
+        a[1]
+    )
+    .slice(
+      0,
+      limit
+    )
+    .map(
+      (
+        [
+          reason,
+          count,
+        ]
+      ) => ({
+        reason,
+        count,
+      })
+    );
+}
+
+function candidateDiagnosticReason(
+  result,
+  preferredDirection
+) {
+  const d =
+    result
+      ?.diagnostics ||
+    {};
+
+  const preferred =
+    preferredDirection ===
+    'SHORT'
+      ? d.short
+      : d.long;
+
+  const other =
+    preferredDirection ===
+    'SHORT'
+      ? d.long
+      : d.short;
+
+  const threshold =
+    Number(
+      d.threshold
+    );
+
+  for (
+    const detail of
+    [
+      preferred,
+      other,
+    ]
+  ) {
+    if (!detail) {
+      continue;
+    }
+
+    if (
+      detail.eligible
+    ) {
+      const score =
+        Number(
+          detail.score ||
+          0
+        );
+
+      if (
+        Number.isFinite(
+          threshold
+        ) &&
+        score <
+          threshold
+      ) {
+        return (
+          `score ${score}/10 below threshold ${threshold}`
+        );
+      }
+
+      return (
+        'eligible but no signal returned'
+      );
+    }
+
+    if (
+      detail.reason
+    ) {
+      return detail.reason;
+    }
+  }
+
+  return (
+    'strategy rejected candidate'
+  );
+}
+
+function pushNearMiss(
+  list,
+  {
+    symbol,
+    assetClass,
+    direction,
+    result,
+    momentum,
+  }
+) {
+  const d =
+    result
+      ?.diagnostics ||
+    {};
+
+  const detail =
+    direction ===
+    'SHORT'
+      ? d.short
+      : d.long;
+
+  const score =
+    Number(
+      detail
+        ?.score ||
+      0
+    );
+
+  list.push({
+    symbol,
+    assetClass,
+    direction,
+    score,
+
+    reason:
+      candidateDiagnosticReason(
+        result,
+        direction
+      ),
+
+    minuteMomentumPct:
+      momentum == null
+        ? null
+        : Number(
+            Number(
+              momentum
+            ).toFixed(
+              4
+            )
+          ),
+
+    trend5Pct:
+      detail
+        ?.trend5Pct ??
+      null,
+
+    trend15Pct:
+      detail
+        ?.trend15Pct ??
+      null,
+
+    recentVolumeRatio:
+      detail
+        ?.recentVolumeRatio ??
+      null,
+
+    spreadPct:
+      detail
+        ?.spreadPct ??
+      null,
+  });
 }
 
 async function scan(
@@ -922,8 +1286,63 @@ async function scan(
   const finalCandidates =
     [];
 
+  const nearMisses =
+    [];
+
   const snapshotsForStatus =
     {};
+
+  const diag = {
+    scannedAt:
+      now.toISOString(),
+
+    marketOpen:
+      null,
+
+    prefilter: {
+      crypto:
+        {},
+
+      equities:
+        {},
+    },
+
+    strategy: {
+      crypto:
+        {},
+
+      equities:
+        {},
+    },
+
+    counts: {
+      cryptoUniverse:
+        state.universe
+          .crypto.length,
+
+      equityUniverse:
+        state.universe
+          .equities.length,
+
+      cryptoPrefilterPassed:
+        0,
+
+      equityPrefilterPassed:
+        0,
+
+      cryptoDetailed:
+        0,
+
+      equityDetailed:
+        0,
+
+      cryptoQualified:
+        0,
+
+      equityQualified:
+        0,
+    },
+  };
 
   // ========================================
   // CRYPTO
@@ -977,6 +1396,14 @@ async function scan(
         ];
 
       if (!snapshot) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'no snapshot'
+        );
+
         continue;
       }
 
@@ -990,26 +1417,9 @@ async function scan(
           snapshot
         );
 
-      const eligible =
-        !blocked.has(
-          normPos(
-            asset.symbol
-          )
-        ) &&
-
-        canTradeMarket(
-          trades,
+      const normalized =
+        normPos(
           asset.symbol
-        ) &&
-
-        !isCoolingDown(
-          trades,
-          asset.symbol,
-
-          Number(
-            sc
-              .cryptoCooldownMinutes
-          )
         );
 
       snapshotsForStatus[
@@ -1037,14 +1447,73 @@ async function scan(
                     4
                   )
               ),
-
-        eligible,
       };
 
       if (
-        !eligible ||
+        blocked.has(
+          normalized
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'already in position/open trade'
+        );
+
+        continue;
+      }
+
+      if (
+        !canTradeMarket(
+          trades,
+          asset.symbol
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'market trade cap reached'
+        );
+
+        continue;
+      }
+
+      if (
+        isCoolingDown(
+          trades,
+          asset.symbol,
+          Number(
+            sc
+              .cryptoCooldownMinutes
+          )
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'cooldown'
+        );
+
+        continue;
+      }
+
+      if (
         momentum == null
       ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'missing minute momentum'
+        );
+
         continue;
       }
 
@@ -1055,6 +1524,14 @@ async function scan(
             .cryptoPrefilterMomentumPct
         )
       ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'below crypto prefilter momentum'
+        );
+
         continue;
       }
 
@@ -1066,8 +1543,21 @@ async function scan(
               .maxCryptoSpreadPct
           )
       ) {
+        bump(
+          diag
+            .prefilter
+            .crypto,
+
+          'spread above crypto max'
+        );
+
         continue;
       }
+
+      diag
+        .counts
+        .cryptoPrefilterPassed +=
+        1;
 
       pre.push({
         asset,
@@ -1099,23 +1589,27 @@ async function scan(
         )
       );
 
+    diag
+      .counts
+      .cryptoDetailed =
+      shortlist.length;
+
     if (
       shortlist.length
     ) {
-      const detailSymbols =
-        [
-          ...new Set([
-            ...shortlist.map(
-              (
-                item
-              ) =>
-                item.asset
-                  .symbol
-            ),
+      const detailSymbols = [
+        ...new Set([
+          ...shortlist.map(
+            (
+              item
+            ) =>
+              item.asset
+                .symbol
+          ),
 
-            'BTC/USD',
-          ]),
-        ];
+          'BTC/USD',
+        ]),
+      ];
 
       const barsBySymbol =
         await getCryptoBars(
@@ -1152,8 +1646,8 @@ async function scan(
         const item of
         shortlist
       ) {
-        const signal =
-          buildCryptoSignal({
+        const result =
+          evaluateCryptoCandidate({
             asset:
               item.asset,
 
@@ -1175,9 +1669,51 @@ async function scan(
             now,
           });
 
+        const signal =
+          result.signal;
+
         if (!signal) {
+          const reason =
+            candidateDiagnosticReason(
+              result,
+              'LONG'
+            );
+
+          bump(
+            diag
+              .strategy
+              .crypto,
+
+            reason
+          );
+
+          pushNearMiss(
+            nearMisses,
+            {
+              symbol:
+                item.asset
+                  .symbol,
+
+              assetClass:
+                'crypto',
+
+              direction:
+                'LONG',
+
+              result,
+
+              momentum:
+                item.momentum,
+            }
+          );
+
           continue;
         }
+
+        diag
+          .counts
+          .cryptoQualified +=
+          1;
 
         signal.prefilterMomentumPct =
           Number(
@@ -1211,8 +1747,12 @@ async function scan(
 
   state.marketOpen =
     Boolean(
-      clock?.is_open
+      clock
+        ?.is_open
     );
+
+  diag.marketOpen =
+    state.marketOpen;
 
   if (
     state.marketOpen &&
@@ -1252,6 +1792,14 @@ async function scan(
         ];
 
       if (!snapshot) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'no snapshot'
+        );
+
         continue;
       }
 
@@ -1274,9 +1822,18 @@ async function scan(
         ) ||
         price <
           Number(
-            c.minEquityPrice
+            c
+              .minEquityPrice
           )
       ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'price below minimum/invalid'
+        );
+
         continue;
       }
 
@@ -1292,6 +1849,14 @@ async function scan(
             .minDailyDollarVolume
         )
       ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'daily dollar volume below minimum'
+        );
+
         continue;
       }
 
@@ -1303,28 +1868,6 @@ async function scan(
       const spread =
         spreadPct(
           snapshot
-        );
-
-      const eligible =
-        !blocked.has(
-          normPos(
-            asset.symbol
-          )
-        ) &&
-
-        canTradeMarket(
-          trades,
-          asset.symbol
-        ) &&
-
-        !isCoolingDown(
-          trades,
-          asset.symbol,
-
-          Number(
-            sc
-              .equityCooldownMinutes
-          )
         );
 
       snapshotsForStatus[
@@ -1365,14 +1908,75 @@ async function scan(
         easyToBorrow:
           asset.easy_to_borrow ===
           true,
-
-        eligible,
       };
 
       if (
-        !eligible ||
+        blocked.has(
+          normPos(
+            asset.symbol
+          )
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'already in position/open trade'
+        );
+
+        continue;
+      }
+
+      if (
+        !canTradeMarket(
+          trades,
+          asset.symbol
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'market trade cap reached'
+        );
+
+        continue;
+      }
+
+      if (
+        isCoolingDown(
+          trades,
+          asset.symbol,
+          Number(
+            sc
+              .equityCooldownMinutes
+          )
+        )
+      ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'cooldown'
+        );
+
+        continue;
+      }
+
+      if (
         momentum == null
       ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'missing minute momentum'
+        );
+
         continue;
       }
 
@@ -1389,10 +1993,8 @@ async function scan(
       const shortPrefilter =
         momentum <=
           -threshold &&
-
         asset.shortable ===
           true &&
-
         asset.easy_to_borrow ===
           true;
 
@@ -1400,6 +2002,14 @@ async function scan(
         !longPrefilter &&
         !shortPrefilter
       ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'below equity prefilter momentum'
+        );
+
         continue;
       }
 
@@ -1411,8 +2021,21 @@ async function scan(
               .maxEquitySpreadPct
           )
       ) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+
+          'spread above equity max'
+        );
+
         continue;
       }
+
+      diag
+        .counts
+        .equityPrefilterPassed +=
+        1;
 
       pre.push({
         asset,
@@ -1448,24 +2071,28 @@ async function scan(
         )
       );
 
+    diag
+      .counts
+      .equityDetailed =
+      shortlist.length;
+
     if (
       shortlist.length
     ) {
-      const detailSymbols =
-        [
-          ...new Set([
-            ...shortlist.map(
-              (
-                item
-              ) =>
-                item.asset
-                  .symbol
-            ),
+      const detailSymbols = [
+        ...new Set([
+          ...shortlist.map(
+            (
+              item
+            ) =>
+              item.asset
+                .symbol
+          ),
 
-            'SPY',
-            'QQQ',
-          ]),
-        ];
+          'SPY',
+          'QQQ',
+        ]),
+      ];
 
       const barsBySymbol =
         await getStockBars(
@@ -1509,8 +2136,13 @@ async function scan(
         const item of
         shortlist
       ) {
-        const signal =
-          buildEquitySignal({
+        const preferredDirection =
+          item.momentum >= 0
+            ? 'LONG'
+            : 'SHORT';
+
+        const result =
+          evaluateEquityCandidate({
             asset:
               item.asset,
 
@@ -1532,9 +2164,51 @@ async function scan(
             now,
           });
 
+        const signal =
+          result.signal;
+
         if (!signal) {
+          const reason =
+            candidateDiagnosticReason(
+              result,
+              preferredDirection
+            );
+
+          bump(
+            diag
+              .strategy
+              .equities,
+
+            reason
+          );
+
+          pushNearMiss(
+            nearMisses,
+            {
+              symbol:
+                item.asset
+                  .symbol,
+
+              assetClass:
+                'us_equity',
+
+              direction:
+                preferredDirection,
+
+              result,
+
+              momentum:
+                item.momentum,
+            }
+          );
+
           continue;
         }
+
+        diag
+          .counts
+          .equityQualified +=
+          1;
 
         signal.prefilterMomentumPct =
           Number(
@@ -1555,6 +2229,16 @@ async function scan(
         );
       }
     }
+  } else if (
+    !state.marketOpen
+  ) {
+    bump(
+      diag
+        .prefilter
+        .equities,
+
+      'regular equity market closed'
+    );
   }
 
   finalCandidates.sort(
@@ -1572,12 +2256,27 @@ async function scan(
       )
   );
 
+  nearMisses.sort(
+    (
+      a,
+      b
+    ) =>
+      Number(
+        b.score ||
+        0
+      ) -
+      Number(
+        a.score ||
+        0
+      )
+  );
+
   state.signalSnapshot =
     Object.fromEntries(
       Object.entries(
         snapshotsForStatus
       ).slice(
-        -30
+        -50
       )
     );
 
@@ -1592,8 +2291,7 @@ async function scan(
           candidate
         ) => ({
           symbol:
-            candidate
-              .symbol,
+            candidate.symbol,
 
           assetClass:
             candidate
@@ -1608,8 +2306,17 @@ async function scan(
               .strategy,
 
           score:
-            candidate
-              .score,
+            candidate.score,
+
+          rank:
+            Number(
+              Number(
+                candidate.rank ||
+                candidate.score
+              ).toFixed(
+                4
+              )
+            ),
 
           price:
             Number(
@@ -1667,6 +2374,48 @@ async function scan(
             null,
         })
       );
+
+  state.nearMisses =
+    nearMisses.slice(
+      0,
+      10
+    );
+
+  state.scanDiagnostics = {
+    ...diag,
+
+    topPrefilterRejections: {
+      crypto:
+        topReasons(
+          diag
+            .prefilter
+            .crypto
+        ),
+
+      equities:
+        topReasons(
+          diag
+            .prefilter
+            .equities
+        ),
+    },
+
+    topStrategyRejections: {
+      crypto:
+        topReasons(
+          diag
+            .strategy
+            .crypto
+        ),
+
+      equities:
+        topReasons(
+          diag
+            .strategy
+            .equities
+        ),
+    },
+  };
 
   return (
     finalCandidates[0] ||
@@ -1777,8 +2526,21 @@ function finalizeTradeClosure(
     );
   }
 
+  const current =
+    trades[index];
+
+  const progress =
+    getExitProgress(
+      current
+    );
+
+  const ids =
+    exitOrderIds.length
+      ? exitOrderIds
+      : progress.orderIds;
+
   trades[index] = {
-    ...trades[index],
+    ...current,
 
     exit_price:
       exitPrice,
@@ -1799,21 +2561,27 @@ function finalizeTradeClosure(
       qty,
 
     exit_order_id:
-      exitOrderIds[
-        exitOrderIds.length -
+      ids[
+        ids.length -
         1
       ] ||
       null,
 
     exit_order_ids:
       [
-        ...exitOrderIds,
+        ...ids,
       ],
 
     reconciled_exit:
       Boolean(
         reconciled
       ),
+
+    pending_exit_reason:
+      null,
+
+    pending_exit_started_at:
+      null,
 
     closed_at:
       new Date()
@@ -1833,8 +2601,7 @@ function finalizeTradeClosure(
 
   if (session) {
     session.consecutive_losses =
-      result ===
-      'loss'
+      result === 'loss'
         ? Number(
             session
               .consecutive_losses ||
@@ -1881,12 +2648,45 @@ async function closeTrade(
   price,
   reason
 ) {
+  let latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const lockedReason =
+    latest
+      .pending_exit_reason ||
+    reason;
+
+  if (
+    !latest
+      .pending_exit_reason
+  ) {
+    latest =
+      saveTradePatch(
+        latest.id,
+        {
+          pending_exit_reason:
+            lockedReason,
+
+          pending_exit_started_at:
+            new Date()
+              .toISOString(),
+        }
+      );
+  }
+
+  reason =
+    lockedReason;
+
   const recordedQty =
     Number(
       positiveQtyString(
-        trade
+        latest
           .filled_qty ??
-        trade.qty
+        latest.qty
       )
     );
 
@@ -1902,16 +2702,16 @@ async function closeTrade(
   }
 
   const direction =
-    trade.direction ===
+    latest.direction ===
     'SHORT'
       ? 'SHORT'
       : 'LONG';
 
   const assetClass =
-    trade.asset_class ||
+    latest.asset_class ||
     (
       String(
-        trade.market
+        latest.market
       ).includes(
         '/'
       )
@@ -1923,15 +2723,6 @@ async function closeTrade(
     assetClass ===
     'crypto';
 
-  let totalExitQty =
-    0;
-
-  let totalExitValue =
-    0;
-
-  const exitOrderIds =
-    [];
-
   for (
     let attempt = 1;
     attempt <=
@@ -1942,15 +2733,24 @@ async function closeTrade(
       );
     attempt += 1
   ) {
-    const positions =
-      await getPositions(
-        mode
+    latest =
+      store.getOne(
+        'trades',
+        trade.id
+      ) ||
+      latest;
+
+    const progress =
+      getExitProgress(
+        latest
       );
 
-    const position =
-      findMatchingPosition(
-        positions,
-        trade.market
+    const remainingRecorded =
+      Math.max(
+        0,
+
+        recordedQty -
+        progress.qty
       );
 
     const tolerance =
@@ -1961,57 +2761,61 @@ async function closeTrade(
         1e-12
       );
 
-    const remainingRecorded =
-      Math.max(
-        0,
-
-        recordedQty -
-        totalExitQty
-      );
-
     if (
       remainingRecorded <=
-      tolerance
+        tolerance &&
+      progress.qty > 0
     ) {
       return finalizeTradeClosure(
         mode,
-        trade,
+        latest,
         {
           exitQty:
-            totalExitQty,
+            progress.qty,
 
           exitValue:
-            totalExitValue,
+            progress.value,
 
           reason,
 
-          exitOrderIds,
+          exitOrderIds:
+            progress.orderIds,
 
           reconciled:
-            attempt >
-            1,
+            attempt > 1,
         }
       );
     }
 
+    const positions =
+      await getPositions(
+        mode
+      );
+
+    const position =
+      findMatchingPosition(
+        positions,
+        latest.market
+      );
+
     if (!position) {
       if (
-        totalExitQty >
-        0
+        progress.qty > 0
       ) {
         return finalizeTradeClosure(
           mode,
-          trade,
+          latest,
           {
             exitQty:
-              totalExitQty,
+              progress.qty,
 
             exitValue:
-              totalExitValue,
+              progress.value,
 
             reason,
 
-            exitOrderIds,
+            exitOrderIds:
+              progress.orderIds,
 
             reconciled:
               true,
@@ -2020,7 +2824,7 @@ async function closeTrade(
       }
 
       throw new Error(
-        `No matching Alpaca ${mode} position exists for ${trade.market}.`
+        `No matching Alpaca ${mode} position exists for ${latest.market}.`
       );
     }
 
@@ -2043,7 +2847,7 @@ async function closeTrade(
       availableQty <= 0
     ) {
       throw new Error(
-        `Alpaca reports no available quantity to close for ${trade.market}.`
+        `Alpaca reports no available quantity to close for ${latest.market}.`
       );
     }
 
@@ -2060,7 +2864,7 @@ async function closeTrade(
       closeQty <= 0
     ) {
       throw new Error(
-        `Invalid close quantity for ${trade.market}.`
+        `Invalid close quantity for ${latest.market}.`
       );
     }
 
@@ -2092,7 +2896,7 @@ async function closeTrade(
         : 'sell';
 
     state.lastDecision =
-      `closing ${mode.toUpperCase()} ${direction} ${trade.market} ` +
+      `closing ${mode.toUpperCase()} ${direction} ${latest.market} ` +
       `qty ${closeQtyString} — ${reason} — attempt ${attempt}`;
 
     const order =
@@ -2100,7 +2904,7 @@ async function closeTrade(
         mode,
 
         symbol:
-          trade.market,
+          latest.market,
 
         qty:
           closeQtyString,
@@ -2152,45 +2956,16 @@ async function closeTrade(
       );
     }
 
-    const fillQty =
-      Number(
+    latest =
+      recordExitOrderProgress(
+        latest,
         settled
-          .filled_qty ||
-        0
       );
 
-    const fillPrice =
-      Number(
-        settled
-          .filled_avg_price
+    const updatedProgress =
+      getExitProgress(
+        latest
       );
-
-    exitOrderIds.push(
-      order.id
-    );
-
-    if (
-      fillQty >
-      0
-    ) {
-      if (
-        !Number.isFinite(
-          fillPrice
-        ) ||
-        fillPrice <= 0
-      ) {
-        throw new Error(
-          `Exit order ${order.id} filled ${fillQty} but has no valid filled_avg_price.`
-        );
-      }
-
-      totalExitQty +=
-        fillQty;
-
-      totalExitValue +=
-        fillQty *
-        fillPrice;
-    }
 
     const afterPositions =
       await getPositions(
@@ -2200,38 +2975,39 @@ async function closeTrade(
     const remainingPosition =
       findMatchingPosition(
         afterPositions,
-        trade.market
+        latest.market
       );
 
     if (
       !remainingPosition
     ) {
       if (
-        totalExitQty <=
+        updatedProgress.qty <=
         0
       ) {
         throw new Error(
-          `Alpaca no longer shows ${trade.market}, but no executed exit quantity was reported.`
+          `Alpaca no longer shows ${latest.market}, but exit order ${order.id} ` +
+          `reported no executed quantity.`
         );
       }
 
       return finalizeTradeClosure(
         mode,
-        trade,
+        latest,
         {
           exitQty:
-            totalExitQty,
+            updatedProgress.qty,
 
           exitValue:
-            totalExitValue,
+            updatedProgress.value,
 
           reason,
 
-          exitOrderIds,
+          exitOrderIds:
+            updatedProgress.orderIds,
 
           reconciled:
-            attempt >
-              1 ||
+            attempt > 1 ||
             settled.status !==
               'filled',
         }
@@ -2239,11 +3015,14 @@ async function closeTrade(
     }
 
     if (
-      fillQty <= 0 &&
+      Number(
+        settled
+          .filled_qty ||
+        0
+      ) <= 0 &&
       [
         'rejected',
         'expired',
-        'canceled',
       ].includes(
         String(
           settled.status ||
@@ -2252,7 +3031,7 @@ async function closeTrade(
       )
     ) {
       throw new Error(
-        `Exit order ${order.id} ended ${settled.status} without a fill for ${trade.market}.`
+        `Exit order ${order.id} ${settled.status} without a fill for ${latest.market}.`
       );
     }
   }
@@ -2260,10 +3039,10 @@ async function closeTrade(
   state.exitRetryPending =
     true;
 
-  throw new Error(
-    `Partial exit remains for ${trade.market} after retry limit. ` +
-    `Check the Alpaca ${mode} account before restarting.`
-  );
+  state.lastDecision =
+    `partial exit remains for ${latest.market}; will retry before any new entry`;
+
+  return false;
 }
 
 async function manageOne(
@@ -2386,6 +3165,32 @@ async function manageOne(
         .fallbackMaxHoldMinutes
     );
 
+  const existingProgress =
+    getExitProgress(
+      trade
+    );
+
+  if (
+    trade
+      .pending_exit_reason ||
+    existingProgress.qty > 0
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        trade
+          .pending_exit_reason ||
+        'continuing partial exit'
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
   const previousBest =
     Number(
       trade
@@ -2428,82 +3233,91 @@ async function manageOne(
     favorableMove >=
     takeProfitPct
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} dynamic take profit +${favorableMove.toFixed(
-        3
-      )}%`
-    );
+        `${direction} dynamic take profit +${favorableMove.toFixed(
+          3
+        )}%`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   if (
     favorableMove <=
     -stopLossPct
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} dynamic stop loss ${favorableMove.toFixed(
-        3
-      )}%`
-    );
+        `${direction} dynamic stop loss ${favorableMove.toFixed(
+          3
+        )}%`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   if (
     Number.isFinite(
       trailTriggerPct
     ) &&
-
     Number.isFinite(
       trailDistancePct
     ) &&
-
     bestMove >=
       trailTriggerPct &&
-
     favorableMove <=
       bestMove -
       trailDistancePct
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} trailing exit; best +${bestMove.toFixed(
-        3
-      )}%, now ${favorableMove.toFixed(
-        3
-      )}%`
-    );
+        `${direction} trailing exit; best +${bestMove.toFixed(
+          3
+        )}%, now ${favorableMove.toFixed(
+          3
+        )}%`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   if (
     ageMinutes >=
     maxHoldMinutes
   ) {
-    await closeTrade(
-      mode,
-      trade,
-      price,
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
 
-      `${direction} max hold ${ageMinutes.toFixed(
-        1
-      )}m`
-    );
+        `${direction} max hold ${ageMinutes.toFixed(
+          1
+        )}m`
+      );
 
-    return 'closed';
+    return closed
+      ? 'closed'
+      : 'open';
   }
 
   return 'open';
@@ -2602,6 +3416,126 @@ async function settleEntry(
   return fill;
 }
 
+function buildPositionBudget({
+  equity,
+  buyingPower,
+  best,
+}) {
+  const requestedRisk =
+    Number(
+      tradingCfg()
+        .riskPerTrade ??
+      0.02
+    );
+
+  const effectiveRisk =
+    effectiveRiskFraction();
+
+  const stopPct =
+    Number(
+      best
+        ?.signal
+        ?.exitPlan
+        ?.stopLossPct ??
+      cfg()
+        .fallbackStopLossPct
+    );
+
+  if (
+    !Number.isFinite(
+      equity
+    ) ||
+    equity <= 0
+  ) {
+    throw new Error(
+      'Account equity is invalid for position sizing.'
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      buyingPower
+    ) ||
+    buyingPower <= 0
+  ) {
+    throw new Error(
+      'Account buying power is invalid for position sizing.'
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      stopPct
+    ) ||
+    stopPct <= 0
+  ) {
+    throw new Error(
+      `Invalid stop distance for ${best.symbol}.`
+    );
+  }
+
+  const riskDollars =
+    equity *
+    effectiveRisk;
+
+  const riskSizedNotional =
+    riskDollars /
+    (
+      stopPct /
+      100
+    );
+
+  const maxPositionFraction =
+    Number(
+      cfg()
+        .maxPositionFractionOfEquity ??
+      0.50
+    );
+
+  if (
+    !Number.isFinite(
+      maxPositionFraction
+    ) ||
+    maxPositionFraction <= 0 ||
+    maxPositionFraction > 2
+  ) {
+    throw new Error(
+      'liveBotConfig.maxPositionFractionOfEquity must be greater than 0 and no more than 2.'
+    );
+  }
+
+  const equityCap =
+    equity *
+    maxPositionFraction;
+
+  const positionBudget =
+    Math.min(
+      riskSizedNotional,
+      equityCap,
+      buyingPower
+    );
+
+  return {
+    requestedRiskFraction:
+      requestedRisk,
+
+    effectiveRiskFraction:
+      effectiveRisk,
+
+    stopPct,
+
+    riskDollars,
+
+    riskSizedNotional,
+
+    equityCap,
+
+    positionBudget,
+
+    maxPositionFraction,
+  };
+}
+
 async function enter(
   mode
 ) {
@@ -2680,11 +3614,34 @@ async function enter(
     );
 
   if (!best) {
+    const topEquity =
+      state
+        .scanDiagnostics
+        ?.topStrategyRejections
+        ?.equities
+        ?.[0];
+
+    const topCrypto =
+      state
+        .scanDiagnostics
+        ?.topStrategyRejections
+        ?.crypto
+        ?.[0];
+
+    const top =
+      topEquity ||
+      topCrypto;
+
     state.lastDecision =
       `${mode.toUpperCase()} scanning ` +
       `${state.universe.equities.length + state.universe.crypto.length} ` +
       `Alpaca tradable assets — ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions open — waiting for v17 precision setup`;
+      `${maxOpenPositions()} positions open — waiting for v18 setup` +
+      (
+        top
+          ? ` — top reject: ${top.reason} (${top.count})`
+          : ''
+      );
 
     return false;
   }
@@ -2692,10 +3649,6 @@ async function enter(
   const direction =
     best.direction ||
     'LONG';
-
-  state.lastDecision =
-    `${mode.toUpperCase()} ${best.strategy} ${direction} ${best.symbol} ` +
-    `score ${best.score}/10`;
 
   const account =
     await getAccount(
@@ -2719,48 +3672,33 @@ async function enter(
       0
     );
 
-  const riskFraction =
-    Number(
-      tradingCfg()
-        .riskPerTrade ??
-      0.02
-    );
+  const sizing =
+    buildPositionBudget({
+      equity,
+      buyingPower,
+      best,
+    });
 
   if (
     !Number.isFinite(
-      riskFraction
+      sizing.positionBudget
     ) ||
-    riskFraction <=
-      0 ||
-    riskFraction >
-      1
+    sizing.positionBudget < 1
   ) {
-    throw new Error(
-      'Risk per trade must be between 0 and 1 (0.02 = 2%).'
-    );
+    state.lastDecision =
+      `${mode.toUpperCase()} ${direction} ${best.symbol} skipped — ` +
+      `risk-sized budget $${Number(
+        sizing.positionBudget ||
+        0
+      ).toFixed(2)} is below $1`;
+
+    return false;
   }
 
-  const desiredNotional =
-    equity *
-    riskFraction;
-
-  const positionBudget =
-    Math.min(
-      desiredNotional,
-      buyingPower
-    );
-
-  if (
-    !Number.isFinite(
-      positionBudget
-    ) ||
-    positionBudget <
-      1
-  ) {
-    throw new Error(
-      `Insufficient ${mode} buying power for configured trade size.`
-    );
-  }
+  state.lastDecision =
+    `${mode.toUpperCase()} ${best.strategy} ${direction} ${best.symbol} ` +
+    `score ${best.score}/10 — risk budget $${sizing.riskDollars.toFixed(2)} — ` +
+    `position budget $${sizing.positionBudget.toFixed(2)}`;
 
   let order;
 
@@ -2779,7 +3717,7 @@ async function enter(
 
     const qty =
       Math.floor(
-        positionBudget /
+        sizing.positionBudget /
         best.price
       );
 
@@ -2788,7 +3726,7 @@ async function enter(
     ) {
       state.lastDecision =
         `${mode.toUpperCase()} SHORT ${best.symbol} skipped — ` +
-        `$${positionBudget.toFixed(2)} budget is below one whole share at ` +
+        `$${sizing.positionBudget.toFixed(2)} risk-sized budget is below one whole share at ` +
         `$${best.price.toFixed(2)}`;
 
       return false;
@@ -2820,7 +3758,7 @@ async function enter(
   ) {
     const qty =
       Math.floor(
-        positionBudget /
+        sizing.positionBudget /
         best.price
       );
 
@@ -2829,7 +3767,7 @@ async function enter(
     ) {
       state.lastDecision =
         `${mode.toUpperCase()} LONG ${best.symbol} skipped — ` +
-        `$${positionBudget.toFixed(2)} budget is below one whole share at ` +
+        `$${sizing.positionBudget.toFixed(2)} risk-sized budget is below one whole share at ` +
         `$${best.price.toFixed(2)}`;
 
       return false;
@@ -2863,7 +3801,7 @@ async function enter(
 
         notional:
           Number(
-            positionBudget
+            sizing.positionBudget
               .toFixed(
                 2
               )
@@ -2883,18 +3821,6 @@ async function enter(
       });
   }
 
-  // ========================================
-  // ENTRY FILL SAFETY v17
-  // ========================================
-  //
-  // A partial fill is still a real broker position.
-  //
-  // Wait for completion.
-  // If remainder stays open, cancel remainder.
-  // Re-read the final order.
-  //
-  // Record ONLY filled_qty that Alpaca says actually executed.
-
   const fill =
     await settleEntry(
       mode,
@@ -2903,17 +3829,16 @@ async function enter(
 
   const filledQty =
     Number(
-      fill.filled_qty ||
+      fill
+        .filled_qty ||
       0
     );
 
-  // Terminal zero-fill is not a bot crash.
   if (
     !Number.isFinite(
       filledQty
     ) ||
-    filledQty <=
-      0
+    filledQty <= 0
   ) {
     state.lastDecision =
       `${mode.toUpperCase()} ${direction} ${best.symbol} not opened — ` +
@@ -2932,8 +3857,7 @@ async function enter(
     !Number.isFinite(
       entryPrice
     ) ||
-    entryPrice <=
-      0
+    entryPrice <= 0
   ) {
     throw new Error(
       `Entry order ${order.id} executed ${filledQty} of ${best.symbol}, ` +
@@ -2956,11 +3880,9 @@ async function enter(
       direction,
 
       conviction:
-        best.score >=
-        9
+        best.score >= 9
           ? 'high'
-          : best.score >=
-              8
+          : best.score >= 8
             ? 'standard'
             : 'probe',
 
@@ -2991,8 +3913,6 @@ async function enter(
         fill.status !==
         'filled',
 
-      // CRITICAL:
-      // actual executed quantity only.
       qty:
         String(
           fill.filled_qty
@@ -3008,6 +3928,39 @@ async function enter(
 
       quality_score:
         best.score,
+
+      requested_risk_fraction:
+        sizing
+          .requestedRiskFraction,
+
+      effective_risk_fraction:
+        sizing
+          .effectiveRiskFraction,
+
+      planned_risk_dollars:
+        Number(
+          sizing
+            .riskDollars
+            .toFixed(
+              4
+            )
+        ),
+
+      planned_position_budget:
+        Number(
+          sizing
+            .positionBudget
+            .toFixed(
+              4
+            )
+        ),
+
+      sizing_stop_pct:
+        sizing.stopPct,
+
+      max_position_fraction_of_equity:
+        sizing
+          .maxPositionFraction,
 
       atr_pct:
         exitPlan
@@ -3045,6 +3998,15 @@ async function enter(
       best_favorable_move_pct:
         0,
 
+      partial_exit_qty:
+        0,
+
+      partial_exit_value:
+        0,
+
+      partial_exit_order_ids:
+        [],
+
       entry_signal: {
         strategy:
           best.strategy,
@@ -3056,6 +4018,11 @@ async function enter(
           best.signal
             ?.components ||
           {},
+
+        trigger:
+          best.signal
+            ?.trigger ??
+          null,
 
         minute_momentum_pct:
           best
@@ -3260,6 +4227,81 @@ router.get(
   }
 );
 
+function localRemainingQty(
+  trade
+) {
+  const recorded =
+    Number(
+      positiveQtyString(
+        trade
+          .filled_qty ??
+        trade.qty
+      )
+    );
+
+  const progress =
+    getExitProgress(
+      trade
+    );
+
+  return Math.max(
+    0,
+    recorded -
+      progress.qty
+  );
+}
+
+function positionQty(
+  position
+) {
+  return Math.abs(
+    Number(
+      position
+        ?.qty ||
+      0
+    )
+  );
+}
+
+function qtyApproximatelyMatches(
+  localQty,
+  brokerQty
+) {
+  if (
+    !Number.isFinite(
+      localQty
+    ) ||
+    !Number.isFinite(
+      brokerQty
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    localQty <= 0 ||
+    brokerQty <= 0
+  ) {
+    return false;
+  }
+
+  const tolerance =
+    Math.max(
+      localQty *
+        0.02,
+
+      1e-8
+    );
+
+  return (
+    Math.abs(
+      localQty -
+      brokerQty
+    ) <=
+    tolerance
+  );
+}
+
 // ========================================
 // START
 // ========================================
@@ -3361,10 +4403,6 @@ router.post(
             }
           );
 
-      // ========================================
-      // RECOVER EXISTING BOT POSITIONS
-      // ========================================
-
       if (
         openLocalTrades.length
       ) {
@@ -3388,8 +4426,34 @@ router.post(
               .json({
                 error:
                   `Local ${mode} trade ${trade.id} is marked open, but Alpaca ` +
-                  `has no matching ${trade.market} position. ` +
-                  `Resolve that trade before restarting the bot.`,
+                  `has no matching ${trade.market} position. Resolve it before restart.`,
+              });
+          }
+
+          const localQty =
+            localRemainingQty(
+              trade
+            );
+
+          const brokerQty =
+            positionQty(
+              matchingPosition
+            );
+
+          if (
+            !qtyApproximatelyMatches(
+              localQty,
+              brokerQty
+            )
+          ) {
+            return res
+              .status(
+                409
+              )
+              .json({
+                error:
+                  `Quantity mismatch for ${trade.market}: local remaining ${localQty}, ` +
+                  `Alpaca position ${brokerQty}. Manual reconciliation is required.`,
               });
           }
         }
@@ -3409,17 +4473,16 @@ router.post(
             });
         }
 
-        const sessionIds =
-          [
-            ...new Set(
-              openLocalTrades.map(
-                (
-                  trade
-                ) =>
-                  trade.session_id
-              )
-            ),
-          ];
+        const sessionIds = [
+          ...new Set(
+            openLocalTrades.map(
+              (
+                trade
+              ) =>
+                trade.session_id
+            )
+          ),
+        ];
 
         if (
           sessionIds.length !==
@@ -3459,14 +4522,9 @@ router.post(
           mode;
 
         state.universe = {
-          equities:
-            [],
-
-          crypto:
-            [],
-
-          refreshedAt:
-            null,
+          equities: [],
+          crypto: [],
+          refreshedAt: null,
         };
 
         state.equityCursor =
@@ -3530,13 +4588,19 @@ router.post(
 
             lastDecision:
               `recovering ${openLocalTrades.length}/${maxOpenPositions()} ` +
-              `${mode.toUpperCase()} positions — v17 precision active`,
+              `${mode.toUpperCase()} positions — v18 balanced active`,
 
             signalSnapshot:
               {},
 
             topCandidates:
               [],
+
+            nearMisses:
+              [],
+
+            scanDiagnostics:
+              null,
 
             marketOpen:
               null,
@@ -3552,10 +4616,6 @@ router.post(
         );
       }
 
-      // ========================================
-      // NEW SESSION
-      // ========================================
-
       const equity =
         Number(
           account.equity ||
@@ -3567,8 +4627,7 @@ router.post(
         !Number.isFinite(
           equity
         ) ||
-        equity <=
-          0
+        equity <= 0
       ) {
         return res
           .status(
@@ -3584,14 +4643,9 @@ router.post(
         mode;
 
       state.universe = {
-        equities:
-          [],
-
-        crypto:
-          [],
-
-        refreshedAt:
-          null,
+        equities: [],
+        crypto: [],
+        refreshedAt: null,
       };
 
       state.equityCursor =
@@ -3643,7 +4697,7 @@ router.post(
             false,
 
           lastDecision:
-            `starting ${mode.toUpperCase()} v17 precision bot — loaded ` +
+            `starting ${mode.toUpperCase()} v18 balanced bot — loaded ` +
             `${state.universe.equities.length + state.universe.crypto.length} ` +
             `Alpaca tradable assets — up to ${maxOpenPositions()} positions`,
 
@@ -3652,6 +4706,12 @@ router.post(
 
           topCandidates:
             [],
+
+          nearMisses:
+            [],
+
+          scanDiagnostics:
+            null,
 
           marketOpen:
             null,
@@ -3751,12 +4811,19 @@ router.post(
                 assetClass
               );
 
-            await closeTrade(
-              mode,
-              trade,
-              price,
-              'bot stopped by user'
-            );
+            const closed =
+              await closeTrade(
+                mode,
+                trade,
+                price,
+                'bot stopped by user'
+              );
+
+            if (!closed) {
+              closeErrors.push(
+                `${trade.market}: exit remains partially filled after retry limit`
+              );
+            }
           } catch (
             error
           ) {
