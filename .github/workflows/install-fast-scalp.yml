@@ -1,0 +1,995 @@
+name: Install Fast Scalp
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/install-fast-scalp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Fast Scalp
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f"Could not find patch anchor: {label}")
+              return text.replace(old, new, 1)
+
+          # ------------------------------------------------------------
+          # 1) Trading config: persist Fast Scalp and mirror to strategy.
+          # ------------------------------------------------------------
+          trading_config = r"""import express from 'express';
+          import { store } from './store.js';
+
+          const router = express.Router();
+
+          export const TRADING_DEFAULTS = {
+            startingCapital: 100,
+            riskPerTrade: 0.02,          // fraction: 0.02 = 2%
+            maxTradesPerSession: 24,
+            maxTradesPerMarket: 12,
+            winRateTarget: 0.875,        // legacy paper simulator only
+            dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
+            consecutiveStopLoss: 3,
+            fastScalpEnabled: false,
+          };
+
+          const NUMERIC_KEYS = [
+            'startingCapital',
+            'riskPerTrade',
+            'maxTradesPerSession',
+            'maxTradesPerMarket',
+            'winRateTarget',
+            'dailyLossLimit',
+            'consecutiveStopLoss',
+          ];
+
+          function asBoolean(value) {
+            if (typeof value === 'boolean') return value;
+            if (value === 1 || value === '1') return true;
+            if (value === 0 || value === '0') return false;
+            return String(value || '').toLowerCase() === 'true';
+          }
+
+          function normalize(raw = {}) {
+            const out = { ...TRADING_DEFAULTS, ...raw };
+
+            // Backward compatibility with older field names.
+            if (raw.tradesPerSession != null && raw.maxTradesPerSession == null) {
+              out.maxTradesPerSession = Number(raw.tradesPerSession);
+            }
+            if (raw.tradesPerMarket != null && raw.maxTradesPerMarket == null) {
+              out.maxTradesPerMarket = Number(raw.tradesPerMarket);
+            }
+            if (raw.riskPerTradePct != null && raw.riskPerTrade == null) {
+              out.riskPerTrade = Number(raw.riskPerTradePct) / 100;
+            }
+
+            for (const k of NUMERIC_KEYS) out[k] = Number(out[k]);
+            out.fastScalpEnabled = asBoolean(out.fastScalpEnabled);
+
+            if (raw.updatedAt) out.updatedAt = String(raw.updatedAt);
+            return out;
+          }
+
+          function validate(c) {
+            if (!Number.isFinite(c.startingCapital) || c.startingCapital <= 0) return 'Starting capital must be greater than 0.';
+            if (!Number.isFinite(c.riskPerTrade) || c.riskPerTrade <= 0 || c.riskPerTrade > 1) return 'Risk per trade must be greater than 0 and no more than 100%.';
+            if (!Number.isInteger(c.maxTradesPerSession) || c.maxTradesPerSession < 1 || c.maxTradesPerSession > 1000) return 'Max trades per session must be an integer from 1 to 1000.';
+            if (!Number.isInteger(c.maxTradesPerMarket) || c.maxTradesPerMarket < 1 || c.maxTradesPerMarket > 1000) return 'Max trades per market must be an integer from 1 to 1000.';
+            if (!Number.isFinite(c.winRateTarget) || c.winRateTarget < 0 || c.winRateTarget > 1) return 'Paper win-rate target must be between 0% and 100%.';
+            if (!Number.isFinite(c.dailyLossLimit) || c.dailyLossLimit <= 0 || c.dailyLossLimit > 1) return 'Daily loss limit must be greater than 0 and no more than 100%.';
+            if (!Number.isInteger(c.consecutiveStopLoss) || c.consecutiveStopLoss < 1 || c.consecutiveStopLoss > 100) return 'Consecutive-loss halt must be an integer from 1 to 100.';
+            return null;
+          }
+
+          router.get('/', (req, res) => {
+            const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
+            res.json({ ...current, source: 'railway-store' });
+          });
+
+          router.post('/', (req, res) => {
+            const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
+            const incoming = req.body || {};
+            const merged = normalize({ ...current, ...incoming });
+            const error = validate(merged);
+            if (error) return res.status(400).json({ error });
+
+            const selectedMode = store.getConfig('tradingMode', { mode: 'paper' }).mode;
+            if (merged.fastScalpEnabled && selectedMode === 'live') {
+              return res.status(409).json({
+                error: 'Fast Scalp is PAPER-only. Switch to Paper Mode before enabling it.',
+              });
+            }
+
+            merged.updatedAt = new Date().toISOString();
+            store.setConfig('tradingConfig', merged);
+
+            // liveBot reads strategyConfig, so mirror the toggle and use a short
+            // cooldown while scalping. Turning Fast Scalp off restores v19's
+            // normal 30-minute crypto cooldown.
+            const strategyCurrent = store.getConfig('strategyConfig', {});
+            store.setConfig('strategyConfig', {
+              ...strategyCurrent,
+              fastScalpEnabled: merged.fastScalpEnabled,
+              cryptoCooldownMinutes: merged.fastScalpEnabled ? 1 : 30,
+            });
+
+            res.json({ ...merged, source: 'railway-store' });
+          });
+
+          export default router;
+          """
+          Path("momentumflow/tradingConfig.js").write_text(
+              textwrap.dedent(trading_config).lstrip(),
+              encoding="utf-8",
+          )
+
+          # ------------------------------------------------------------
+          # 2) Keep Fast Scalp PAPER-only.
+          # ------------------------------------------------------------
+          trading_mode = r"""import express from 'express';
+          import { store } from './store.js';
+          import { evaluateLiveGate } from './safetyEngine.js';
+          import { hasCredentials } from './alpacaClient.js';
+
+          const router = express.Router();
+
+          // GET /api/trading-mode
+          router.get('/', (req, res) => {
+            const mode = store.getConfig('tradingMode', { mode: 'paper' });
+            res.json(mode);
+          });
+
+          // POST /api/trading-mode — body: { mode: 'paper' | 'live' }
+          router.post('/', (req, res) => {
+            const { mode } = req.body || {};
+            if (!['paper', 'live'].includes(mode)) {
+              return res.status(400).json({ error: "mode must be 'paper' or 'live'" });
+            }
+
+            if (mode === 'live') {
+              const tradingConfig = store.getConfig('tradingConfig', {});
+              if (tradingConfig.fastScalpEnabled === true) {
+                return res.status(409).json({
+                  error: 'Fast Scalp is PAPER-only. Turn Fast Scalp OFF before switching to LIVE.',
+                });
+              }
+
+              const consents = store.getConfig('liveGateConsents', {});
+              const gate = evaluateLiveGate({
+                consents,
+                hasLiveCredentials: hasCredentials('live'),
+              });
+
+              if (!gate.allowed) {
+                return res.status(403).json({
+                  error: `Can't switch to live: ${gate.reason}`,
+                });
+              }
+            }
+
+            const updated = store.setConfig('tradingMode', {
+              mode,
+              updated_at: new Date().toISOString(),
+            });
+
+            res.json(updated);
+          });
+
+          export default router;
+          """
+          Path("momentumflow/tradingMode.js").write_text(
+              textwrap.dedent(trading_mode).lstrip(),
+              encoding="utf-8",
+          )
+
+          # ------------------------------------------------------------
+          # 3) Add cost-aware 1-minute crypto Fast Scalp strategy.
+          # ------------------------------------------------------------
+          strategy_path = Path("momentumflow/strategyEngine.js")
+          strategy = strategy_path.read_text(encoding="utf-8")
+
+          if "fastScalpEntryMomentumPct" not in strategy:
+              strategy = replace_once(
+                  strategy,
+                  "  cryptoScoreThreshold: 8,\n",
+                  """  cryptoScoreThreshold: 8,
+
+            // PAPER-only 1-minute crypto Fast Scalp.
+            // It buys strong upward impulses, never opens a crypto short, and
+            // uses a separate reversal monitor to exit back to cash quickly.
+            fastScalpEnabled: false,
+            fastScalpScoreThreshold: 8,
+            fastScalpEntryMomentumPct: 0.65,
+            fastScalpMaxSpreadPct: 0.12,
+            fastScalpEstimatedRoundTripCostPct: 0.50,
+            fastScalpProfitBufferPct: 0.12,
+            fastScalpStopLossPct: 0.45,
+            fastScalpTakeProfitPct: 1.10,
+            fastScalpTrailTriggerPct: 0.70,
+            fastScalpTrailDistancePct: 0.18,
+            fastScalpTrailFloorPct: 0.55,
+            fastScalpMaxHoldMinutes: 6,
+            fastScalpReversalMomentumPct: -0.08,
+            fastScalpFadeMomentumPct: 0.02,
+            fastScalpCostLockPct: 0.60,
+          """,
+                  "Fast Scalp defaults",
+              )
+
+          scalp_function = r"""
+          function evaluateCryptoFastScalpCandidate({
+            asset,
+            snapshot,
+            bars,
+            btcRegime,
+            config,
+            now,
+          }) {
+            if (!asset || !snapshot) {
+              const detail = reject('FAST SCALP: missing asset or snapshot');
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const all = mergeCurrentMinuteBar(
+              bars || [],
+              snapshot
+            );
+
+            const signalBars = completedBars(
+              all,
+              now
+            );
+
+            if (signalBars.length < 6) {
+              const detail = reject(
+                'FAST SCALP: not enough completed 1-minute bars'
+              );
+
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const price = currentPrice(
+              snapshot,
+              all
+            );
+
+            if (!Number.isFinite(price) || price <= 0) {
+              const detail = reject('FAST SCALP: invalid current price');
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const momentum = minuteMomentumPct(snapshot);
+            const spread = spreadPct(snapshot);
+
+            if (spread == null) {
+              const detail = reject('FAST SCALP: spread unavailable');
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const maxSpread = Math.max(
+              0.01,
+              Number(config.fastScalpMaxSpreadPct ?? 0.12)
+            );
+
+            if (spread > maxSpread) {
+              const detail = reject(
+                `FAST SCALP: spread ${spread.toFixed(3)}% > ${maxSpread}%`,
+                {
+                  spreadPct: Number(spread.toFixed(4)),
+                  minuteMomentumPct: momentum,
+                }
+              );
+
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const estimatedCost = Math.max(
+              0,
+              Number(config.fastScalpEstimatedRoundTripCostPct ?? 0.50)
+            );
+
+            const profitBuffer = Math.max(
+              0,
+              Number(config.fastScalpProfitBufferPct ?? 0.12)
+            );
+
+            const entryFloor = Math.max(
+              0.01,
+              Number(config.fastScalpEntryMomentumPct ?? 0.65)
+            );
+
+            // Require the current 1-minute impulse to be large enough to clear
+            // estimated round-trip fees, the current spread, and a profit buffer.
+            const requiredImpulse = Math.max(
+              entryFloor,
+              estimatedCost + spread + profitBuffer
+            );
+
+            const trend3 = trendPct(signalBars, 3);
+            const trend5 = trendPct(signalBars, 5);
+            const trend15 = trendPct(signalBars, 15);
+
+            const previousClose = c(signalBars.at(-2));
+            const latestClose = c(signalBars.at(-1));
+
+            const completedMove =
+              Number.isFinite(previousClose) &&
+              Number.isFinite(latestClose) &&
+              previousClose > 0
+                ? ((latestClose - previousClose) / previousClose) * 100
+                : 0;
+
+            if (
+              momentum == null ||
+              momentum < requiredImpulse
+            ) {
+              const shown =
+                momentum == null
+                  ? 'unavailable'
+                  : `${momentum.toFixed(3)}%`;
+
+              const detail = reject(
+                `FAST SCALP: impulse ${shown} below cost-aware ${requiredImpulse.toFixed(3)}%`,
+                {
+                  minuteMomentumPct: momentum,
+                  trend5Pct: Number(trend5.toFixed(4)),
+                  trend15Pct: Number(trend15.toFixed(4)),
+                  spreadPct: Number(spread.toFixed(4)),
+                }
+              );
+
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            // A very strong live impulse may reverse a weak prior sell candle,
+            // but don't buy directly into a large completed dump unless the new
+            // impulse is clearly stronger than the normal entry requirement.
+            if (
+              completedMove < -0.30 &&
+              momentum < requiredImpulse + 0.25
+            ) {
+              const detail = reject(
+                'FAST SCALP: impulse not strong enough to reverse last completed selloff',
+                {
+                  minuteMomentumPct: Number(momentum.toFixed(4)),
+                  trend5Pct: Number(trend5.toFixed(4)),
+                  trend15Pct: Number(trend15.toFixed(4)),
+                  spreadPct: Number(spread.toFixed(4)),
+                }
+              );
+
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold: Number(config.fastScalpScoreThreshold ?? 8),
+                },
+              };
+            }
+
+            const recentVolume = volumeRatio(signalBars, 6);
+
+            const components = {
+              costCoverage: 4,
+              impulse: 2,
+              tightSpread: spread <= maxSpread * 0.5 ? 1 : 0,
+              localTurn: trend3 > 0 || completedMove > 0 ? 1 : 0,
+              acceleration: momentum >= requiredImpulse + 0.20 ? 1 : 0,
+              volume: recentVolume >= 1.05 ? 1 : 0,
+            };
+
+            const score = Math.min(
+              10,
+              8 +
+                (components.acceleration ? 1 : 0) +
+                (components.localTurn ? 1 : 0)
+            );
+
+            const threshold = Number(
+              config.fastScalpScoreThreshold ?? 8
+            );
+
+            const detail = {
+              eligible: true,
+              score,
+              reason: null,
+              components,
+              trigger: 'fast_scalp',
+              earlyEntry: true,
+              earlyEntryConfirmed: true,
+              trend5Pct: Number(trend5.toFixed(4)),
+              trend15Pct: Number(trend15.toFixed(4)),
+              minuteMomentumPct: Number(momentum.toFixed(4)),
+              recentVolumeRatio: Number(recentVolume.toFixed(3)),
+              spreadPct: Number(spread.toFixed(4)),
+              vwap: null,
+              vwapDistanceAtr: null,
+              breakoutDistanceAtr: null,
+              breakoutType: 'FAST_SCALP_1M',
+              breakoutLevel: null,
+              openingRange: null,
+              rollingBreakout: null,
+              regime: btcRegime,
+              requiredImpulsePct: Number(requiredImpulse.toFixed(4)),
+              completedBarMovePct: Number(completedMove.toFixed(4)),
+              exitPlan: {
+                atrPct: null,
+                stopLossPct: Number(
+                  config.fastScalpStopLossPct ?? 0.45
+                ),
+                takeProfitPct: Number(
+                  config.fastScalpTakeProfitPct ?? 1.10
+                ),
+                estimatedRoundTripCostPct: estimatedCost,
+                netRewardRiskRatio: null,
+                trailTriggerPct: Number(
+                  config.fastScalpTrailTriggerPct ?? 0.70
+                ),
+                trailDistancePct: Number(
+                  config.fastScalpTrailDistancePct ?? 0.18
+                ),
+                trailFloorPct: Number(
+                  config.fastScalpTrailFloorPct ?? 0.55
+                ),
+                breakoutFailureWindowMinutes: 0,
+                breakoutFailureAtr: 0,
+                maxHoldMinutes: Number(
+                  config.fastScalpMaxHoldMinutes ?? 6
+                ),
+              },
+            };
+
+            if (score < threshold) {
+              return {
+                signal: null,
+                diagnostics: {
+                  long: detail,
+                  threshold,
+                },
+              };
+            }
+
+            return {
+              signal: {
+                symbol: asset.symbol,
+                name: asset.name || asset.symbol,
+                assetClass: 'crypto',
+                fractionable: true,
+                direction: 'LONG',
+                score,
+                price,
+                strategy: 'CRYPTO_FAST_SCALP',
+                signal: detail,
+              },
+              diagnostics: {
+                long: detail,
+                threshold,
+              },
+            };
+          }
+
+          """
+
+          if "function evaluateCryptoFastScalpCandidate" not in strategy:
+              marker = "export function evaluateCryptoCandidate({\n"
+              if marker not in strategy:
+                  raise SystemExit("Could not find evaluateCryptoCandidate insertion point")
+              strategy = strategy.replace(
+                  marker,
+                  textwrap.dedent(scalp_function).lstrip() + marker,
+                  1,
+              )
+
+          branch_anchor = """export function evaluateCryptoCandidate({
+            asset,
+            snapshot,
+            bars,
+            btcRegime,
+            config = STRATEGY_DEFAULTS,
+            now = new Date(),
+          }) {
+          """
+
+          branch_replacement = branch_anchor + """  if (config.fastScalpEnabled === true) {
+            return evaluateCryptoFastScalpCandidate({
+              asset,
+              snapshot,
+              bars,
+              btcRegime,
+              config,
+              now,
+            });
+          }
+
+          """
+
+          if "return evaluateCryptoFastScalpCandidate({" not in strategy:
+              strategy = replace_once(
+                  strategy,
+                  branch_anchor,
+                  branch_replacement,
+                  "Fast Scalp evaluateCryptoCandidate branch",
+              )
+
+          strategy_path.write_text(strategy, encoding="utf-8")
+
+          # ------------------------------------------------------------
+          # 4) Reversal/fade monitor. It NEVER sends orders itself.
+          # It only marks an open scalp trade for exit; liveBot's existing
+          # closeTrade path executes the actual sell on its next tick.
+          # ------------------------------------------------------------
+          monitor = r"""import { store } from './store.js';
+          import { getCryptoSnapshots } from './alpacaClient.js';
+          import { minuteMomentumPct } from './strategyEngine.js';
+
+          const DEFAULTS = {
+            fastScalpReversalMomentumPct: -0.08,
+            fastScalpFadeMomentumPct: 0.02,
+            fastScalpCostLockPct: 0.60,
+          };
+
+          let timer = null;
+          let busy = false;
+
+          function snapshotFor(snapshots, symbol) {
+            const compact = String(symbol || '').replace('/', '');
+            return snapshots?.[symbol] || snapshots?.[compact] || null;
+          }
+
+          function currentPrice(snapshot) {
+            return Number(
+              snapshot?.latestTrade?.p ??
+              snapshot?.minuteBar?.c ??
+              snapshot?.dailyBar?.c
+            );
+          }
+
+          function markPendingExit(trade, reason) {
+            const latest = store.getOne('trades', trade.id);
+            if (
+              !latest ||
+              latest.result !== null ||
+              latest.pending_exit_reason
+            ) {
+              return;
+            }
+
+            store.update('trades', trade.id, {
+              pending_exit_reason: reason,
+              pending_exit_started_at: new Date().toISOString(),
+              fast_scalp_exit_signal_at: new Date().toISOString(),
+            });
+
+            console.log(`[fast-scalp] ${trade.market}: ${reason}`);
+          }
+
+          async function checkFastScalps() {
+            if (busy) return;
+            busy = true;
+
+            try {
+              const mode = store.getConfig(
+                'tradingMode',
+                { mode: 'paper' }
+              ).mode;
+
+              const tradingConfig = store.getConfig(
+                'tradingConfig',
+                {}
+              );
+
+              // Hard PAPER-only gate.
+              if (
+                mode !== 'paper' ||
+                tradingConfig.fastScalpEnabled !== true
+              ) {
+                return;
+              }
+
+              const open = store
+                .getAll('trades')
+                .filter(
+                  (trade) =>
+                    trade.result === null &&
+                    trade.asset_class === 'crypto' &&
+                    trade.strategy_name === 'CRYPTO_FAST_SCALP' &&
+                    !trade.pending_exit_reason
+                );
+
+              if (!open.length) return;
+
+              const symbols = [
+                ...new Set(open.map((trade) => trade.market)),
+              ];
+
+              const snapshots = await getCryptoSnapshots(
+                'paper',
+                symbols
+              );
+
+              const config = {
+                ...DEFAULTS,
+                ...store.getConfig('strategyConfig', {}),
+              };
+
+              for (const trade of open) {
+                const snapshot = snapshotFor(
+                  snapshots,
+                  trade.market
+                );
+
+                if (!snapshot) continue;
+
+                const momentum = minuteMomentumPct(snapshot);
+                const price = currentPrice(snapshot);
+                const entry = Number(trade.entry_price);
+
+                if (
+                  momentum != null &&
+                  momentum <=
+                    Number(config.fastScalpReversalMomentumPct)
+                ) {
+                  markPendingExit(
+                    trade,
+                    `FAST SCALP 1m reversal ${momentum.toFixed(3)}%`
+                  );
+                  continue;
+                }
+
+                if (
+                  Number.isFinite(price) &&
+                  Number.isFinite(entry) &&
+                  entry > 0 &&
+                  momentum != null
+                ) {
+                  const grossMove =
+                    ((price - entry) / entry) * 100;
+
+                  if (
+                    grossMove >=
+                      Number(config.fastScalpCostLockPct) &&
+                    momentum <=
+                      Number(config.fastScalpFadeMomentumPct)
+                  ) {
+                    markPendingExit(
+                      trade,
+                      `FAST SCALP momentum fade after +${grossMove.toFixed(3)}%; 1m ${momentum.toFixed(3)}%`
+                    );
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn(
+                `[fast-scalp-monitor] ${error.message}`
+              );
+            } finally {
+              busy = false;
+            }
+          }
+
+          export function startFastScalpMonitor() {
+            if (timer) return;
+
+            timer = setInterval(
+              checkFastScalps,
+              5000
+            );
+
+            timer.unref?.();
+
+            setTimeout(
+              checkFastScalps,
+              1500
+            ).unref?.();
+
+            console.log(
+              '[fast-scalp] PAPER-only reversal monitor active.'
+            );
+          }
+          """
+          Path("momentumflow/fastScalpMonitor.js").write_text(
+              textwrap.dedent(monitor).lstrip(),
+              encoding="utf-8",
+          )
+
+          # ------------------------------------------------------------
+          # 5) Start monitor from server.js.
+          # ------------------------------------------------------------
+          server_path = Path("momentumflow/server.js")
+          server = server_path.read_text(encoding="utf-8")
+
+          if "startFastScalpMonitor" not in server:
+              server = replace_once(
+                  server,
+                  "import liveBotRouter from './liveBot.js';\n",
+                  "import liveBotRouter from './liveBot.js';\nimport { startFastScalpMonitor } from './fastScalpMonitor.js';\n",
+                  "server Fast Scalp import",
+              )
+
+              server = replace_once(
+                  server,
+                  "resetToPaperModeOnBoot();\n",
+                  "resetToPaperModeOnBoot();\nstartFastScalpMonitor();\n",
+                  "server Fast Scalp startup",
+              )
+
+          server_path.write_text(server, encoding="utf-8")
+
+          # ------------------------------------------------------------
+          # 6) Frontend toggle component.
+          # ------------------------------------------------------------
+          toggle = r"""import React, { useEffect, useState } from 'react';
+          import { api } from '../lib/api.js';
+
+          export default function FastScalpToggle() {
+            const [enabled, setEnabled] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [saving, setSaving] = useState(false);
+            const [error, setError] = useState('');
+
+            async function refresh() {
+              try {
+                setLoading(true);
+                setError('');
+                const cfg = await api.getTradingConfig();
+                setEnabled(cfg?.fastScalpEnabled === true);
+              } catch (err) {
+                setError(err?.message || 'Failed to load Fast Scalp setting.');
+              } finally {
+                setLoading(false);
+              }
+            }
+
+            useEffect(() => {
+              refresh();
+            }, []);
+
+            async function toggle() {
+              try {
+                setSaving(true);
+                setError('');
+
+                const saved = await api.setTradingConfig({
+                  fastScalpEnabled: !enabled,
+                });
+
+                setEnabled(saved?.fastScalpEnabled === true);
+              } catch (err) {
+                setError(err?.message || 'Failed to save Fast Scalp setting.');
+              } finally {
+                setSaving(false);
+              }
+            }
+
+            return (
+              <div style={card}>
+                <div style={row}>
+                  <div>
+                    <div style={title}>FAST SCALP — 1 MIN CRYPTO</div>
+                    <div style={note}>
+                      PAPER only. Buys strong upward 1-minute impulses, then exits
+                      back to cash on reversal/fade. It does not open crypto shorts.
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={toggle}
+                    disabled={loading || saving}
+                    style={{
+                      ...button,
+                      ...(enabled ? onButton : offButton),
+                    }}
+                  >
+                    {loading
+                      ? 'Loading…'
+                      : saving
+                        ? 'Saving…'
+                        : enabled
+                          ? 'ON'
+                          : 'OFF'}
+                  </button>
+                </div>
+
+                <div style={status}>
+                  {enabled
+                    ? 'FAST SCALP ENABLED — run the bot in PAPER mode to test it.'
+                    : 'FAST SCALP OFF — v19 crypto strategy remains active.'}
+                </div>
+
+                {error && <div style={errorStyle}>{error}</div>}
+              </div>
+            );
+          }
+
+          const card = {
+            background: 'var(--bg-raised)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)',
+            padding: '14px 16px',
+          };
+
+          const row = {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 14,
+          };
+
+          const title = {
+            color: '#4ade80',
+            fontSize: 13,
+            fontWeight: 800,
+          };
+
+          const note = {
+            color: 'var(--text-secondary)',
+            fontSize: 12,
+            lineHeight: 1.45,
+            marginTop: 5,
+            maxWidth: 760,
+          };
+
+          const button = {
+            minWidth: 74,
+            borderRadius: 8,
+            padding: '10px 16px',
+            fontWeight: 800,
+            cursor: 'pointer',
+          };
+
+          const onButton = {
+            background: '#14532d',
+            border: '1px solid #4ade80',
+            color: '#4ade80',
+          };
+
+          const offButton = {
+            background: '#111827',
+            border: '1px solid #475569',
+            color: '#cbd5e1',
+          };
+
+          const status = {
+            marginTop: 10,
+            color: '#94a3b8',
+            fontSize: 11,
+          };
+
+          const errorStyle = {
+            marginTop: 8,
+            color: '#f87171',
+            fontSize: 12,
+          };
+          """
+          Path(
+              "momentumflow/frontend/src/components/FastScalpToggle.jsx"
+          ).write_text(
+              textwrap.dedent(toggle).lstrip(),
+              encoding="utf-8",
+          )
+
+          # ------------------------------------------------------------
+          # 7) Put the toggle on Settings before Strategy Analysis.
+          # ------------------------------------------------------------
+          settings_path = Path(
+              "momentumflow/frontend/src/pages/Settings.jsx"
+          )
+          settings = settings_path.read_text(encoding="utf-8")
+
+          if "FastScalpToggle" not in settings:
+              settings = replace_once(
+                  settings,
+                  "import RejectionLogPanel from '../components/RejectionLogPanel.jsx';\n",
+                  "import RejectionLogPanel from '../components/RejectionLogPanel.jsx';\nimport FastScalpToggle from '../components/FastScalpToggle.jsx';\n",
+                  "Settings FastScalpToggle import",
+              )
+
+              title_pos = settings.find("Strategy Analysis")
+              if title_pos < 0:
+                  raise SystemExit("Could not find Strategy Analysis section")
+
+              section_pos = settings.rfind("<section>", 0, title_pos)
+              if section_pos < 0:
+                  raise SystemExit("Could not find Strategy Analysis section start")
+
+              fast_section = """<section>
+                <h2 style={h2}>Fast Scalp</h2>
+                <FastScalpToggle />
+              </section>
+
+              """
+
+              settings = (
+                  settings[:section_pos] +
+                  fast_section +
+                  settings[section_pos:]
+              )
+
+          settings_path.write_text(settings, encoding="utf-8")
+
+          print("Fast Scalp patch applied.")
+          PY
+
+      - name: Validate backend JavaScript
+        run: |
+          node --check momentumflow/tradingConfig.js
+          node --check momentumflow/tradingMode.js
+          node --check momentumflow/strategyEngine.js
+          node --check momentumflow/fastScalpMonitor.js
+          node --check momentumflow/server.js
+
+      - name: Validate frontend build
+        working-directory: momentumflow/frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit Fast Scalp
+        shell: bash
+        run: |
+          git config user.name "MomentumFlow Installer"
+          git config user.email "actions@users.noreply.github.com"
+          git add momentumflow
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Add PAPER-only 1-minute crypto Fast Scalp"
+          git push origin HEAD:main
