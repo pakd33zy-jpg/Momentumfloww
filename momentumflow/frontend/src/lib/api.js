@@ -189,9 +189,19 @@ export const api = {
   writeTradingConfigDraft,
   clearTradingConfigDraft,
 
-  // Automated live bot
+  // Automated trading bot
   getLiveBotStatus: () =>
     request('/live-bot/status'),
+
+  getRejectionLog: (limit = 100) =>
+    request(
+      `/live-bot/rejection-log?limit=${encodeURIComponent(limit)}`
+    ),
+
+  clearRejectionLog: () =>
+    request('/live-bot/rejection-log', {
+      method: 'DELETE',
+    }),
 
   startLiveBot: () =>
     request('/live-bot/start', {
