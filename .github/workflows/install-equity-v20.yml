@@ -292,7 +292,7 @@ jobs:
           )
 
           if "crypto disabled by equity focus mode" not in s:
-              old = "  if(\n    cryptoSymbols.length\n  ) {\n"
+              old = "  if (\n    cryptoSymbols.length\n  ) {\n"
 
               new = """  const equityFocusMode =
             tradingCfg()
