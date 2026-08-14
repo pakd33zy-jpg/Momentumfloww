@@ -118,6 +118,12 @@ const DEFAULTS = {
 
   // Prevent tiny stops from creating oversized positions.
   maxPositionFractionOfEquity: 0.25,
+
+  // Leave room for price movement, broker haircuts and in-flight commitments.
+  entryBuyingPowerFraction: 0.90,
+
+  // A rejected NEW entry should not kill the whole bot.
+  entryBuyingPowerRejectCooldownMs: 60000,
 };
 
 const tradingCfg = () => ({
@@ -129,6 +135,37 @@ const cfg = () => ({
   ...DEFAULTS,
   ...store.getConfig('liveBotConfig', {}),
 });
+
+let entryBuyingPowerCooldownUntil = 0;
+let entryBuyingPowerCooldownSymbol = null;
+
+function isBuyingPowerEntryError(error) {
+  return /buying power/i.test(
+    String(
+      error?.message ||
+      ''
+    )
+  );
+}
+
+function buyingPowerFraction() {
+  const value = Number(
+    cfg().entryBuyingPowerFraction ??
+    0.90
+  );
+
+  if (
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value >= 1
+  ) {
+    throw new Error(
+      'liveBotConfig.entryBuyingPowerFraction must be greater than 0 and less than 1.'
+    );
+  }
+
+  return value;
+}
 
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
@@ -4149,11 +4186,18 @@ function buildPositionBudget({
     equity *
     maxPositionFraction;
 
+  const entryBuyingPowerFraction =
+    buyingPowerFraction();
+
+  const buyingPowerCap =
+    buyingPower *
+    entryBuyingPowerFraction;
+
   const positionBudget =
     Math.min(
       riskSizedNotional,
       equityCap,
-      buyingPower
+      buyingPowerCap
     );
 
   return {
@@ -4178,6 +4222,10 @@ function buildPositionBudget({
     riskSizedNotional,
 
     equityCap,
+
+    buyingPowerCap,
+
+    entryBuyingPowerFraction,
 
     positionBudget,
 
@@ -4254,6 +4302,42 @@ async function enter(
     );
 
     return false;
+  }
+
+  if (
+    Date.now() <
+    entryBuyingPowerCooldownUntil
+  ) {
+    const waitSeconds =
+      Math.max(
+        1,
+        Math.ceil(
+          (
+            entryBuyingPowerCooldownUntil -
+            Date.now()
+          ) /
+          1000
+        )
+      );
+
+    state.lastDecision =
+      `${mode.toUpperCase()} new entries cooling down ${waitSeconds}s` +
+      (
+        entryBuyingPowerCooldownSymbol
+          ? ` after buying-power rejection on ${entryBuyingPowerCooldownSymbol}`
+          : ' after buying-power rejection'
+      );
+
+    return false;
+  }
+
+  if (
+    entryBuyingPowerCooldownUntil > 0 &&
+    Date.now() >=
+      entryBuyingPowerCooldownUntil
+  ) {
+    entryBuyingPowerCooldownUntil = 0;
+    entryBuyingPowerCooldownSymbol = null;
   }
 
   const best =
@@ -4366,6 +4450,7 @@ async function enter(
 
   let order;
 
+  try {
   if (
     direction ===
     'SHORT'
@@ -4484,6 +4569,49 @@ async function enter(
             : 'day',
       });
   }
+  } catch (error) {
+    if (
+      isBuyingPowerEntryError(
+        error
+      )
+    ) {
+      const cooldownMs =
+        Math.max(
+          10000,
+          Number(
+            cfg()
+              .entryBuyingPowerRejectCooldownMs ||
+            60000
+          )
+        );
+
+      entryBuyingPowerCooldownUntil =
+        Date.now() +
+        cooldownMs;
+
+      entryBuyingPowerCooldownSymbol =
+        best.symbol;
+
+      state.lastError =
+        null;
+
+      state.lastDecision =
+        `${mode.toUpperCase()} ${direction} ${best.symbol} skipped — ` +
+        `Alpaca buying-power rejection; bot keeps running — ` +
+        `new-entry cooldown ${Math.ceil(cooldownMs / 1000)}s`;
+
+      console.warn(
+        `[${mode}-bot] ${state.lastDecision}: ${error.message}`
+      );
+
+      return false;
+    }
+
+    throw error;
+  }
+
+  entryBuyingPowerCooldownUntil = 0;
+  entryBuyingPowerCooldownSymbol = null;
 
   const fill =
     await settleEntry(
