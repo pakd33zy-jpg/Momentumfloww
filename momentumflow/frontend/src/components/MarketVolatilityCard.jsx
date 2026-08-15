@@ -1,246 +1,637 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
-function toNumber(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+import {
+  api,
+} from '../lib/api.js';
+
+function fmt(
+  value,
+  digits = 2
+) {
+  const number =
+    Number(value);
+
+  return Number.isFinite(
+    number
+  )
+    ? number.toFixed(
+        digits
+      )
+    : '-';
 }
 
-function formatLabel(ts) {
-  try {
-    const d = new Date(ts);
-    return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
-  } catch {
-    return '';
+function pct(value) {
+  const number =
+    Number(value);
+
+  if (
+    !Number.isFinite(
+      number
+    )
+  ) {
+    return '-';
   }
+
+  return `${
+    number >= 0
+      ? '+'
+      : ''
+  }${number.toFixed(
+    2
+  )}%`;
 }
 
-export default function MarketVolatilityCard({
-  title = 'Market Volatility (VIX)',
-  endpoint = '/api/market/volatility',
-  height = 220,
-}) {
-  const [points, setPoints] = useState([]);
-  const [status, setStatus] = useState('Loading...');
-  const [error, setError] = useState('');
+export default function MarketVolatilityCard() {
+  const [
+    data,
+    setData,
+  ] = useState(null);
+
+  const [
+    error,
+    setError,
+  ] = useState('');
 
   useEffect(() => {
-    let alive = true;
+    let active = true;
 
     async function load() {
       try {
-        setError('');
-        const res = await fetch(endpoint, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+        const next =
+          await api
+            .getMarketVolatility();
 
-        // expected shape:
-        // { points: [{ time: "...", value: 18.4 }, ...], current: 18.4 }
-        const rows = Array.isArray(json?.points) ? json.points : [];
-        const cleaned = rows
-          .map((r) => ({
-            time: r.time || r.timestamp || r.t,
-            value: toNumber(r.value ?? r.close ?? r.vix),
-          }))
-          .filter((r) => r.time && Number.isFinite(r.value));
+        if (active) {
+          setData(
+            next
+          );
 
-        if (!alive) return;
-
-        setPoints(cleaned);
-        if (cleaned.length > 0) {
-          const last = cleaned[cleaned.length - 1];
-          setStatus(`Current: ${last.value.toFixed(2)}`);
-        } else {
-          setStatus('No data');
+          setError('');
         }
-      } catch (e) {
-        if (!alive) return;
-        setError(e.message || 'Failed to load');
-        setStatus('Using fallback sample data');
-
-        // fallback sample line so the card still renders
-        const now = Date.now();
-        const sample = Array.from({ length: 30 }).map((_, i) => ({
-          time: now - (29 - i) * 60 * 1000,
-          value: 16 + Math.sin(i / 3) * 2 + i * 0.05,
-        }));
-        setPoints(sample);
+      } catch (err) {
+        if (active) {
+          setError(
+            err.message ||
+              'Unable to load SPY volatility.'
+          );
+        }
       }
     }
 
     load();
-    const timer = setInterval(load, 30000);
+
+    const timer =
+      setInterval(
+        load,
+        30000
+      );
+
     return () => {
-      alive = false;
-      clearInterval(timer);
+      active = false;
+
+      clearInterval(
+        timer
+      );
     };
-  }, [endpoint]);
+  }, []);
 
-  const chart = useMemo(() => {
-    const width = 1000;
-    const pad = 28;
+  const chart =
+    useMemo(
+      () => {
+        const points =
+          Array.isArray(
+            data?.points
+          )
+            ? data.points
+            : [];
 
-    if (!points.length) {
-      return {
-        path: '',
-        min: 0,
-        max: 0,
-        last: null,
-        width,
-        labels: [],
-      };
-    }
+        if (
+          points.length <
+          2
+        ) {
+          return null;
+        }
 
-    const values = points.map((p) => p.value);
-    let min = Math.min(...values);
-    let max = Math.max(...values);
+        const width =
+          760;
 
-    if (min === max) {
-      min -= 1;
-      max += 1;
-    }
+        const height =
+          220;
 
-    const xStep = (width - pad * 2) / Math.max(points.length - 1, 1);
-    const yScale = (height - pad * 2) / (max - min);
+        const padX =
+          14;
 
-    const xy = points.map((p, i) => {
-      const x = pad + i * xStep;
-      const y = height - pad - (p.value - min) * yScale;
-      return { x, y, ...p };
-    });
+        const padY =
+          18;
 
-    const path = xy
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
-      .join(' ');
+        const closes =
+          points
+            .map(
+              (point) =>
+                Number(
+                  point.c
+                )
+            )
+            .filter(
+              Number.isFinite
+            );
 
-    const last = xy[xy.length - 1];
+        const min =
+          Math.min(
+            ...closes
+          );
 
-    const labelIndexes = [
-      0,
-      Math.floor(points.length * 0.33),
-      Math.floor(points.length * 0.66),
-      points.length - 1,
-    ]
-      .filter((v, i, arr) => arr.indexOf(v) === i)
-      .map((idx) => ({
-        x: xy[idx].x,
-        label: formatLabel(points[idx].time),
-      }));
+        const max =
+          Math.max(
+            ...closes
+          );
 
-    return { path, min, max, last, width, labels: labelIndexes };
-  }, [points, height]);
+        const span =
+          Math.max(
+            max - min,
+
+            Math.max(
+              Math.abs(
+                max
+              ),
+              1
+            ) *
+              0.0005
+          );
+
+        const path =
+          points
+            .map(
+              (
+                point,
+                index
+              ) => {
+                const x =
+                  padX +
+                  (
+                    index /
+                    Math.max(
+                      points.length -
+                        1,
+                      1
+                    )
+                  ) *
+                    (
+                      width -
+                      padX * 2
+                    );
+
+                const y =
+                  padY +
+                  (
+                    (
+                      max -
+                      Number(
+                        point.c
+                      )
+                    ) /
+                    span
+                  ) *
+                    (
+                      height -
+                      padY * 2
+                    );
+
+                return `${
+                  index === 0
+                    ? 'M'
+                    : 'L'
+                } ${x.toFixed(
+                  1
+                )} ${y.toFixed(
+                  1
+                )}`;
+              }
+            )
+            .join(' ');
+
+        const open =
+          Number(
+            data
+              ?.stats
+              ?.open
+          );
+
+        const openY =
+          Number.isFinite(
+            open
+          )
+            ? padY +
+              (
+                (
+                  max -
+                  open
+                ) /
+                span
+              ) *
+                (
+                  height -
+                  padY * 2
+                )
+            : null;
+
+        return {
+          width,
+          height,
+          path,
+          openY,
+        };
+      },
+      [data]
+    );
+
+  const change =
+    Number(
+      data
+        ?.stats
+        ?.changePct ??
+      0
+    );
+
+  const lineColor =
+    change >= 0
+      ? '#4ade80'
+      : '#f87171';
 
   return (
     <div
       style={{
-        background: '#0b0f1a',
-        border: '1px solid #1f2a44',
-        borderRadius: 16,
-        padding: 18,
-        color: '#e5e7eb',
-        boxShadow: '0 0 0 1px rgba(255,255,255,0.02) inset',
+        background:
+          '#1e2139',
+
+        border:
+          '1px solid #2a2e4a',
+
+        borderRadius:
+          '8px',
+
+        padding:
+          '18px',
+
+        marginBottom:
+          '24px',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div
+        style={{
+          display:
+            'flex',
+
+          justifyContent:
+            'space-between',
+
+          gap:
+            '12px',
+
+          alignItems:
+            'flex-start',
+
+          flexWrap:
+            'wrap',
+        }}
+      >
         <div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>{title}</div>
-          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>
-            Tracks volatility in a dark theme with a red line
+          <div
+            style={{
+              fontWeight:
+                'bold',
+
+              fontSize:
+                '16px',
+            }}
+          >
+            SPY Market Volatility
+          </div>
+
+          <div
+            style={{
+              color:
+                '#94a3b8',
+
+              fontSize:
+                '12px',
+
+              marginTop:
+                '4px',
+            }}
+          >
+            Live Alpaca IEX ·
+            5-minute bars ·{' '}
+            {data?.session ||
+              'loading'}
           </div>
         </div>
 
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 14, color: '#94a3b8' }}>{status}</div>
-          {error ? (
-            <div style={{ fontSize: 12, color: '#f87171', marginTop: 4 }}>{error}</div>
-          ) : null}
+        <div
+          style={{
+            textAlign:
+              'right',
+          }}
+        >
+          <div
+            style={{
+              fontSize:
+                '22px',
+
+              fontWeight:
+                'bold',
+            }}
+          >
+            $
+            {fmt(
+              data
+                ?.stats
+                ?.last
+            )}
+          </div>
+
+          <div
+            style={{
+              color:
+                lineColor,
+
+              fontWeight:
+                'bold',
+
+              fontSize:
+                '13px',
+            }}
+          >
+            {pct(
+              data
+                ?.stats
+                ?.changePct
+            )}{' '}
+            session
+          </div>
         </div>
       </div>
 
+      {error && (
+        <div
+          style={{
+            color:
+              '#f87171',
+
+            fontSize:
+              '12px',
+
+            marginTop:
+              '12px',
+          }}
+        >
+          {error}
+        </div>
+      )}
+
       <div
         style={{
-          background: '#05070d',
-          borderRadius: 12,
-          border: '1px solid #182033',
-          padding: 10,
+          display:
+            'grid',
+
+          gridTemplateColumns:
+            'repeat(auto-fit, minmax(125px, 1fr))',
+
+          gap:
+            '10px',
+
+          marginTop:
+            '14px',
+
+          marginBottom:
+            '12px',
         }}
       >
-        <svg viewBox={`0 0 ${chart.width} ${height}`} width="100%" height={height}>
-          {/* grid */}
-          {[0.2, 0.4, 0.6, 0.8].map((g) => {
-            const y = height * g;
-            return (
-              <line
-                key={g}
-                x1="0"
-                y1={y}
-                x2={chart.width}
-                y2={y}
-                stroke="#182033"
-                strokeWidth="1"
-              />
-            );
-          })}
+        <Metric
+          label="OPEN"
+          value={`$${fmt(
+            data
+              ?.stats
+              ?.open
+          )}`}
+        />
 
-          {/* chart line */}
-          {chart.path ? (
-            <>
-              <path
-                d={chart.path}
-                fill="none"
-                stroke="#ef4444"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              {chart.last ? (
-                <circle cx={chart.last.x} cy={chart.last.y} r="6" fill="#ef4444" />
-              ) : null}
-            </>
-          ) : null}
+        <Metric
+          label="HIGH"
+          value={`$${fmt(
+            data
+              ?.stats
+              ?.high
+          )}`}
+        />
 
-          {/* min / max labels */}
-          <text x="10" y="18" fill="#94a3b8" fontSize="14">
-            High: {chart.max.toFixed(2)}
-          </text>
-          <text x="10" y={height - 10} fill="#94a3b8" fontSize="14">
-            Low: {chart.min.toFixed(2)}
-          </text>
+        <Metric
+          label="LOW"
+          value={`$${fmt(
+            data
+              ?.stats
+              ?.low
+          )}`}
+        />
 
-          {/* x labels */}
-          {chart.labels.map((l, i) => (
-            <text
-              key={i}
-              x={l.x}
-              y={height - 8}
-              textAnchor="middle"
-              fill="#64748b"
-              fontSize="13"
-            >
-              {l.label}
-            </text>
-          ))}
-        </svg>
+        <Metric
+          label="SESSION RANGE"
+          value={`${fmt(
+            data
+              ?.stats
+              ?.rangePct
+          )}%`}
+        />
+
+        <Metric
+          label="REALIZED VOL"
+          value={`${fmt(
+            data
+              ?.stats
+              ?.realizedPct
+          )}%`}
+        />
       </div>
 
       <div
         style={{
-          marginTop: 12,
-          display: 'flex',
-          gap: 10,
-          flexWrap: 'wrap',
-          fontSize: 13,
-          color: '#cbd5e1',
+          height:
+            '230px',
+
+          background:
+            '#15182a',
+
+          border:
+            '1px solid #272b46',
+
+          borderRadius:
+            '7px',
+
+          overflow:
+            'hidden',
         }}
       >
-        <span style={{ background: '#111827', padding: '6px 10px', borderRadius: 999 }}>
-          Calm: under 15
-        </span>
-        <span style={{ background: '#111827', padding: '6px 10px', borderRadius: 999 }}>
-          Active: 15–25
-        </span>
-        <span style={{ background: '#111827', padding: '6px 10px', borderRadius: 999 }}>
-          High Vol: above 25
-        </span>
+        {chart ? (
+          <svg
+            viewBox={`0 0 ${chart.width} ${chart.height}`}
+            width="100%"
+            height="100%"
+            preserveAspectRatio="none"
+          >
+            <line
+              x1="0"
+              x2={
+                chart.width
+              }
+              y1="55"
+              y2="55"
+              stroke="#252a45"
+              strokeWidth="1"
+            />
+
+            <line
+              x1="0"
+              x2={
+                chart.width
+              }
+              y1="110"
+              y2="110"
+              stroke="#252a45"
+              strokeWidth="1"
+            />
+
+            <line
+              x1="0"
+              x2={
+                chart.width
+              }
+              y1="165"
+              y2="165"
+              stroke="#252a45"
+              strokeWidth="1"
+            />
+
+            {chart.openY !=
+              null &&
+              chart.openY >=
+                0 &&
+              chart.openY <=
+                chart.height && (
+                <line
+                  x1="0"
+                  x2={
+                    chart.width
+                  }
+                  y1={
+                    chart.openY
+                  }
+                  y2={
+                    chart.openY
+                  }
+                  stroke="#64748b"
+                  strokeWidth="1"
+                  strokeDasharray="7 7"
+                />
+              )}
+
+            <path
+              d={
+                chart.path
+              }
+              fill="none"
+              stroke={
+                lineColor
+              }
+              strokeWidth="3"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+        ) : (
+          <div
+            style={{
+              color:
+                '#94a3b8',
+
+              padding:
+                '18px',
+
+              fontSize:
+                '13px',
+            }}
+          >
+            Loading SPY
+            volatility data…
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          color:
+            '#64748b',
+
+          fontSize:
+            '11px',
+
+          marginTop:
+            '8px',
+        }}
+      >
+        Dashed line =
+        session open. Graph
+        refreshes every 30
+        seconds.
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+}) {
+  return (
+    <div
+      style={{
+        background:
+          '#171a2d',
+
+        borderRadius:
+          '6px',
+
+        padding:
+          '10px',
+      }}
+    >
+      <div
+        style={{
+          color:
+            '#64748b',
+
+          fontSize:
+            '10px',
+
+          fontWeight:
+            'bold',
+        }}
+      >
+        {label}
+      </div>
+
+      <div
+        style={{
+          marginTop:
+            '4px',
+
+          fontWeight:
+            'bold',
+        }}
+      >
+        {value}
       </div>
     </div>
   );

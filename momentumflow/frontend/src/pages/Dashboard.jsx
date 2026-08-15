@@ -10,6 +10,9 @@ import {
 import TradingConfigPanel
   from '../components/TradingConfigPanel.jsx';
 
+import MarketVolatilityCard
+  from '../components/MarketVolatilityCard.jsx';
+
 export default function Dashboard() {
   const [
     sessions,
@@ -492,6 +495,8 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <MarketVolatilityCard />
 
       <button
         onClick={() =>

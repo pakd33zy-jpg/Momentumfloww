@@ -164,6 +164,9 @@ export const api = {
   getMarketGrid: () =>
     request('/market/grid'),
 
+  getMarketVolatility: () =>
+    request('/market/volatility'),
+
   // Chat
   sendCommand: (text) =>
     request('/chat/command', {
