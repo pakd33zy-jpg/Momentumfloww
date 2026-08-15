@@ -22,7 +22,15 @@ export const STRATEGY_DEFAULTS = {
   fastScalpEnabled: false,
   fastScalpScoreThreshold: 8,
   fastScalpEntryMomentumPct: 0.65,
-  fastScalpMaxSpreadPct: 0.12,
+
+  // Dynamic crypto spread guard.
+  // Normal setups: <= 0.25%.
+  // Very strong impulses: <= 0.30%.
+  // Anything above 0.30% is always rejected.
+  fastScalpMaxSpreadPct: 0.25,
+  fastScalpStrongMaxSpreadPct: 0.30,
+  fastScalpStrongSpreadMomentumBonusPct: 0.25,
+
   fastScalpEstimatedRoundTripCostPct: 0.50,
   fastScalpProfitBufferPct: 0.12,
   fastScalpStopLossPct: 0.45,
@@ -1616,6 +1624,56 @@ const reject = (
   ...extra,
 });
 
+const FAST_SCALP_CASH_LIKE_BASES =
+  new Set([
+    'USDT',
+    'USDC',
+    'DAI',
+    'PYUSD',
+    'TUSD',
+    'FDUSD',
+    'USDP',
+    'USDG',
+    'GUSD',
+    'USDS',
+    'USDE',
+    'EURC',
+    'USD0',
+    'USDY',
+  ]);
+
+function cryptoBaseSymbol(
+  symbol = ''
+) {
+  const value =
+    String(
+      symbol ||
+      ''
+    )
+      .trim()
+      .toUpperCase();
+
+  if (
+    value.includes(
+      '/'
+    )
+  ) {
+    return value
+      .split(
+        '/'
+      )[0];
+  }
+
+  return value.endsWith(
+    'USD'
+  )
+    ? value.slice(
+        0,
+        -3
+      )
+    : value;
+}
+
 function scoreDirection({
   direction,
   bars,
@@ -2815,6 +2873,29 @@ function evaluateCryptoFastScalpCandidate({
     };
   }
 
+  const cryptoBase =
+    cryptoBaseSymbol(
+      asset.symbol
+    );
+
+  if (
+    FAST_SCALP_CASH_LIKE_BASES.has(
+      cryptoBase
+    )
+  ) {
+    const detail = reject(
+      `FAST SCALP: ${cryptoBase} cash-like/stable pair excluded`
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
+
   const all = mergeCurrentMinuteBar(
     bars || [],
     snapshot
@@ -2869,29 +2950,6 @@ function evaluateCryptoFastScalpCandidate({
     };
   }
 
-  const maxSpread = Math.max(
-    0.01,
-    Number(config.fastScalpMaxSpreadPct ?? 0.12)
-  );
-
-  if (spread > maxSpread) {
-    const detail = reject(
-      `FAST SCALP: spread ${spread.toFixed(3)}% > ${maxSpread}%`,
-      {
-        spreadPct: Number(spread.toFixed(4)),
-        minuteMomentumPct: momentum,
-      }
-    );
-
-    return {
-      signal: null,
-      diagnostics: {
-        long: detail,
-        threshold: Number(config.fastScalpScoreThreshold ?? 8),
-      },
-    };
-  }
-
   const estimatedCost = Math.max(
     0,
     Number(config.fastScalpEstimatedRoundTripCostPct ?? 0.50)
@@ -2906,6 +2964,150 @@ function evaluateCryptoFastScalpCandidate({
     0.01,
     Number(config.fastScalpEntryMomentumPct ?? 0.65)
   );
+
+  // Migrate the old saved 0.12% cap automatically.
+  // A deliberately tighter non-legacy value is still respected.
+  const configuredNormalSpread =
+    Number(
+      config.fastScalpMaxSpreadPct ??
+      0.25
+    );
+
+  const normalMaxSpread =
+    Math.min(
+      0.30,
+      configuredNormalSpread <=
+        0.120001
+        ? 0.25
+        : Math.max(
+            0.01,
+            configuredNormalSpread
+          )
+    );
+
+  const configuredStrongSpread =
+    Number(
+      config.fastScalpStrongMaxSpreadPct ??
+      0.30
+    );
+
+  const strongMaxSpread =
+    Math.min(
+      0.30,
+      Math.max(
+        normalMaxSpread,
+        Number.isFinite(
+          configuredStrongSpread
+        )
+          ? configuredStrongSpread
+          : 0.30
+      )
+    );
+
+  const strongSpreadBonus =
+    Math.max(
+      0,
+      Number(
+        config.fastScalpStrongSpreadMomentumBonusPct ??
+        0.25
+      )
+    );
+
+  const strongSpreadMomentumFloor =
+    entryFloor +
+    strongSpreadBonus;
+
+  const strongSpreadEligible =
+    momentum != null &&
+    momentum >=
+      strongSpreadMomentumFloor;
+
+  const maxSpread =
+    strongSpreadEligible
+      ? strongMaxSpread
+      : normalMaxSpread;
+
+  const estimatedEdgeAfterCosts =
+    momentum == null
+      ? null
+      : momentum -
+        estimatedCost -
+        spread;
+
+  if (spread > maxSpread) {
+    const edgeText =
+      estimatedEdgeAfterCosts == null
+        ? 'edge unavailable'
+        : `edge after est. costs ${estimatedEdgeAfterCosts.toFixed(3)}%`;
+
+    const strongText =
+      spread <=
+        strongMaxSpread &&
+      !strongSpreadEligible
+        ? `; ${strongMaxSpread.toFixed(2)}% allowed only when impulse >= ${strongSpreadMomentumFloor.toFixed(3)}%`
+        : '';
+
+    const detail = reject(
+      `FAST SCALP: spread ${spread.toFixed(3)}% > ${maxSpread.toFixed(2)}% limit; ${edgeText}${strongText}`,
+      {
+        spreadPct:
+          Number(
+            spread.toFixed(
+              4
+            )
+          ),
+        spreadLimitPct:
+          Number(
+            maxSpread.toFixed(
+              4
+            )
+          ),
+        normalSpreadLimitPct:
+          Number(
+            normalMaxSpread.toFixed(
+              4
+            )
+          ),
+        strongSpreadLimitPct:
+          Number(
+            strongMaxSpread.toFixed(
+              4
+            )
+          ),
+        strongSpreadEligible,
+        strongSpreadMomentumFloorPct:
+          Number(
+            strongSpreadMomentumFloor.toFixed(
+              4
+            )
+          ),
+        minuteMomentumPct:
+          momentum,
+        estimatedRoundTripCostPct:
+          Number(
+            estimatedCost.toFixed(
+              4
+            )
+          ),
+        estimatedEdgeAfterCostsPct:
+          estimatedEdgeAfterCosts == null
+            ? null
+            : Number(
+                estimatedEdgeAfterCosts.toFixed(
+                  4
+                )
+              ),
+      }
+    );
+
+    return {
+      signal: null,
+      diagnostics: {
+        long: detail,
+        threshold: Number(config.fastScalpScoreThreshold ?? 8),
+      },
+    };
+  }
 
   // Require the current 1-minute impulse to be large enough to clear
   // estimated round-trip fees, the current spread, and a profit buffer.
@@ -2944,6 +3146,12 @@ function evaluateCryptoFastScalpCandidate({
         trend5Pct: Number(trend5.toFixed(4)),
         trend15Pct: Number(trend15.toFixed(4)),
         spreadPct: Number(spread.toFixed(4)),
+        spreadLimitPct: Number(maxSpread.toFixed(4)),
+        estimatedRoundTripCostPct: Number(estimatedCost.toFixed(4)),
+        estimatedEdgeAfterCostsPct:
+          estimatedEdgeAfterCosts == null
+            ? null
+            : Number(estimatedEdgeAfterCosts.toFixed(4)),
       }
     );
 
@@ -3026,6 +3234,17 @@ function evaluateCryptoFastScalpCandidate({
     rollingBreakout: null,
     regime: btcRegime,
     requiredImpulsePct: Number(requiredImpulse.toFixed(4)),
+    estimatedRoundTripCostPct: Number(estimatedCost.toFixed(4)),
+    estimatedEdgeAfterCostsPct:
+      estimatedEdgeAfterCosts == null
+        ? null
+        : Number(estimatedEdgeAfterCosts.toFixed(4)),
+    spreadLimitPct: Number(maxSpread.toFixed(4)),
+    normalSpreadLimitPct: Number(normalMaxSpread.toFixed(4)),
+    strongSpreadLimitPct: Number(strongMaxSpread.toFixed(4)),
+    strongSpreadEligible,
+    strongSpreadMomentumFloorPct:
+      Number(strongSpreadMomentumFloor.toFixed(4)),
     completedBarMovePct: Number(completedMove.toFixed(4)),
     exitPlan: {
       atrPct: null,

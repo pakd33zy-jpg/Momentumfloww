@@ -48,7 +48,9 @@ export default function FastScalpToggle() {
           <div style={title}>FAST SCALP — 1 MIN CRYPTO</div>
           <div style={note}>
             PAPER only. Buys strong upward 1-minute impulses, then exits
-            back to cash on reversal/fade. It does not open crypto shorts.
+            back to cash on reversal/fade. Dynamic spread guard: 0.25% normally,
+            up to 0.30% only for very strong cost-covered impulses. Cash-like and
+            stablecoin pairs are skipped. It does not open crypto shorts.
           </div>
         </div>
 
