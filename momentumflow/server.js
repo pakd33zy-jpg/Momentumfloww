@@ -9,6 +9,7 @@ import chatRouter from './chat.js';
 import tradingModeRouter from './tradingMode.js';
 import tradingConfigRouter from './tradingConfig.js';
 import liveBotRouter from './liveBot.js';
+import v26Router from './v26.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { store } from './store.js';
@@ -37,6 +38,7 @@ app.use('/api/chat', chatRouter);
 app.use('/api/trading-mode', tradingModeRouter);
 app.use('/api/trading-config', tradingConfigRouter);
 app.use('/api/live-bot', liveBotRouter);
+app.use('/api/v26', v26Router);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
 
 const PORT = process.env.PORT || 4000;
