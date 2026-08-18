@@ -1500,6 +1500,11 @@ function recordRejectionSnapshot(
         crypto: [],
       },
 
+    liquidity_gate:
+      diagnostics
+        .liquidityGate ||
+      null,
+
     near_misses:
       Array.isArray(
         nearMisses
