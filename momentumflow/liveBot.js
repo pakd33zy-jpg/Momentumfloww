@@ -460,6 +460,193 @@ function strategyPerformanceSummary() {
     );
 }
 
+function executionQualitySummary() {
+  const mode =
+    state.mode ||
+    selectedMode();
+
+  const trades =
+    store
+      .getAll('trades')
+      .filter(
+        (trade) =>
+          (
+            trade.execution_mode ||
+            'paper'
+          ) === mode
+      )
+      .slice(-300);
+
+  const entries =
+    trades.filter(
+      (trade) =>
+        Number.isFinite(
+          Number(
+            trade.entry_slippage_bps
+          )
+        )
+    );
+
+  const exits =
+    trades.filter(
+      (trade) =>
+        Number.isFinite(
+          Number(
+            trade.exit_slippage_bps
+          )
+        )
+    );
+
+  const average = (values) =>
+    values.length
+      ? values.reduce(
+          (sum, value) =>
+            sum + value,
+          0
+        ) / values.length
+      : null;
+
+  const percentile90 = (values) => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.min(
+      sorted.length - 1,
+      Math.ceil(sorted.length * 0.90) - 1
+    );
+    return sorted[index];
+  };
+
+  const entrySlippage =
+    entries.map(
+      (trade) =>
+        Number(
+          trade.entry_slippage_bps
+        )
+    );
+
+  const exitSlippage =
+    exits.map(
+      (trade) =>
+        Number(
+          trade.exit_slippage_bps
+        )
+    );
+
+  const fillPcts =
+    trades
+      .map(
+        (trade) =>
+          Number(
+            trade.planned_budget_filled_pct
+          )
+      )
+      .filter(Number.isFinite);
+
+  const exposurePcts =
+    trades
+      .map(
+        (trade) =>
+          Number(
+            trade.entry_exposure_pct
+          )
+      )
+      .filter(Number.isFinite);
+
+  return {
+    measuredEntries:
+      entries.length,
+
+    measuredExits:
+      exits.length,
+
+    avgEntrySlippageBps:
+      average(
+        entrySlippage
+      ),
+
+    p90EntrySlippageBps:
+      percentile90(
+        entrySlippage
+      ),
+
+    avgExitSlippageBps:
+      average(
+        exitSlippage
+      ),
+
+    p90ExitSlippageBps:
+      percentile90(
+        exitSlippage
+      ),
+
+    partialEntries:
+      trades.filter(
+        (trade) =>
+          trade.entry_was_partial ===
+          true
+      ).length,
+
+    reconciledExits:
+      trades.filter(
+        (trade) =>
+          trade.reconciled_exit ===
+          true
+      ).length,
+
+    avgPlannedBudgetFilledPct:
+      average(
+        fillPcts
+      ),
+
+    avgEntryExposurePct:
+      average(
+        exposurePcts
+      ),
+
+    maxEntryExposurePct:
+      exposurePcts.length
+        ? Math.max(
+            ...exposurePcts
+          )
+        : null,
+
+    sampleEnough:
+      Math.min(
+        entries.length,
+        exits.length
+      ) >= 30,
+
+    worstEntrySlippage:
+      entries
+        .map(
+          (trade) => ({
+            tradeId:
+              trade.id,
+
+            market:
+              trade.market,
+
+            direction:
+              trade.direction,
+
+            slippageBps:
+              Number(
+                trade.entry_slippage_bps
+              ),
+          })
+        )
+        .sort(
+          (a, b) =>
+            b.slippageBps -
+            a.slippageBps
+        )
+        .slice(
+          0,
+          5
+        ),
+  };
+}
+
 function pub() {
   let effectiveRisk =
     null;
@@ -525,6 +712,9 @@ function pub() {
 
     strategyPerformance:
       strategyPerformanceSummary(),
+
+    executionQuality:
+      executionQualitySummary(),
 
     marketOpen:
       state.marketOpen,
@@ -3066,6 +3256,35 @@ function finalizeTradeClosure(
       ? 'SHORT'
       : 'LONG';
 
+  const exitDecisionPrice =
+    Number(
+      trade
+        .exit_decision_price
+    );
+
+  const exitSlippageBps =
+    Number.isFinite(
+      exitDecisionPrice
+    ) &&
+    exitDecisionPrice >
+      0
+      ? (
+          direction ===
+          'SHORT'
+            ? (
+                exitPrice -
+                exitDecisionPrice
+              ) /
+              exitDecisionPrice
+            : (
+                exitDecisionPrice -
+                exitPrice
+              ) /
+              exitDecisionPrice
+        ) *
+        10000
+      : null;
+
   const grossPnl =
     direction ===
     'SHORT'
@@ -3150,6 +3369,18 @@ function finalizeTradeClosure(
 
     exit_price:
       exitPrice,
+
+    exit_slippage_bps:
+      Number.isFinite(
+        exitSlippageBps
+      )
+        ? Number(
+            exitSlippageBps
+              .toFixed(
+                4
+              )
+          )
+        : null,
 
     gross_pnl:
       Number(
@@ -3294,6 +3525,17 @@ async function closeTrade(
           pending_exit_started_at:
             new Date()
               .toISOString(),
+
+          exit_decision_price:
+            Number.isFinite(
+              Number(
+                price
+              )
+            )
+              ? Number(
+                  price
+                )
+              : null,
         }
       );
   }
@@ -4724,6 +4966,69 @@ async function enter(
     );
   }
 
+  const signalPrice =
+    Number(
+      best.price
+    );
+
+  const entrySlippageBps =
+    Number.isFinite(
+      signalPrice
+    ) &&
+    signalPrice >
+      0
+      ? (
+          direction ===
+          'SHORT'
+            ? (
+                signalPrice -
+                entryPrice
+              ) /
+              signalPrice
+            : (
+                entryPrice -
+                signalPrice
+              ) /
+              signalPrice
+        ) *
+        10000
+      : null;
+
+  const actualEntryNotional =
+    entryPrice *
+    filledQty;
+
+  const plannedBudget =
+    Number(
+      sizing.positionBudget
+    );
+
+  const plannedBudgetFilledPct =
+    Number.isFinite(
+      plannedBudget
+    ) &&
+    plannedBudget >
+      0
+      ? (
+          actualEntryNotional /
+          plannedBudget
+        ) *
+        100
+      : null;
+
+  const entryExposurePct =
+    Number.isFinite(
+      equity
+    ) &&
+    equity >
+      0
+      ? (
+          actualEntryNotional /
+          equity
+        ) *
+        100
+      : null;
+
   const trade =
     createTrade({
       sessionId:
@@ -4767,6 +5072,57 @@ async function enter(
 
       entry_order_status:
         fill.status,
+
+      signal_price:
+        Number.isFinite(
+          signalPrice
+        )
+          ? signalPrice
+          : null,
+
+      entry_slippage_bps:
+        Number.isFinite(
+          entrySlippageBps
+        )
+          ? Number(
+              entrySlippageBps
+                .toFixed(
+                  4
+                )
+            )
+          : null,
+
+      actual_entry_notional:
+        Number(
+          actualEntryNotional
+            .toFixed(
+              4
+            )
+        ),
+
+      planned_budget_filled_pct:
+        Number.isFinite(
+          plannedBudgetFilledPct
+        )
+          ? Number(
+              plannedBudgetFilledPct
+                .toFixed(
+                  4
+                )
+            )
+          : null,
+
+      entry_exposure_pct:
+        Number.isFinite(
+          entryExposurePct
+        )
+          ? Number(
+              entryExposurePct
+                .toFixed(
+                  4
+                )
+            )
+          : null,
 
       entry_was_partial:
         fill.status !==
