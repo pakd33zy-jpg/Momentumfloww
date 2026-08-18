@@ -4,6 +4,7 @@ import {
   getStockSnapshots,
   getCryptoSnapshots,
   getStockBars,
+  placeOrder,
 } from './alpacaClient.js';
 import { MARKETS } from './models.js';
 
@@ -433,6 +434,103 @@ router.get(
           error:
             err.message,
         });
+    }
+  }
+);
+
+
+router.get(
+  '/symbol/:symbol',
+  async (req, res) => {
+    try {
+      const mode = selectedMode();
+      const requested = decodeURIComponent(String(req.params.symbol || '')).trim().toUpperCase();
+      const crypto = requested.includes('/');
+      const symbol = crypto ? requested : requested.replace(/[^A-Z0-9.-]/g, '');
+
+      if (!symbol) {
+        return res.status(400).json({ error: 'Symbol required.' });
+      }
+
+      let snapshot = null;
+      let rows = [];
+
+      if (crypto) {
+        const snaps = await getCryptoSnapshots(mode, [symbol]);
+        snapshot = snaps[symbol] || snaps[symbol.replace('/', '')] || null;
+      } else {
+        const snaps = await getStockSnapshots(mode, [symbol], { feed: 'iex' });
+        snapshot = snaps[symbol] || null;
+
+        const end = new Date();
+        const start = new Date(end.getTime() - 5 * 24 * 60 * 60 * 1000);
+        const bars = await getStockBars(mode, [symbol], {
+          timeframe: '5Min',
+          start,
+          end,
+          limit: 1000,
+          feed: 'iex',
+          sort: 'asc',
+          maxPages: 3,
+        });
+        rows = (bars?.[symbol] || []).slice(-180);
+      }
+
+      const price = snapshotPrice(snapshot);
+      const closes = rows.map(x => Number(x.c)).filter(Number.isFinite);
+      const open = rows.length ? Number(rows[0].o ?? rows[0].c) : null;
+      const high = rows.length ? Math.max(...rows.map(x => Number(x.h ?? x.c)).filter(Number.isFinite)) : null;
+      const low = rows.length ? Math.min(...rows.map(x => Number(x.l ?? x.c)).filter(Number.isFinite)) : null;
+      const last = closes.length ? closes[closes.length - 1] : price;
+      const volume = rows.reduce((sum, x) => sum + Number(x.v || 0), 0);
+      const changePct = open > 0 && last > 0 ? ((last - open) / open) * 100 : null;
+
+      res.json({
+        symbol,
+        assetClass: crypto ? 'crypto' : 'us_equity',
+        source: crypto ? `alpaca_${mode}` : `alpaca_${mode}_iex`,
+        price,
+        stats: { open, high, low, last, volume, changePct },
+        points: rows.map(x => ({
+          t: x.t, o: Number(x.o ?? x.c), h: Number(x.h ?? x.c),
+          l: Number(x.l ?? x.c), c: Number(x.c), v: Number(x.v || 0),
+        })),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.post(
+  '/manual-order',
+  async (req, res) => {
+    try {
+      const mode = req.body?.mode === 'live' ? 'live' : 'paper';
+      const symbol = String(req.body?.symbol || '').trim().toUpperCase();
+      const side = req.body?.side === 'sell' ? 'sell' : 'buy';
+      const qty = Number(req.body?.qty);
+      const crypto = symbol.includes('/');
+
+      if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ error: 'Valid symbol and quantity are required.' });
+      }
+      if (mode === 'live' && req.body?.liveConfirmation !== 'LIVE') {
+        return res.status(400).json({ error: 'LIVE confirmation required for real-money order.' });
+      }
+
+      const order = await placeOrder({
+        mode,
+        symbol,
+        qty: String(qty),
+        side,
+        type: 'market',
+        timeInForce: crypto ? 'gtc' : 'day',
+      });
+
+      res.json(order);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   }
 );

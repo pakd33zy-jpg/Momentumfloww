@@ -167,6 +167,15 @@ export const api = {
   getMarketVolatility: () =>
     request('/market/volatility'),
 
+  getSymbolDetail: (symbol) =>
+    request(`/market/symbol/${encodeURIComponent(symbol)}`),
+
+  placeManualOrder: (payload) =>
+    request('/market/manual-order', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   // Chat
   sendCommand: (text) =>
     request('/chat/command', {

@@ -2,6 +2,7 @@ import {
   useEffect,
   useState,
 } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import {
   api,
@@ -14,6 +15,8 @@ import MarketVolatilityCard
   from '../components/MarketVolatilityCard.jsx';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+  const [symbolSearch, setSymbolSearch] = useState('');
   const [
     sessions,
     setSessions,
@@ -889,6 +892,32 @@ export default function Dashboard() {
         </div>
       </div>
 
+
+      <div style={{ background:'#1e2139', padding:15, borderRadius:8, border:'1px solid #2a2e4a', marginBottom:18 }}>
+        <div style={{fontWeight:'bold',marginBottom:8}}>Symbol Search</div>
+        <div style={{display:'flex',gap:8}}>
+          <input
+            value={symbolSearch}
+            onChange={(e) => setSymbolSearch(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && symbolSearch.trim()) {
+                const raw = symbolSearch.trim();
+                const normalized = raw.includes('/') ? raw : raw;
+                navigate(`/symbol/${encodeURIComponent(normalized)}`);
+              }
+            }}
+            placeholder="AAPL, NVDA, SPY, BTC/USD..."
+            style={{flex:1,background:'#0f172a',color:'#fff',border:'1px solid #475569',borderRadius:6,padding:11}}
+          />
+          <button
+            onClick={() => symbolSearch.trim() && navigate(`/symbol/${encodeURIComponent(symbolSearch.trim())}`)}
+            style={{background:'#2563eb',color:'#fff',border:0,borderRadius:6,padding:'0 15px',fontWeight:'bold'}}
+          >
+            View
+          </button>
+        </div>
+      </div>
+
       <h3
         style={{
           color:
@@ -923,7 +952,7 @@ export default function Dashboard() {
                 market.market ||
                 market.symbol
               }
-
+              onClick={() => navigate(`/symbol/${encodeURIComponent(market.symbol || market.market)}`)}
               style={{
                 background:
                   '#1e2139',
@@ -936,6 +965,9 @@ export default function Dashboard() {
 
                 border:
                   '1px solid #2a2e4a',
+
+                cursor:
+                  'pointer',
               }}
             >
               <div
