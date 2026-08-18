@@ -1,0 +1,9 @@
+momentumflow/frontend/node_modules/
+momentumflow/frontend/dist/
+node_modules/
+dist/
+*.log
+__pycache__/
+*.pyc
+.env
+.env.*

@@ -647,6 +647,343 @@ function executionQualitySummary() {
   };
 }
 
+function paperForwardSessionSummary() {
+  if (!state.sessionId) {
+    return null;
+  }
+
+  const session =
+    store.getOne(
+      'sessions',
+      state.sessionId
+    );
+
+  if (!session) {
+    return null;
+  }
+
+  const trades =
+    store
+      .getAll('trades')
+      .filter(
+        (trade) =>
+          trade.session_id ===
+          state.sessionId
+      );
+
+  const closed =
+    trades.filter(
+      (trade) =>
+        trade.result !==
+        null
+    );
+
+  const open =
+    trades.filter(
+      (trade) =>
+        trade.result ===
+        null
+    );
+
+  const numeric = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n)
+      ? n
+      : null;
+  };
+
+  const average = (values) =>
+    values.length
+      ? values.reduce(
+          (sum, value) =>
+            sum + value,
+          0
+        ) / values.length
+      : null;
+
+  const startingCapital =
+    numeric(
+      session.starting_capital ??
+      session.startingCapital
+    );
+
+  const realizedPnl =
+    closed.reduce(
+      (sum, trade) =>
+        sum +
+        Number(
+          trade.pnl ||
+          0
+        ),
+      0
+    );
+
+  const wins =
+    closed.filter(
+      (trade) =>
+        Number(
+          trade.pnl ||
+          0
+        ) >
+        0
+    ).length;
+
+  const entryExposure =
+    trades
+      .map(
+        (trade) =>
+          numeric(
+            trade.entry_exposure_pct
+          )
+      )
+      .filter(
+        Number.isFinite
+      );
+
+  const entrySlippage =
+    trades
+      .map(
+        (trade) =>
+          numeric(
+            trade.entry_slippage_bps
+          )
+      )
+      .filter(
+        Number.isFinite
+      );
+
+  const exitSlippage =
+    closed
+      .map(
+        (trade) =>
+          numeric(
+            trade.exit_slippage_bps
+          )
+      )
+      .filter(
+        Number.isFinite
+      );
+
+  const currentExposureNotional =
+    open.reduce(
+      (sum, trade) =>
+        sum +
+        Number(
+          trade.actual_entry_notional ||
+          0
+        ),
+      0
+    );
+
+  const currentExposurePctEstimate =
+    startingCapital &&
+    startingCapital >
+      0
+      ? (
+          currentExposureNotional /
+          startingCapital
+        ) *
+        100
+      : null;
+
+  // Estimate peak concurrent exposure by sweeping recorded trade lifetimes.
+  const exposureEvents = [];
+
+  for (const trade of trades) {
+    const exposure =
+      numeric(
+        trade.entry_exposure_pct
+      );
+
+    const openedAt =
+      new Date(
+        trade.timestamp ||
+        trade.created_at ||
+        0
+      ).getTime();
+
+    if (
+      !Number.isFinite(exposure) ||
+      !Number.isFinite(openedAt) ||
+      openedAt <= 0
+    ) {
+      continue;
+    }
+
+    exposureEvents.push({
+      time: openedAt,
+      delta: exposure,
+    });
+
+    if (trade.closed_at) {
+      const closedAt =
+        new Date(
+          trade.closed_at
+        ).getTime();
+
+      if (
+        Number.isFinite(closedAt) &&
+        closedAt >= openedAt
+      ) {
+        exposureEvents.push({
+          time: closedAt,
+          delta: -exposure,
+        });
+      }
+    }
+  }
+
+  exposureEvents.sort(
+    (a, b) =>
+      a.time - b.time ||
+      b.delta - a.delta
+  );
+
+  let runningExposure = 0;
+  let maxConcurrentExposure = 0;
+
+  for (const event of exposureEvents) {
+    runningExposure =
+      Math.max(
+        0,
+        runningExposure +
+          event.delta
+      );
+
+    maxConcurrentExposure =
+      Math.max(
+        maxConcurrentExposure,
+        runningExposure
+      );
+  }
+
+  return {
+    sessionId:
+      state.sessionId,
+
+    mode:
+      state.mode ||
+      session.mode ||
+      selectedMode(),
+
+    startingCapital,
+
+    tradesEntered:
+      trades.length,
+
+    closedTrades:
+      closed.length,
+
+    openTrades:
+      open.length,
+
+    realizedPnl:
+      Number(
+        realizedPnl
+          .toFixed(
+            4
+          )
+      ),
+
+    realizedReturnPct:
+      startingCapital &&
+      startingCapital >
+        0
+        ? Number(
+            (
+              realizedPnl /
+              startingCapital *
+              100
+            ).toFixed(
+              4
+            )
+          )
+        : null,
+
+    winRatePct:
+      closed.length
+        ? Number(
+            (
+              wins /
+              closed.length *
+              100
+            ).toFixed(
+              2
+            )
+          )
+        : null,
+
+    currentExposurePctEstimate:
+      Number.isFinite(
+        currentExposurePctEstimate
+      )
+        ? Number(
+            currentExposurePctEstimate
+              .toFixed(
+                4
+              )
+          )
+        : null,
+
+    maxConcurrentExposurePctEstimate:
+      exposureEvents.length
+        ? Number(
+            maxConcurrentExposure
+              .toFixed(
+                4
+              )
+          )
+        : null,
+
+    maxSingleTradeExposurePct:
+      entryExposure.length
+        ? Number(
+            Math.max(
+              ...entryExposure
+            ).toFixed(
+              4
+            )
+          )
+        : null,
+
+    avgEntrySlippageBps:
+      entrySlippage.length
+        ? Number(
+            average(
+              entrySlippage
+            ).toFixed(
+              4
+            )
+          )
+        : null,
+
+    avgExitSlippageBps:
+      exitSlippage.length
+        ? Number(
+            average(
+              exitSlippage
+            ).toFixed(
+              4
+            )
+          )
+        : null,
+
+    partialEntries:
+      trades.filter(
+        (trade) =>
+          trade.entry_was_partial ===
+          true
+      ).length,
+
+    reconciledExits:
+      closed.filter(
+        (trade) =>
+          trade.reconciled_exit ===
+          true
+      ).length,
+  };
+}
+
 function pub() {
   let effectiveRisk =
     null;
@@ -715,6 +1052,9 @@ function pub() {
 
     executionQuality:
       executionQualitySummary(),
+
+    paperForwardSession:
+      paperForwardSessionSummary(),
 
     marketOpen:
       state.marketOpen,

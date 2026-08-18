@@ -8,6 +8,7 @@ import RejectionLogPanel from '../components/RejectionLogPanel.jsx';
 import FastScalpToggle from '../components/FastScalpToggle.jsx';
 import EquityV20Panel from '../components/EquityV20Panel.jsx';
 import StrategyPerformancePanel from '../components/StrategyPerformancePanel.jsx';
+import PaperForwardSessionPanel from '../components/PaperForwardSessionPanel.jsx';
 const EMPTY_CREDS = {
   paper: { configured: false, keyIdMasked: '' },
   live: { configured: false, keyIdMasked: '' },
@@ -202,6 +203,8 @@ export default function Settings() {
         </h2>
 
         <StrategyPerformancePanel />
+        <div style={{ height: 10 }} />
+        <PaperForwardSessionPanel />
         <div style={{ height: 10 }} />
         <RejectionLogPanel />
       </section> <section>
