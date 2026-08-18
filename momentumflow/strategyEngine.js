@@ -523,16 +523,32 @@ export function minuteMomentumPct(
 export function dailyDollarVolume(
   snapshot
 ) {
+  // Liquidity qualification must be based on a COMPLETED session.
+  // Alpaca snapshot.dailyBar is today's still-forming bar, so using it
+  // against a fixed full-day threshold systematically over-rejects early
+  // in the session. Prefer prevDailyBar and only fall back when unavailable.
+  const completed =
+    snapshot
+      ?.prevDailyBar;
+
+  const fallback =
+    snapshot
+      ?.dailyBar;
+
+  const bar =
+    v(completed) > 0
+      ? completed
+      : fallback;
+
   const price =
     num(
+      bar
+        ?.c ??
       snapshot
         ?.latestTrade
         ?.p ??
       snapshot
         ?.minuteBar
-        ?.c ??
-      snapshot
-        ?.dailyBar
         ?.c,
 
       0
@@ -541,8 +557,7 @@ export function dailyDollarVolume(
   return (
     price *
     v(
-      snapshot
-        ?.dailyBar
+      bar
     )
   );
 }

@@ -1791,6 +1791,23 @@ async function scan(
       equityQualified:
         0,
     },
+
+    liquidityGate: {
+      basis:
+        'previous completed daily bar; current daily bar only as fallback',
+
+      threshold:
+        Number(
+          c
+            .minDailyDollarVolume
+        ),
+
+      rejected:
+        0,
+
+      samples:
+        [],
+    },
   };
 
   // ========================================
@@ -2318,8 +2335,53 @@ if (
             .prefilter
             .equities,
 
-          'daily dollar volume below minimum'
+          'completed-day dollar volume below minimum'
         );
+
+        diag
+          .liquidityGate
+          .rejected +=
+          1;
+
+        if (
+          diag
+            .liquidityGate
+            .samples
+            .length <
+          10
+        ) {
+          const currentSessionDollarVolume =
+            Number(
+              snapshot
+                ?.dailyBar
+                ?.c ||
+              0
+            ) *
+            Number(
+              snapshot
+                ?.dailyBar
+                ?.v ||
+              0
+            );
+
+          diag
+            .liquidityGate
+            .samples
+            .push({
+              symbol:
+                asset.symbol,
+
+              completedDayDollarVolume:
+                Math.round(
+                  dollarVolume
+                ),
+
+              currentSessionDollarVolume:
+                Math.round(
+                  currentSessionDollarVolume
+                ),
+            });
+        }
 
         continue;
       }

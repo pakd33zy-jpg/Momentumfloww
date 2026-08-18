@@ -455,6 +455,31 @@ async function alpacaDataRequest(
   return data;
 }
 
+const CASH_LIKE_CRYPTO_BASES =
+  new Set([
+    'USDT',
+    'USDC',
+    'USDG',
+    'PYUSD',
+    'DAI',
+    'GUSD',
+    'TUSD',
+    'USDP',
+    'PAX',
+    'BUSD',
+    'FDUSD',
+  ]);
+
+function cryptoBaseSymbol(
+  symbol = ''
+) {
+  return String(
+    symbol || ''
+  )
+    .toUpperCase()
+    .split('/')[0];
+}
+
 export async function getTradableAssets(
   mode = 'live'
 ) {
@@ -507,7 +532,12 @@ export async function getTradableAssets(
           .toUpperCase()
           .endsWith(
             '/USD'
+          ) &&
+        !CASH_LIKE_CRYPTO_BASES.has(
+          cryptoBaseSymbol(
+            asset.symbol
           )
+        )
     );
 
   return {
