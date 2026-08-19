@@ -974,6 +974,58 @@ export default function Dashboard() {
       </div>
 
       <div style={{background:'#1e2139',padding:15,borderRadius:8,border:'1px solid #2a2e4a',marginBottom:18}}>
+        <div style={{fontWeight:'bold',marginBottom:4,color:'#fbbf24'}}>QUALIFICATION FUNNEL — WHY NOTHING QUALIFIES</div>
+        <div style={{fontSize:11,color:'#888',marginBottom:10}}>
+          Existing scanner diagnostics. No strategy thresholds are changed by this panel.
+        </div>
+
+        {['crypto','equities'].map((market)=>{
+          const diag=bot?.scanDiagnostics || {};
+          const counts=diag.counts || {};
+          const pre=(diag.topPrefilterRejections || {})[market] || [];
+          const strat=(diag.topStrategyRejections || {})[market] || [];
+          const prefix=market === 'crypto' ? 'crypto' : 'equity';
+          const detailed=Number(counts[`${prefix}Detailed`] || 0);
+          const qualified=Number(counts[`${prefix}Qualified`] || 0);
+          const prePassed=Number(counts[`${prefix}PrefilterPassed`] || 0);
+          const normalize=(row)=>({
+            reason: row?.reason ?? row?.[0] ?? 'unknown',
+            count: Number(row?.count ?? row?.[1] ?? 0),
+          });
+          const all=[...pre.map(normalize),...strat.map(normalize)].sort((a,b)=>b.count-a.count);
+          const killer=all[0];
+
+          return (
+            <div key={market} style={{background:'#0f172a',padding:12,borderRadius:6,marginTop:8}}>
+              <div style={{fontWeight:'bold',textTransform:'uppercase'}}>{market}</div>
+              <div style={{fontSize:12,marginTop:5}}>
+                Prefilter passed: <b>{prePassed}</b> · Detailed: <b>{detailed}</b> · Qualified: <b>{qualified}</b>
+              </div>
+              <div style={{fontSize:12,marginTop:5,color:qualified===0?'#fca5a5':'#86efac'}}>
+                Biggest current choke point: <b>{killer ? `${killer.reason} (${killer.count})` : 'waiting for scan data'}</b>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10,marginTop:8}}>
+                <div>
+                  <div style={{fontSize:11,color:'#94a3b8'}}>TOP PREFILTER REJECTS</div>
+                  {pre.length ? pre.slice(0,5).map((r,i)=>{
+                    const x=normalize(r);
+                    return <div key={i} style={{fontSize:11,marginTop:3}}>{x.reason}: <b>{x.count}</b></div>;
+                  }) : <div style={{fontSize:11,color:'#666'}}>none reported</div>}
+                </div>
+                <div>
+                  <div style={{fontSize:11,color:'#94a3b8'}}>TOP STRATEGY REJECTS</div>
+                  {strat.length ? strat.slice(0,5).map((r,i)=>{
+                    const x=normalize(r);
+                    return <div key={i} style={{fontSize:11,marginTop:3}}>{x.reason}: <b>{x.count}</b></div>;
+                  }) : <div style={{fontSize:11,color:'#666'}}>none reported</div>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{background:'#1e2139',padding:15,borderRadius:8,border:'1px solid #2a2e4a',marginBottom:18}}>
         <div style={{fontWeight:'bold',marginBottom:4}}>REJECTION OUTCOME LEARNING</div>
         <div style={{fontSize:11,color:'#888',marginBottom:10}}>
           Forward performance of rejected setups at 5 / 15 / 30 / 60 minutes.
