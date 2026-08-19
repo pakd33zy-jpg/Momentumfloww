@@ -80,6 +80,8 @@ const state = {
   signalSnapshot: {},
   topCandidates: [],
   nearMisses: [],
+  moverLeaderboard: [],
+  rejectionOutcomes: [],
   scanDiagnostics: null,
 
   universe: {
@@ -96,8 +98,10 @@ const state = {
 const DEFAULTS = {
   pollSeconds: 5,
   maxOpenPositions: 3,
-  equityBatchSize: 150,
-  universeRefreshMinutes: 15,
+  equityBatchSize: 300,
+  universeRefreshMinutes: 5,
+  moverLeaderboardSize: 30,
+  rejectionOutcomeMax: 500,
 
   minEquityPrice: 1,
   minDailyDollarVolume: 5000000,
@@ -186,7 +190,7 @@ const strategyCfg = () => ({
   ...store.getConfig('strategyConfig', {}),
 
   equityFocusMode:
-    tradingCfg().equityFocusMode !== false,
+    tradingCfg().equityFocusMode === true,
 
   equityV20Enabled:
     tradingCfg().equityV20Enabled !== false,
@@ -422,6 +426,40 @@ function effectiveRiskFraction() {
   );
 }
 
+
+function opportunityScore(snapshot) {
+  const momentum = Math.abs(Number(minuteMomentumPct(snapshot) || 0));
+  const spread = Number(spreadPct(snapshot));
+  const volume = Number(dailyDollarVolume(snapshot) || 0);
+  const momentumPoints = Math.min(60, momentum * 500);
+  const volumePoints = Math.min(30, Math.log10(Math.max(1, volume)) * 4);
+  const spreadPenalty = Number.isFinite(spread) ? Math.min(50, spread * 100) : 50;
+  return Number(Math.max(0, momentumPoints + volumePoints - spreadPenalty).toFixed(3));
+}
+
+function rememberMover(market, symbol, snapshot, status, reason = null) {
+  if (!symbol || !snapshot) return;
+  const row = {
+    market, symbol, status, reason,
+    score: opportunityScore(snapshot),
+    momentumPct: Number(minuteMomentumPct(snapshot) || 0),
+    spreadPct: spreadPct(snapshot),
+    dollarVolume: Number(dailyDollarVolume(snapshot) || 0),
+    observedAt: new Date().toISOString(),
+  };
+  const without = state.moverLeaderboard.filter(
+    (x) => !(x.market === market && x.symbol === symbol)
+  );
+  state.moverLeaderboard = [...without, row]
+    .sort((a,b) => b.score - a.score)
+    .slice(0, Math.max(10, Number(cfg().moverLeaderboardSize || 30)));
+  if (status === 'rejected') {
+    state.rejectionOutcomes.push(row);
+    const max = Math.max(100, Number(cfg().rejectionOutcomeMax || 500));
+    if (state.rejectionOutcomes.length > max)
+      state.rejectionOutcomes = state.rejectionOutcomes.slice(-max);
+  }
+}
 
 function strategyPerformanceSummary() {
   const mode =

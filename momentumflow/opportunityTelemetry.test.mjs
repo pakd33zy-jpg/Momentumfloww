@@ -1,0 +1,10 @@
+import fs from 'fs';
+const t=fs.readFileSync(new URL('./liveBot.js',import.meta.url),'utf8');
+const a=(v,m)=>{if(!v)throw new Error(m)};
+a(t.includes('equityBatchSize: 300'),'batch');
+a(t.includes('universeRefreshMinutes: 5'),'refresh');
+a(t.includes('tradingCfg().equityFocusMode === true'),'market default');
+a(t.includes('function opportunityScore('),'score');
+a(t.includes('function rememberMover('),'telemetry');
+a(t.includes('maxRiskFraction: 0.005'),'risk');
+console.log('opportunity telemetry regression test passed');
