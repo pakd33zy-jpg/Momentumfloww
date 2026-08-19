@@ -2922,8 +2922,11 @@ if (
     state.equitySession ===
       'overnight'
   ) {
+    // Alpaca historical overnight bars require the BOATS feed.
+    // The derived 'overnight' feed is valid for latest/snapshot-style data,
+    // but historical bars reject feed=overnight with HTTP 400.
     c.stockFeed =
-      'overnight';
+      'boats';
   }
 
   if (
