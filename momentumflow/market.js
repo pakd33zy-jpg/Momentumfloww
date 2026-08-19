@@ -4,6 +4,7 @@ import {
   getStockSnapshots,
   getCryptoSnapshots,
   getStockBars,
+  getCryptoBars,
   placeOrder,
 } from './alpacaClient.js';
 import { MARKETS } from './models.js';
@@ -458,6 +459,30 @@ router.get(
       if (crypto) {
         const snaps = await getCryptoSnapshots(mode, [symbol]);
         snapshot = snaps[symbol] || snaps[symbol.replace('/', '')] || null;
+
+        const end = new Date();
+        const start = new Date(
+          end.getTime() - 2 * 24 * 60 * 60 * 1000
+        );
+
+        const bars = await getCryptoBars(
+          mode,
+          [symbol],
+          {
+            timeframe: '5Min',
+            start,
+            end,
+            limit: 1000,
+            sort: 'asc',
+            maxPages: 3,
+          }
+        );
+
+        rows = (
+          bars?.[symbol] ||
+          bars?.[symbol.replace('/', '')] ||
+          []
+        ).slice(-180);
       } else {
         const snaps = await getStockSnapshots(mode, [symbol], { feed: 'iex' });
         snapshot = snaps[symbol] || null;
