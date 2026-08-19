@@ -101,6 +101,13 @@ const DEFAULTS = {
 
   minEquityPrice: 1,
   minDailyDollarVolume: 5000000,
+  adaptiveLiquidityEnabled: true,
+  adaptiveLiquidityMediumDollarVolume: 2000000,
+  adaptiveLiquidityStrongDollarVolume: 1000000,
+  adaptiveLiquidityMediumMomentumPct: 0.04,
+  adaptiveLiquidityStrongMomentumPct: 0.08,
+  adaptiveLiquidityMediumMaxSpreadPct: 0.10,
+  adaptiveLiquidityStrongMaxSpreadPct: 0.08,
   stockFeed: 'iex',
 
   // PAPER-only extended-hours equity test.
@@ -1806,6 +1813,59 @@ function buildBlockedSymbols(
   return blocked;
 }
 
+
+function adaptiveLiquidityThreshold(snapshot, config) {
+  const base = Math.max(
+    0,
+    Number(config.minDailyDollarVolume || 5000000)
+  );
+
+  if (config.adaptiveLiquidityEnabled === false) {
+    return base;
+  }
+
+  const momentum = Math.abs(
+    Number(minuteMomentumPct(snapshot) || 0)
+  );
+  const spread = spreadPct(snapshot);
+
+  if (
+    momentum >= Number(config.adaptiveLiquidityStrongMomentumPct ?? 0.08) &&
+    spread != null &&
+    spread <= Number(config.adaptiveLiquidityStrongMaxSpreadPct ?? 0.08)
+  ) {
+    return Math.min(
+      base,
+      Number(config.adaptiveLiquidityStrongDollarVolume || 1000000)
+    );
+  }
+
+  if (
+    momentum >= Number(config.adaptiveLiquidityMediumMomentumPct ?? 0.04) &&
+    spread != null &&
+    spread <= Number(config.adaptiveLiquidityMediumMaxSpreadPct ?? 0.10)
+  ) {
+    return Math.min(
+      base,
+      Number(config.adaptiveLiquidityMediumDollarVolume || 2000000)
+    );
+  }
+
+  return base;
+}
+
+function adaptiveCryptoPrefilterMomentum(snapshot, strategyConfig) {
+  const base = Number(
+    strategyConfig.cryptoPrefilterMomentumPct ?? 0.035
+  );
+  const spread = spreadPct(snapshot);
+
+  if (spread == null) return base;
+  if (spread <= 0.10) return Math.min(base, 0.020);
+  if (spread <= 0.18) return Math.min(base, 0.030);
+  return base;
+}
+
 function stockBatch() {
   if (
     !state.universe
@@ -2663,12 +2723,15 @@ if (
         continue;
       }
 
+      const cryptoMomentumThreshold =
+        adaptiveCryptoPrefilterMomentum(
+          snapshot,
+          sc
+        );
+
       if (
         momentum <
-        Number(
-          sc
-            .cryptoPrefilterMomentumPct
-        )
+        cryptoMomentumThreshold
       ) {
         bump(
           diag
@@ -3024,12 +3087,15 @@ if (
           snapshot
         );
 
+      const liquidityThreshold =
+        adaptiveLiquidityThreshold(
+          snapshot,
+          c
+        );
+
       if (
         dollarVolume <
-        Number(
-          c
-            .minDailyDollarVolume
-        )
+        liquidityThreshold
       ) {
         bump(
           diag
@@ -3075,6 +3141,11 @@ if (
               completedDayDollarVolume:
                 Math.round(
                   dollarVolume
+                ),
+
+              requiredDollarVolume:
+                Math.round(
+                  liquidityThreshold
                 ),
 
               currentSessionDollarVolume:
