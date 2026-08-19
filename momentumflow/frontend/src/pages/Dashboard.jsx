@@ -280,6 +280,14 @@ export default function Dashboard() {
     bot?.running ===
     true;
 
+  const moverRows =
+    Array.isArray(bot?.moverLeaderboard)
+      ? bot.moverLeaderboard.slice(0, 15)
+      : [];
+
+  const rejectionLearning =
+    bot?.rejectionOutcomeLearning || null;
+
   return (
     <div
       style={{
@@ -328,7 +336,7 @@ export default function Dashboard() {
               'bold',
           }}
         >
-          UNIFIED BOT UI v12
+          UNIFIED BOT UI v13
         </span>
       </div>
 
@@ -729,6 +737,15 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <div style={{marginTop:'10px',fontSize:'12px',color:'#94a3b8'}}>
+          <b>ACTIVE SCAN NOW:</b>{' '}
+          {Number(bot?.activeScanCounts?.equities || 0)} equities /{' '}
+          {Number(bot?.activeScanCounts?.crypto || 0)} crypto
+          {' · '}
+          <b>STORED UNIVERSE:</b>{' '}
+          {Number(bot?.universe?.total || bot?.universeSize || 0)} assets
+        </div>
+
         {bot?.lastDecision && (
           <div
             style={{
@@ -915,6 +932,69 @@ export default function Dashboard() {
           >
             View
           </button>
+        </div>
+      </div>
+
+      <div style={{background:'#1e2139',padding:15,borderRadius:8,border:'1px solid #2a2e4a',marginBottom:18}}>
+        <div style={{fontWeight:'bold',marginBottom:4,color:'#4ade80'}}>LIVE OPPORTUNITY LEADERBOARD</div>
+        <div style={{fontSize:11,color:'#888',marginBottom:10}}>
+          Scanner ranking only. Entry and risk rules still decide whether anything trades.
+        </div>
+        {moverRows.length ? (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <thead>
+                <tr style={{color:'#94a3b8',textAlign:'left'}}>
+                  <th style={{padding:6}}>#</th>
+                  <th style={{padding:6}}>Symbol</th>
+                  <th style={{padding:6}}>Market</th>
+                  <th style={{padding:6}}>Score</th>
+                  <th style={{padding:6}}>Momentum</th>
+                  <th style={{padding:6}}>Spread</th>
+                  <th style={{padding:6}}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {moverRows.map((row,index)=>(
+                  <tr key={`${row.market}-${row.symbol}`} onClick={()=>navigate(`/symbol/${encodeURIComponent(row.symbol)}`)}
+                    style={{borderTop:'1px solid #2a2e4a',cursor:'pointer'}}>
+                    <td style={{padding:6,color:'#888'}}>{index+1}</td>
+                    <td style={{padding:6,fontWeight:'bold'}}>{row.symbol}</td>
+                    <td style={{padding:6}}>{row.market || row.assetClass || '—'}</td>
+                    <td style={{padding:6}}>{Number(row.score || 0).toFixed(2)}</td>
+                    <td style={{padding:6}}>{Number.isFinite(Number(row.momentumPct)) ? `${Number(row.momentumPct).toFixed(3)}%` : '—'}</td>
+                    <td style={{padding:6}}>{Number.isFinite(Number(row.spreadPct)) ? `${Number(row.spreadPct).toFixed(3)}%` : '—'}</td>
+                    <td style={{padding:6}}>{row.status || 'watching'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <div style={{fontSize:12,color:'#888'}}>Waiting for scanner opportunity samples…</div>}
+      </div>
+
+      <div style={{background:'#1e2139',padding:15,borderRadius:8,border:'1px solid #2a2e4a',marginBottom:18}}>
+        <div style={{fontWeight:'bold',marginBottom:4}}>REJECTION OUTCOME LEARNING</div>
+        <div style={{fontSize:11,color:'#888',marginBottom:10}}>
+          Forward performance of rejected setups at 5 / 15 / 30 / 60 minutes.
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8}}>
+          {[5,15,30,60].map((minutes)=>{
+            const row=rejectionLearning?.horizons?.[`m${minutes}`] || {};
+            return (
+              <div key={minutes} style={{background:'#0f172a',padding:10,borderRadius:6}}>
+                <div style={{fontSize:11,color:'#94a3b8'}}>{minutes} MIN</div>
+                <div style={{fontWeight:'bold',marginTop:3}}>
+                  {Number.isFinite(Number(row.avgDirectionReturnPct))
+                    ? `${Number(row.avgDirectionReturnPct)>=0?'+':''}${Number(row.avgDirectionReturnPct).toFixed(3)}%`
+                    : '—'}
+                </div>
+                <div style={{fontSize:10,color:'#888',marginTop:3}}>
+                  {Number(row.samples || 0)} samples · {row.positivePct == null ? '—' : `${row.positivePct}%`} favorable
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

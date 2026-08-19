@@ -1491,6 +1491,16 @@ function pub() {
     paperExtendedEquityEnabled:
       cfg().paperExtendedEquityEnabled !== false,
 
+    activeScanCounts: {
+      equities:
+        state.equitySession === 'overnight' &&
+        state.overnightBoatsAvailable !== true
+          ? 0
+          : Number(state.lastEquityScanCount || 0),
+      crypto:
+        Number(state.lastCryptoScanCount || 0),
+    },
+
     universe: {
       equityCount:
         state.universe
