@@ -102,6 +102,9 @@ const DEFAULTS = {
   universeRefreshMinutes: 5,
   moverLeaderboardSize: 30,
   rejectionOutcomeMax: 500,
+  rejectionOutcomeSeedIntervalMs: 60000,
+  rejectionOutcomeUpdateIntervalMs: 60000,
+  rejectionOutcomeSeedLimit: 5,
 
   minEquityPrice: 1,
   minDailyDollarVolume: 5000000,
@@ -152,6 +155,9 @@ const cfg = () => ({
   ...DEFAULTS,
   ...store.getConfig('liveBotConfig', {}),
 });
+
+let lastRejectionOutcomeSeedAt = 0;
+let lastRejectionOutcomeUpdateAt = 0;
 
 let entryBuyingPowerCooldownUntil = 0;
 let entryBuyingPowerCooldownSymbol = null;
@@ -426,6 +432,254 @@ function effectiveRiskFraction() {
   );
 }
 
+
+
+const REJECTION_OUTCOME_HORIZONS_MIN = [5, 15, 30, 60];
+
+function rejectionOutcomeId(row, observedMs) {
+  return [
+    'rejectOutcome',
+    row.assetClass || 'unknown',
+    String(row.symbol || '').replace('/', ''),
+    String(row.direction || 'LONG'),
+    Math.floor(observedMs / 60000),
+  ].join('-');
+}
+
+async function seedRejectedOpportunityOutcomes(mode, nearMisses) {
+  const now = Date.now();
+  const interval = Math.max(
+    15000,
+    Number(cfg().rejectionOutcomeSeedIntervalMs || 60000)
+  );
+
+  if (now - lastRejectionOutcomeSeedAt < interval) return;
+  lastRejectionOutcomeSeedAt = now;
+
+  const current = store.getAll('rejectionOutcomes');
+  const recentCutoff = now - 15 * 60000;
+
+  const recentKeys = new Set(
+    current
+      .filter((row) =>
+        new Date(row.observedAt || 0).getTime() >= recentCutoff
+      )
+      .map((row) =>
+        `${row.assetClass}|${row.symbol}|${row.direction}|${row.reason}`
+      )
+  );
+
+  const wanted = (nearMisses || [])
+    .filter((row) => {
+      const key =
+        `${row.assetClass}|${row.symbol}|${row.direction}|${row.reason}`;
+      return row.symbol && !recentKeys.has(key);
+    })
+    .slice(
+      0,
+      Math.max(1, Number(cfg().rejectionOutcomeSeedLimit || 5))
+    );
+
+  if (!wanted.length) return;
+
+  const settled = await Promise.allSettled(
+    wanted.map(async (row) => {
+      const baselinePrice = await getLatestTradablePrice(
+        mode,
+        row.symbol,
+        row.assetClass
+      );
+
+      const price = Number(baselinePrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(`No baseline price for ${row.symbol}`);
+      }
+
+      return {
+        id: rejectionOutcomeId(row, now),
+        observedAt: new Date(now).toISOString(),
+        mode,
+        sessionId: state.sessionId,
+        assetClass: row.assetClass,
+        symbol: row.symbol,
+        direction: row.direction || 'LONG',
+        reason: row.reason || 'unknown',
+        strategyScore: Number(row.score || 0),
+        minuteMomentumPct:
+          row.minuteMomentumPct == null
+            ? null
+            : Number(row.minuteMomentumPct),
+        spreadPct:
+          row.spreadPct == null
+            ? null
+            : Number(row.spreadPct),
+        recentVolumeRatio:
+          row.recentVolumeRatio == null
+            ? null
+            : Number(row.recentVolumeRatio),
+        baselinePrice: price,
+        outcomes: {},
+      };
+    })
+  );
+
+  const added = settled
+    .filter((x) => x.status === 'fulfilled')
+    .map((x) => x.value);
+
+  if (!added.length) return;
+
+  const max = Math.max(
+    100,
+    Number(cfg().rejectionOutcomeMax || 500)
+  );
+
+  const saved = [...current, ...added].slice(-max);
+  store.saveAll('rejectionOutcomes', saved);
+  state.rejectionOutcomes = saved;
+}
+
+async function updateRejectedOpportunityOutcomes(mode) {
+  const now = Date.now();
+  const interval = Math.max(
+    30000,
+    Number(cfg().rejectionOutcomeUpdateIntervalMs || 60000)
+  );
+
+  if (now - lastRejectionOutcomeUpdateAt < interval) return;
+  lastRejectionOutcomeUpdateAt = now;
+
+  const rows = store.getAll('rejectionOutcomes');
+  if (!rows.length) return;
+
+  const due = rows
+    .map((row, index) => {
+      const observed = new Date(row.observedAt || 0).getTime();
+      const ageMin =
+        Number.isFinite(observed)
+          ? (now - observed) / 60000
+          : -1;
+
+      const horizon = REJECTION_OUTCOME_HORIZONS_MIN.find(
+        (h) =>
+          ageMin >= h &&
+          row.outcomes?.[`m${h}`] == null
+      );
+
+      return { row, index, ageMin, horizon };
+    })
+    .filter((x) => x.horizon != null)
+    .slice(0, 12);
+
+  if (!due.length) return;
+
+  const settled = await Promise.allSettled(
+    due.map(async (item) => {
+      const price = Number(
+        await getLatestTradablePrice(
+          mode,
+          item.row.symbol,
+          item.row.assetClass
+        )
+      );
+
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new Error(`No outcome price for ${item.row.symbol}`);
+      }
+
+      const rawReturnPct =
+        ((price - Number(item.row.baselinePrice)) /
+          Number(item.row.baselinePrice)) * 100;
+
+      const directionReturnPct =
+        item.row.direction === 'SHORT'
+          ? -rawReturnPct
+          : rawReturnPct;
+
+      return {
+        index: item.index,
+        horizon: item.horizon,
+        value: {
+          price,
+          rawReturnPct: Number(rawReturnPct.toFixed(4)),
+          directionReturnPct:
+            Number(directionReturnPct.toFixed(4)),
+          sampledAgeMinutes:
+            Number(item.ageMin.toFixed(2)),
+          sampledAt: new Date(now).toISOString(),
+        },
+      };
+    })
+  );
+
+  let changed = false;
+
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') continue;
+    const { index, horizon, value } = result.value;
+
+    rows[index] = {
+      ...rows[index],
+      outcomes: {
+        ...(rows[index].outcomes || {}),
+        [`m${horizon}`]: value,
+      },
+    };
+    changed = true;
+  }
+
+  if (changed) {
+    const max = Math.max(
+      100,
+      Number(cfg().rejectionOutcomeMax || 500)
+    );
+    const saved = rows.slice(-max);
+    store.saveAll('rejectionOutcomes', saved);
+    state.rejectionOutcomes = saved;
+  }
+}
+
+function rejectionOutcomeSummary() {
+  const rows = store.getAll('rejectionOutcomes');
+
+  const horizons = Object.fromEntries(
+    REJECTION_OUTCOME_HORIZONS_MIN.map((h) => {
+      const values = rows
+        .map((row) =>
+          row.outcomes?.[`m${h}`]?.directionReturnPct
+        )
+        .filter(Number.isFinite);
+
+      const avg = values.length
+        ? values.reduce((a, b) => a + b, 0) / values.length
+        : null;
+
+      return [
+        `m${h}`,
+        {
+          samples: values.length,
+          avgDirectionReturnPct:
+            avg == null ? null : Number(avg.toFixed(4)),
+          positivePct:
+            values.length
+              ? Number(
+                  (
+                    values.filter((v) => v > 0).length /
+                    values.length * 100
+                  ).toFixed(2)
+                )
+              : null,
+        },
+      ];
+    })
+  );
+
+  return {
+    totalTracked: rows.length,
+    horizons,
+    recent: rows.slice(-25).reverse(),
+  };
+}
 
 function opportunityScore(snapshot) {
   const momentum = Math.abs(Number(minuteMomentumPct(snapshot) || 0));
@@ -1212,6 +1466,9 @@ function pub() {
 
     nearMisses:
       state.nearMisses,
+
+    rejectionOutcomeLearning:
+      rejectionOutcomeSummary(),
 
     scanDiagnostics:
       state.scanDiagnostics,
@@ -2592,7 +2849,7 @@ async function scan(
 
   const equityFocusMode =
   tradingCfg()
-    .equityFocusMode !== false;
+    .equityFocusMode === true;
 
 if (equityFocusMode) {
   bump(
@@ -3762,6 +4019,15 @@ if (
       0,
       10
     );
+
+  await seedRejectedOpportunityOutcomes(
+    mode,
+    state.nearMisses
+  );
+
+  await updateRejectedOpportunityOutcomes(
+    mode
+  );
 
   state.scanDiagnostics = {
     ...diag,

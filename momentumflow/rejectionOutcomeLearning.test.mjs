@@ -1,0 +1,11 @@
+import fs from "fs";
+const t=fs.readFileSync(new URL("./liveBot.js",import.meta.url),"utf8");
+const a=(v,m)=>{if(!v)throw new Error(m)};
+a(t.includes("REJECTION_OUTCOME_HORIZONS_MIN = [5, 15, 30, 60]"),"horizons");
+a(t.includes("seedRejectedOpportunityOutcomes"),"seed");
+a(t.includes("updateRejectedOpportunityOutcomes"),"update");
+a(t.includes("directionReturnPct"),"direction return");
+a(t.includes("store.saveAll('rejectionOutcomes'"),"persistent store");
+a(!t.includes(".equityFocusMode !== false"),"old equity-only default");
+a(t.includes("maxRiskFraction: 0.005"),"risk cap");
+console.log("rejection outcome learning regression test passed");
