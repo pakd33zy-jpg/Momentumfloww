@@ -2922,18 +2922,22 @@ if (
     state.equitySession ===
       'overnight'
   ) {
-    // Alpaca historical overnight bars require the BOATS feed.
-    // The derived 'overnight' feed is valid for latest/snapshot-style data,
-    // but historical bars reject feed=overnight with HTTP 400.
-    c.stockFeed =
-      'boats';
+    // This Alpaca account does not currently have BOATS entitlement.
+    // Never let an optional overnight equity feed stop the 24/7 bot.
+    // Keep the configured/default stock feed and allow crypto to continue.
+    diag.overnightEquityData =
+      'BOATS unavailable; overnight equity scan skipped';
   }
 
-  if (
+  const canScanEquities =
+    state.marketOpen ||
     (
-      state.marketOpen ||
-      allowExtendedEquities
-    ) &&
+      allowExtendedEquities &&
+      state.equitySession !== 'overnight'
+    );
+
+  if (
+    canScanEquities &&
     state.universe
       .equities.length
   ) {
