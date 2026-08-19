@@ -90,6 +90,7 @@ const state = {
 
   equityCursor: 0,
   marketOpen: null,
+  equitySession: 'closed',
 };
 
 const DEFAULTS = {
@@ -101,6 +102,11 @@ const DEFAULTS = {
   minEquityPrice: 1,
   minDailyDollarVolume: 5000000,
   stockFeed: 'iex',
+
+  // PAPER-only extended-hours equity test.
+  // LIVE behavior remains regular-hours only unless explicitly redesigned later.
+  paperExtendedEquityEnabled: true,
+  extendedEquityLimitCollarPct: 0.15,
 
   fallbackTakeProfitPct: 0.60,
   fallbackStopLossPct: 0.40,
@@ -199,6 +205,124 @@ function maxOpenPositions() {
         )
       )
     : 3;
+}
+
+function equitySessionNow(date = new Date()) {
+  const parts = new Intl.DateTimeFormat(
+    'en-US',
+    {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }
+  ).formatToParts(date);
+
+  const get = (type) =>
+    parts.find(
+      (part) =>
+        part.type === type
+    )?.value;
+
+  const weekday = get('weekday');
+  const hour = Number(get('hour'));
+  const minute = Number(get('minute'));
+  const minutes = hour * 60 + minute;
+
+  const monFri =
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+      .includes(weekday);
+
+  if (
+    monFri &&
+    minutes >= 570 &&
+    minutes < 960
+  ) {
+    return 'regular';
+  }
+
+  if (
+    monFri &&
+    minutes >= 240 &&
+    minutes < 570
+  ) {
+    return 'pre';
+  }
+
+  if (
+    monFri &&
+    minutes >= 960 &&
+    minutes < 1200
+  ) {
+    return 'after';
+  }
+
+  // BOATS overnight: Sun 8pm onward, Mon-Thu 8pm onward,
+  // and Mon-Fri midnight through 4am.
+  if (
+    (
+      ['Sun', 'Mon', 'Tue', 'Wed', 'Thu']
+        .includes(weekday) &&
+      minutes >= 1200
+    ) ||
+    (
+      monFri &&
+      minutes < 240
+    )
+  ) {
+    return 'overnight';
+  }
+
+  return 'closed';
+}
+
+function extendedEquityAllowed(mode) {
+  return (
+    mode === 'paper' &&
+    cfg().paperExtendedEquityEnabled !== false &&
+    ['pre', 'after', 'overnight']
+      .includes(
+        equitySessionNow()
+      )
+  );
+}
+
+function extendedLimitPrice(price, side) {
+  const p = Number(price);
+  const collarPct = Number(
+    cfg().extendedEquityLimitCollarPct ?? 0.15
+  );
+
+  if (
+    !Number.isFinite(p) ||
+    p <= 0
+  ) {
+    throw new Error(
+      'Cannot create extended-hours limit without a valid reference price.'
+    );
+  }
+
+  const collar =
+    Number.isFinite(collarPct) &&
+    collarPct > 0
+      ? collarPct / 100
+      : 0.0015;
+
+  const adjusted =
+    side === 'buy'
+      ? p * (1 + collar)
+      : p * (1 - collar);
+
+  // Alpaca accepts sub-penny pricing below $1; otherwise use pennies.
+  const decimals =
+    adjusted < 1
+      ? 4
+      : 2;
+
+  return Number(
+    adjusted.toFixed(decimals)
+  );
 }
 
 function selectedMode() {
@@ -1058,6 +1182,12 @@ function pub() {
 
     marketOpen:
       state.marketOpen,
+
+    equitySession:
+      state.equitySession,
+
+    paperExtendedEquityEnabled:
+      cfg().paperExtendedEquityEnabled !== false,
 
     universe: {
       equityCount:
@@ -2767,11 +2897,40 @@ if (
         ?.is_open
     );
 
+  state.equitySession =
+    state.marketOpen
+      ? 'regular'
+      : equitySessionNow();
+
+  const allowExtendedEquities =
+    extendedEquityAllowed(
+      mode
+    );
+
   diag.marketOpen =
     state.marketOpen;
 
+  diag.equitySession =
+    state.equitySession;
+
+  diag.extendedEquityPaper =
+    allowExtendedEquities;
+
+  // Free-plan overnight market data uses Alpaca's derived overnight feed.
   if (
-    state.marketOpen &&
+    allowExtendedEquities &&
+    state.equitySession ===
+      'overnight'
+  ) {
+    c.stockFeed =
+      'overnight';
+  }
+
+  if (
+    (
+      state.marketOpen ||
+      allowExtendedEquities
+    ) &&
     state.universe
       .equities.length
   ) {
@@ -3336,7 +3495,8 @@ if (
       }
     }
   } else if (
-    !state.marketOpen
+    !state.marketOpen &&
+    !allowExtendedEquities
   ) {
     bump(
       diag
@@ -4114,7 +4274,38 @@ async function closeTrade(
         side,
 
         type:
-          'market',
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? 'limit'
+            : 'market',
+
+        limitPrice:
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? extendedLimitPrice(
+                Number(
+                  latest.exit_decision_price ??
+                  latest.current_price ??
+                  latest.entry_price
+                ),
+                side
+              )
+            : undefined,
+
+        extendedHours:
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? true
+            : undefined,
 
         timeInForce:
           crypto
@@ -5143,7 +5334,22 @@ async function enter(
           'sell',
 
         type:
-          'market',
+          extendedEquityAllowed(mode)
+            ? 'limit'
+            : 'market',
+
+        limitPrice:
+          extendedEquityAllowed(mode)
+            ? extendedLimitPrice(
+                best.price,
+                'sell'
+              )
+            : undefined,
+
+        extendedHours:
+          extendedEquityAllowed(mode)
+            ? true
+            : undefined,
 
         timeInForce:
           'day',
@@ -5184,7 +5390,22 @@ async function enter(
           'buy',
 
         type:
-          'market',
+          extendedEquityAllowed(mode)
+            ? 'limit'
+            : 'market',
+
+        limitPrice:
+          extendedEquityAllowed(mode)
+            ? extendedLimitPrice(
+                best.price,
+                'buy'
+              )
+            : undefined,
+
+        extendedHours:
+          extendedEquityAllowed(mode)
+            ? true
+            : undefined,
 
         timeInForce:
           'day',
