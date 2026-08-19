@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { store } from './store.js';
 
 import {
@@ -162,6 +162,12 @@ let lastRejectionOutcomeUpdateAt = 0;
 let entryBuyingPowerCooldownUntil = 0;
 let entryBuyingPowerCooldownSymbol = null;
 
+
+// Cache only symbols that are below the LOWEST liquidity threshold the
+// adaptive gate can ever allow. This prevents repeatedly rescanning obvious
+// illiquid equities without changing strategy thresholds.
+const hardLiquidityRejectUntilBySymbol = new Map();
+const HARD_LIQUIDITY_CACHE_MS = 6 * 60 * 60 * 1000;
 function isBuyingPowerEntryError(error) {
   return /buying power/i.test(
     String(
@@ -2119,6 +2125,29 @@ function buildBlockedSymbols(
 }
 
 
+function hardLiquidityFloor(config) {
+  const base = Math.max(
+    0,
+    Number(config.minDailyDollarVolume || 5000000)
+  );
+
+  if (config.adaptiveLiquidityEnabled === false) {
+    return base;
+  }
+
+  const medium = Math.max(
+    0,
+    Number(config.adaptiveLiquidityMediumDollarVolume || 2000000)
+  );
+
+  const strong = Math.max(
+    0,
+    Number(config.adaptiveLiquidityStrongDollarVolume || 1000000)
+  );
+
+  return Math.min(base, medium, strong);
+}
+
 function adaptiveLiquidityThreshold(snapshot, config) {
   const base = Math.max(
     0,
@@ -2172,55 +2201,47 @@ function adaptiveCryptoPrefilterMomentum(snapshot, strategyConfig) {
 }
 
 function stockBatch() {
-  if (
-    !state.universe
-      .equities.length
-  ) {
+  if (!state.universe.equities.length) {
     return [];
   }
 
-  const count =
-    Math.min(
-      Number(
-        cfg()
-          .equityBatchSize
-      ),
+  const now = Date.now();
 
-      state.universe
-        .equities.length
-    );
+  for (const [symbol, until] of hardLiquidityRejectUntilBySymbol.entries()) {
+    if (!Number.isFinite(until) || until <= now) {
+      hardLiquidityRejectUntilBySymbol.delete(symbol);
+    }
+  }
 
-  const batch =
-    [];
+  const available = state.universe.equities.filter(
+    (asset) =>
+      !hardLiquidityRejectUntilBySymbol.has(
+        String(asset?.symbol || '')
+      )
+  );
 
-  for (
-    let i = 0;
-    i < count;
-    i += 1
-  ) {
-    const index =
-      (
-        state.equityCursor +
-        i
-      ) %
-      state.universe
-        .equities.length;
+  if (!available.length) {
+    return [];
+  }
 
-    batch.push(
-      state.universe
-        .equities[
-          index
-        ]
-    );
+  if (state.equityCursor >= available.length) {
+    state.equityCursor = 0;
+  }
+
+  const count = Math.min(
+    Number(cfg().equityBatchSize),
+    available.length
+  );
+
+  const batch = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const index = (state.equityCursor + i) % available.length;
+    batch.push(available[index]);
   }
 
   state.equityCursor =
-    (
-      state.equityCursor +
-      count
-    ) %
-    state.universe
-      .equities.length;
+    (state.equityCursor + count) % available.length;
 
   return batch;
 }
@@ -3402,6 +3423,24 @@ if (
         dollarVolume <
         liquidityThreshold
       ) {
+        
+        // Cache only indisputably illiquid symbols: below the minimum
+        // threshold even the strongest adaptive setup could receive.
+        const completedBar = snapshot?.prevDailyBar;
+        const hasCompletedBar =
+          Number(completedBar?.v || 0) > 0 &&
+          Number(completedBar?.c || 0) > 0;
+
+        if (
+          hasCompletedBar &&
+          dollarVolume < hardLiquidityFloor(c)
+        ) {
+          hardLiquidityRejectUntilBySymbol.set(
+            String(asset.symbol || ''),
+            Date.now() + HARD_LIQUIDITY_CACHE_MS
+          );
+        }
+
         bump(
           diag
             .prefilter
@@ -4380,7 +4419,7 @@ function finalizeTradeClosure(
 
   state.lastDecision =
     `closed ${mode.toUpperCase()} ${direction} ${trade.market} ` +
-    `qty ${qty} at ${exitPrice} — ${reason}`;
+    `qty ${qty} at ${exitPrice} â€” ${reason}`;
 
   return true;
 }
@@ -4651,7 +4690,7 @@ async function closeTrade(
 
     state.lastDecision =
       `closing ${mode.toUpperCase()} ${direction} ${latest.market} ` +
-      `qty ${closeQtyString} — ${reason} — attempt ${attempt}`;
+      `qty ${closeQtyString} â€” ${reason} â€” attempt ${attempt}`;
 
     const order =
       await placeOrder({
@@ -5236,7 +5275,7 @@ async function manageOpenTrades(
 
     state.lastDecision =
       `managing ${mode.toUpperCase()} ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions — ${trade.direction || 'LONG'} ${trade.market}`;
+      `${maxOpenPositions()} positions â€” ${trade.direction || 'LONG'} ${trade.market}`;
 
     await manageOne(
       mode,
@@ -5508,7 +5547,7 @@ async function enter(
       0
     ) {
       state.lastDecision =
-        `SAFETY HALT — no new entries (${halt.reason}); ` +
+        `SAFETY HALT â€” no new entries (${halt.reason}); ` +
         `managing ${state.openTradeIds.length} open position(s)`;
 
       return false;
@@ -5615,11 +5654,11 @@ async function enter(
     state.lastDecision =
       `${mode.toUpperCase()} scanning ` +
       `${state.universe.equities.length + state.universe.crypto.length} ` +
-      `Alpaca tradable assets — ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions open — waiting for v20 setup` +
+      `Alpaca tradable assets â€” ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} positions open â€” waiting for v20 setup` +
       (
         top
-          ? ` — top reject: ${top.reason} (${top.count})`
+          ? ` â€” top reject: ${top.reason} (${top.count})`
           : ''
       );
 
@@ -5666,7 +5705,7 @@ async function enter(
     sizing.positionBudget < 1
   ) {
     state.lastDecision =
-      `${mode.toUpperCase()} ${direction} ${best.symbol} skipped — ` +
+      `${mode.toUpperCase()} ${direction} ${best.symbol} skipped â€” ` +
       `risk-sized budget $${Number(
         sizing.positionBudget ||
         0
@@ -5677,7 +5716,7 @@ async function enter(
 
   state.lastDecision =
     `${mode.toUpperCase()} ${best.strategy} ${direction} ${best.symbol} ` +
-    `score ${best.score}/10 — risk budget $${sizing.riskDollars.toFixed(2)} — ` +
+    `score ${best.score}/10 â€” risk budget $${sizing.riskDollars.toFixed(2)} â€” ` +
     `position budget $${sizing.positionBudget.toFixed(2)}`;
 
   let order;
@@ -5706,7 +5745,7 @@ async function enter(
       qty < 1
     ) {
       state.lastDecision =
-        `${mode.toUpperCase()} SHORT ${best.symbol} skipped — ` +
+        `${mode.toUpperCase()} SHORT ${best.symbol} skipped â€” ` +
         `$${sizing.positionBudget.toFixed(2)} risk-sized budget is below one whole share at ` +
         `$${best.price.toFixed(2)}`;
 
@@ -5762,7 +5801,7 @@ async function enter(
       qty < 1
     ) {
       state.lastDecision =
-        `${mode.toUpperCase()} LONG ${best.symbol} skipped — ` +
+        `${mode.toUpperCase()} LONG ${best.symbol} skipped â€” ` +
         `$${sizing.positionBudget.toFixed(2)} risk-sized budget is below one whole share at ` +
         `$${best.price.toFixed(2)}`;
 
@@ -5858,8 +5897,8 @@ async function enter(
         null;
 
       state.lastDecision =
-        `${mode.toUpperCase()} ${direction} ${best.symbol} skipped — ` +
-        `Alpaca buying-power rejection; bot keeps running — ` +
+        `${mode.toUpperCase()} ${direction} ${best.symbol} skipped â€” ` +
+        `Alpaca buying-power rejection; bot keeps running â€” ` +
         `new-entry cooldown ${Math.ceil(cooldownMs / 1000)}s`;
 
       console.warn(
@@ -5895,7 +5934,7 @@ async function enter(
     filledQty <= 0
   ) {
     state.lastDecision =
-      `${mode.toUpperCase()} ${direction} ${best.symbol} not opened — ` +
+      `${mode.toUpperCase()} ${direction} ${best.symbol} not opened â€” ` +
       `Alpaca order ${order.id} ended ${fill.status} with no fill`;
 
     return false;
@@ -6304,14 +6343,14 @@ async function enter(
 
   state.lastDecision =
     `entered ${mode.toUpperCase()} ${direction} ${best.symbol} ` +
-    `qty ${filledQty} at ${entryPrice} — ${best.strategy} score ${best.score}/10` +
+    `qty ${filledQty} at ${entryPrice} â€” ${best.strategy} score ${best.score}/10` +
     (
       fill.status ===
       'filled'
         ? ''
-        : ` — terminal partial fill (${fill.status})`
+        : ` â€” terminal partial fill (${fill.status})`
     ) +
-    ` — ${state.openTradeIds.length}/${maxOpenPositions()} positions open`;
+    ` â€” ${state.openTradeIds.length}/${maxOpenPositions()} positions open`;
 
   return true;
 }
@@ -6843,7 +6882,7 @@ router.post(
 
             lastDecision:
               `recovering ${openLocalTrades.length}/${maxOpenPositions()} ` +
-              `${mode.toUpperCase()} positions — v19 expectancy active`,
+              `${mode.toUpperCase()} positions â€” v19 expectancy active`,
 
             signalSnapshot:
               {},
@@ -6952,9 +6991,9 @@ router.post(
             false,
 
           lastDecision:
-            `starting ${mode.toUpperCase()} v19 expectancy bot — loaded ` +
+            `starting ${mode.toUpperCase()} v19 expectancy bot â€” loaded ` +
             `${state.universe.equities.length + state.universe.crypto.length} ` +
-            `Alpaca tradable assets — up to ${maxOpenPositions()} positions`,
+            `Alpaca tradable assets â€” up to ${maxOpenPositions()} positions`,
 
           signalSnapshot:
             {},
@@ -7172,3 +7211,4 @@ router.post(
 );
 
 export default router;
+
