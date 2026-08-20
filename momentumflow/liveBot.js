@@ -29,4 +29,4 @@ function evaluateAndExecuteTrade(context) {
     console.error(`Order execution failed: ${err.message}`);
   }
 }
-export default router;
+
