@@ -5691,6 +5691,43 @@ async function enter(
       0
     );
 
+  if (
+    !Number.isFinite(buyingPower) ||
+    buyingPower <= 0
+  ) {
+    const cooldownMs =
+      Math.max(
+        10000,
+        Number(
+          cfg()
+            .entryBuyingPowerRejectCooldownMs ||
+          60000
+        )
+      );
+
+    entryBuyingPowerCooldownUntil =
+      Date.now() +
+      cooldownMs;
+
+    entryBuyingPowerCooldownSymbol =
+      best.symbol;
+
+    state.lastError =
+      null;
+
+    state.lastDecision =
+      ${mode.toUpperCase()} ${direction} ${best.symbol} skipped â€”  +
+      ccount buying power unavailable; bot keeps running â€”  +
+      
+ew-entry cooldown ${Math.ceil(cooldownMs / 1000)}s;
+
+    console.warn(
+      [${mode}-bot] ${state.lastDecision}
+    );
+
+    return false;
+  }
+
   const sizing =
     buildPositionBudget({
       equity,
@@ -7211,4 +7248,5 @@ router.post(
 );
 
 export default router;
+
 
