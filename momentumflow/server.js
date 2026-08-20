@@ -8,7 +8,6 @@ import marketRouter from './market.js';
 import chatRouter from './chat.js';
 import tradingModeRouter from './tradingMode.js';
 import tradingConfigRouter from './tradingConfig.js';
-import liveBotRouter from './liveBot.js';
 import v26Router from './v26.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
