@@ -4416,16 +4416,1280 @@ function finalizeTradeClosure(
 
   state.exitRetryPending =
     false;
-    state.lastDecision =
-      `${mode.toUpperCase()} ${direction} ${best.symbol} skipped â€” ` +
-      `account buying power unavailable; bot keeps running â€” ` +
-      `new-entry cooldown ${Math.ceil(cooldownMs / 1000)}s`;
 
-    console.warn(
-      `[${mode}-bot] ${state.lastDecision}`
-    );
-return false;
+  state.lastDecision =
+    `closed ${mode.toUpperCase()} ${direction} ${trade.market} ` +
+    `qty ${qty} at ${exitPrice} â€” ${reason}`;
+
+  return true;
+}
+
+async function closeTrade(
+  mode,
+  trade,
+  price,
+  reason
+) {
+  let latest =
+    store.getOne(
+      'trades',
+      trade.id
+    ) ||
+    trade;
+
+  const lockedReason =
+    latest
+      .pending_exit_reason ||
+    reason;
+
+  if (
+    !latest
+      .pending_exit_reason
+  ) {
+    latest =
+      saveTradePatch(
+        latest.id,
+        {
+          pending_exit_reason:
+            lockedReason,
+
+          pending_exit_started_at:
+            new Date()
+              .toISOString(),
+
+          exit_decision_price:
+            Number.isFinite(
+              Number(
+                price
+              )
+            )
+              ? Number(
+                  price
+                )
+              : null,
+        }
+      );
   }
+
+  reason =
+    lockedReason;
+
+  const recordedQty =
+    Number(
+      positiveQtyString(
+        latest
+          .filled_qty ??
+        latest.qty
+      )
+    );
+
+  if (
+    !Number.isFinite(
+      recordedQty
+    ) ||
+    recordedQty <= 0
+  ) {
+    throw new Error(
+      `Open trade ${trade.id} has no filled quantity to close.`
+    );
+  }
+
+  const direction =
+    latest.direction ===
+    'SHORT'
+      ? 'SHORT'
+      : 'LONG';
+
+  const assetClass =
+    latest.asset_class ||
+    (
+      String(
+        latest.market
+      ).includes(
+        '/'
+      )
+        ? 'crypto'
+        : 'us_equity'
+    );
+
+  const crypto =
+    assetClass ===
+    'crypto';
+
+  for (
+    let attempt = 1;
+    attempt <=
+      Number(
+        cfg()
+          .maxExitAttempts ||
+        3
+      );
+    attempt += 1
+  ) {
+    latest =
+      store.getOne(
+        'trades',
+        trade.id
+      ) ||
+      latest;
+
+    const progress =
+      getExitProgress(
+        latest
+      );
+
+    const remainingRecorded =
+      Math.max(
+        0,
+
+        recordedQty -
+        progress.qty
+      );
+
+    const tolerance =
+      Math.max(
+        recordedQty *
+          0.002,
+
+        1e-12
+      );
+
+    if (
+      remainingRecorded <=
+        tolerance &&
+      progress.qty > 0
+    ) {
+      return finalizeTradeClosure(
+        mode,
+        latest,
+        {
+          exitQty:
+            progress.qty,
+
+          exitValue:
+            progress.value,
+
+          reason,
+
+          exitOrderIds:
+            progress.orderIds,
+
+          reconciled:
+            attempt > 1,
+        }
+      );
+    }
+
+    const positions =
+      await getPositions(
+        mode
+      );
+
+    const position =
+      findMatchingPosition(
+        positions,
+        latest.market
+      );
+
+    if (!position) {
+      if (
+        progress.qty > 0
+      ) {
+        return finalizeTradeClosure(
+          mode,
+          latest,
+          {
+            exitQty:
+              progress.qty,
+
+            exitValue:
+              progress.value,
+
+            reason,
+
+            exitOrderIds:
+              progress.orderIds,
+
+            reconciled:
+              true,
+          }
+        );
+      }
+
+      throw new Error(
+        `No matching Alpaca ${mode} position exists for ${latest.market}.`
+      );
+    }
+
+    const availableQtyString =
+      positiveQtyString(
+        position
+          .qty_available ??
+        position.qty
+      );
+
+    const availableQty =
+      Number(
+        availableQtyString
+      );
+
+    if (
+      !Number.isFinite(
+        availableQty
+      ) ||
+      availableQty <= 0
+    ) {
+      throw new Error(
+        `Alpaca reports no available quantity to close for ${latest.market}.`
+      );
+    }
+
+    const closeQty =
+      Math.min(
+        availableQty,
+        remainingRecorded
+      );
+
+    if (
+      !Number.isFinite(
+        closeQty
+      ) ||
+      closeQty <= 0
+    ) {
+      throw new Error(
+        `Invalid close quantity for ${latest.market}.`
+      );
+    }
+
+    const closeQtyString =
+      Math.abs(
+        closeQty -
+        availableQty
+      ) <=
+      Math.max(
+        availableQty *
+          1e-12,
+
+        1e-12
+      )
+        ? availableQtyString
+        : String(
+            Number(
+              closeQty
+                .toFixed(
+                  12
+                )
+            )
+          );
+
+    const side =
+      direction ===
+      'SHORT'
+        ? 'buy'
+        : 'sell';
+
+    state.lastDecision =
+      `closing ${mode.toUpperCase()} ${direction} ${latest.market} ` +
+      `qty ${closeQtyString} â€” ${reason} â€” attempt ${attempt}`;
+
+    const order =
+      await placeOrder({
+        mode,
+
+        symbol:
+          latest.market,
+
+        qty:
+          closeQtyString,
+
+        side,
+
+        type:
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? 'limit'
+            : 'market',
+
+        limitPrice:
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? extendedLimitPrice(
+                Number(
+                  latest.exit_decision_price ??
+                  latest.current_price ??
+                  latest.entry_price
+                ),
+                side
+              )
+            : undefined,
+
+        extendedHours:
+          (
+            !String(latest.market)
+              .includes('/') &&
+            extendedEquityAllowed(mode)
+          )
+            ? true
+            : undefined,
+
+        timeInForce:
+          crypto
+            ? 'gtc'
+            : 'day',
+      });
+
+    const settled =
+      await settleOrder({
+        mode,
+
+        orderId:
+          order.id,
+
+        initialWaitMs:
+          Number(
+            cfg()
+              .exitWaitMs ||
+            15000
+          ),
+
+        cancelWaitMs:
+          Number(
+            cfg()
+              .exitCancelWaitMs ||
+            5000
+          ),
+
+        label:
+          'exit',
+      });
+
+    if (
+      isOrderStillOpen(
+        settled.status
+      )
+    ) {
+      throw new Error(
+        `Exit order ${order.id} is still ${settled.status} after cancel/recheck. ` +
+        `Bot stopped to avoid duplicate exits.`
+      );
+    }
+
+    latest =
+      recordExitOrderProgress(
+        latest,
+        settled
+      );
+
+    const updatedProgress =
+      getExitProgress(
+        latest
+      );
+
+    const afterPositions =
+      await getPositions(
+        mode
+      );
+
+    const remainingPosition =
+      findMatchingPosition(
+        afterPositions,
+        latest.market
+      );
+
+    if (
+      !remainingPosition
+    ) {
+      if (
+        updatedProgress.qty <=
+        0
+      ) {
+        throw new Error(
+          `Alpaca no longer shows ${latest.market}, but exit order ${order.id} ` +
+          `reported no executed quantity.`
+        );
+      }
+
+      return finalizeTradeClosure(
+        mode,
+        latest,
+        {
+          exitQty:
+            updatedProgress.qty,
+
+          exitValue:
+            updatedProgress.value,
+
+          reason,
+
+          exitOrderIds:
+            updatedProgress.orderIds,
+
+          reconciled:
+            attempt > 1 ||
+            settled.status !==
+              'filled',
+        }
+      );
+    }
+
+    if (
+      Number(
+        settled
+          .filled_qty ||
+        0
+      ) <= 0 &&
+      [
+        'rejected',
+        'expired',
+      ].includes(
+        String(
+          settled.status ||
+          ''
+        )
+      )
+    ) {
+      throw new Error(
+        `Exit order ${order.id} ${settled.status} without a fill for ${latest.market}.`
+      );
+    }
+  }
+
+  state.exitRetryPending =
+    true;
+
+  state.lastDecision =
+    `partial exit remains for ${latest.market}; will retry before any new entry`;
+
+  return false;
+}
+
+async function manageOne(
+  mode,
+  trade
+) {
+  const direction =
+    trade.direction ===
+    'SHORT'
+      ? 'SHORT'
+      : 'LONG';
+
+  const assetClass =
+    trade.asset_class ||
+    (
+      String(
+        trade.market
+      ).includes(
+        '/'
+      )
+        ? 'crypto'
+        : 'us_equity'
+    );
+
+  const price =
+    await getLatestTradablePrice(
+      mode,
+      trade.market,
+      assetClass
+    );
+
+  const entryPrice =
+    Number(
+      trade.entry_price
+    );
+
+  if (
+    !Number.isFinite(
+      entryPrice
+    ) ||
+    entryPrice <= 0
+  ) {
+    throw new Error(
+      `Invalid entry price for ${trade.market}.`
+    );
+  }
+
+  const rawMove =
+    (
+      (
+        price -
+        entryPrice
+      ) /
+      entryPrice
+    ) *
+    100;
+
+  const favorableMove =
+    direction ===
+    'SHORT'
+      ? -rawMove
+      : rawMove;
+
+  const openedAt =
+    trade.timestamp ||
+    trade.created_at;
+
+  const openedAtMs =
+    openedAt
+      ? new Date(
+          openedAt
+        ).getTime()
+      : Date.now();
+
+  const ageMinutes =
+    (
+      Date.now() -
+      openedAtMs
+    ) /
+    60000;
+
+  const c =
+    cfg();
+
+  const takeProfitPct =
+    Number(
+      trade
+        .take_profit_pct ??
+      c
+        .fallbackTakeProfitPct
+    );
+
+  const stopLossPct =
+    Number(
+      trade
+        .stop_loss_pct ??
+      c
+        .fallbackStopLossPct
+    );
+
+  const trailTriggerPct =
+    Number(
+      trade
+        .trail_trigger_pct ??
+      Infinity
+    );
+
+  const trailDistancePct =
+    Number(
+      trade
+        .trail_distance_pct ??
+      Infinity
+    );
+
+  const trailFloorPct =
+    Number(
+      trade
+        .trail_floor_pct ??
+      0
+    );
+
+  const breakoutFailureWindowMinutes =
+    Number(
+      trade
+        .breakout_failure_window_minutes ??
+      0
+    );
+
+  const breakoutFailureAtr =
+    Number(
+      trade
+        .breakout_failure_atr ??
+      0
+    );
+
+  const maxHoldMinutes =
+    Number(
+      trade
+        .max_hold_minutes ??
+      c
+        .fallbackMaxHoldMinutes
+    );
+
+  const existingProgress =
+    getExitProgress(
+      trade
+    );
+
+  if (
+    trade
+      .pending_exit_reason ||
+    existingProgress.qty > 0
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        trade
+          .pending_exit_reason ||
+        'continuing partial exit'
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
+  const previousBest =
+    Number(
+      trade
+        .best_favorable_move_pct ||
+      0
+    );
+
+  const bestMove =
+    Math.max(
+      previousBest,
+      favorableMove
+    );
+
+  if (
+    bestMove >
+    previousBest
+  ) {
+    saveTradePatch(
+      trade.id,
+      {
+        best_favorable_move_pct:
+          Number(
+            bestMove
+              .toFixed(
+                4
+              )
+          ),
+
+        last_mark_price:
+          price,
+
+        last_mark_at:
+          new Date()
+            .toISOString(),
+      }
+    );
+  }
+
+  const breakoutLevel =
+    Number(
+      trade
+        .entry_signal
+        ?.breakout_level
+    );
+
+  const entryAtrPct =
+    Number(
+      trade
+        .atr_pct ||
+      0
+    );
+
+  if (
+    breakoutFailureWindowMinutes > 0 &&
+    ageMinutes <=
+      breakoutFailureWindowMinutes &&
+    Number.isFinite(
+      breakoutLevel
+    ) &&
+    breakoutLevel > 0 &&
+    entryAtrPct > 0 &&
+    breakoutFailureAtr > 0
+  ) {
+    const atrPrice =
+      entryPrice *
+      (
+        entryAtrPct /
+        100
+      );
+
+    const failureBuffer =
+      atrPrice *
+      breakoutFailureAtr;
+
+    const failedBreakout =
+      direction ===
+      'SHORT'
+        ? price >
+          breakoutLevel +
+            failureBuffer
+        : price <
+          breakoutLevel -
+            failureBuffer;
+
+    if (failedBreakout) {
+      const closed =
+        await closeTrade(
+          mode,
+          trade,
+          price,
+
+          `${direction} failed breakout invalidation at ${ageMinutes.toFixed(
+            1
+          )}m`
+        );
+
+      return closed
+        ? 'closed'
+        : 'open';
+    }
+  }
+
+  if (
+    favorableMove >=
+    takeProfitPct
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        `${direction} dynamic take profit +${favorableMove.toFixed(
+          3
+        )}%`
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
+  if (
+    favorableMove <=
+    -stopLossPct
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        `${direction} dynamic stop loss ${favorableMove.toFixed(
+          3
+        )}%`
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
+  const trailingExitLevel =
+    Math.max(
+      trailFloorPct,
+      bestMove -
+        trailDistancePct
+    );
+
+  if (
+    Number.isFinite(
+      trailTriggerPct
+    ) &&
+    Number.isFinite(
+      trailDistancePct
+    ) &&
+    bestMove >=
+      trailTriggerPct &&
+    favorableMove <=
+      trailingExitLevel
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        `${direction} trailing exit; best +${bestMove.toFixed(
+          3
+        )}%, now ${favorableMove.toFixed(
+          3
+        )}%`
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
+  if (
+    ageMinutes >=
+    maxHoldMinutes
+  ) {
+    const closed =
+      await closeTrade(
+        mode,
+        trade,
+        price,
+
+        `${direction} max hold ${ageMinutes.toFixed(
+          1
+        )}m`
+      );
+
+    return closed
+      ? 'closed'
+      : 'open';
+  }
+
+  return 'open';
+}
+
+async function manageOpenTrades(
+  mode
+) {
+  syncOpenTradeIds();
+
+  for (
+    const id of
+    [
+      ...state.openTradeIds,
+    ]
+  ) {
+    const trade =
+      store.getOne(
+        'trades',
+        id
+      );
+
+    if (
+      !trade ||
+      trade.result !==
+        null
+    ) {
+      state.openTradeIds =
+        state.openTradeIds
+          .filter(
+            (
+              tradeId
+            ) =>
+              tradeId !==
+              id
+          );
+
+      continue;
+    }
+
+    state.lastDecision =
+      `managing ${mode.toUpperCase()} ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} positions â€” ${trade.direction || 'LONG'} ${trade.market}`;
+
+    await manageOne(
+      mode,
+      trade
+    );
+  }
+
+  syncOpenTradeIds();
+
+  return state
+    .openTradeIds.length;
+}
+
+async function settleEntry(
+  mode,
+  orderId
+) {
+  const fill =
+    await settleOrder({
+      mode,
+
+      orderId,
+
+      initialWaitMs:
+        Number(
+          cfg()
+            .entryWaitMs ||
+          15000
+        ),
+
+      cancelWaitMs:
+        Number(
+          cfg()
+            .entryCancelWaitMs ||
+          30000
+        ),
+
+      label:
+        'entry',
+    });
+
+  if (
+    isOrderStillOpen(
+      fill.status
+    )
+  ) {
+    throw new Error(
+      `Entry order ${orderId} is still ${fill.status} after cancel/recheck. ` +
+      `Check the Alpaca ${mode} account before restarting the bot.`
+    );
+  }
+
+  return fill;
+}
+
+function buildPositionBudget({
+  equity,
+  buyingPower,
+  best,
+}) {
+  const requestedRisk =
+    Number(
+      tradingCfg()
+        .riskPerTrade ??
+      0.02
+    );
+
+  const effectiveRisk =
+    effectiveRiskFraction();
+
+  const stopPct =
+    Number(
+      best
+        ?.signal
+        ?.exitPlan
+        ?.stopLossPct ??
+      cfg()
+        .fallbackStopLossPct
+    );
+
+  if (
+    !Number.isFinite(
+      equity
+    ) ||
+    equity <= 0
+  ) {
+    throw new Error(
+      'Account equity is invalid for position sizing.'
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      buyingPower
+    ) ||
+    buyingPower <= 0
+  ) {
+    throw new Error(
+      'Account buying power is invalid for position sizing.'
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      stopPct
+    ) ||
+    stopPct <= 0
+  ) {
+    throw new Error(
+      `Invalid stop distance for ${best.symbol}.`
+    );
+  }
+
+  const qualityRiskMultiplier =
+    best.score >= 9
+      ? 1.0
+      : best.score >= 8
+        ? 0.75
+        : 0.50;
+
+  const earlyEntryRiskMultiplier =
+    best
+      ?.signal
+      ?.earlyEntry
+      ? 0.70
+      : 1.0;
+
+  const estimatedRoundTripCostPct =
+    Math.max(
+      0,
+      Number(
+        best
+          ?.signal
+          ?.exitPlan
+          ?.estimatedRoundTripCostPct ||
+        0
+      )
+    );
+
+  const riskDollars =
+    equity *
+    effectiveRisk *
+    qualityRiskMultiplier *
+    earlyEntryRiskMultiplier;
+
+  // Size against the planned stop PLUS estimated explicit round-trip costs.
+  // This is especially important for crypto, where taker fees can be material.
+  const totalRiskPct =
+    stopPct +
+    estimatedRoundTripCostPct;
+
+  const riskSizedNotional =
+    riskDollars /
+    (
+      totalRiskPct /
+      100
+    );
+
+  const maxPositionFraction =
+    Number(
+      cfg()
+        .maxPositionFractionOfEquity ??
+      0.50
+    );
+
+  if (
+    !Number.isFinite(
+      maxPositionFraction
+    ) ||
+    maxPositionFraction <= 0 ||
+    maxPositionFraction > 2
+  ) {
+    throw new Error(
+      'liveBotConfig.maxPositionFractionOfEquity must be greater than 0 and no more than 2.'
+    );
+  }
+
+  const equityCap =
+    equity *
+    maxPositionFraction;
+
+  const entryBuyingPowerFraction =
+    buyingPowerFraction();
+
+  const buyingPowerCap =
+    buyingPower *
+    entryBuyingPowerFraction;
+
+  const positionBudget =
+    Math.min(
+      riskSizedNotional,
+      equityCap,
+      buyingPowerCap
+    );
+
+  return {
+    requestedRiskFraction:
+      requestedRisk,
+
+    effectiveRiskFraction:
+      effectiveRisk,
+
+    stopPct,
+
+    estimatedRoundTripCostPct,
+
+    totalRiskPct,
+
+    qualityRiskMultiplier,
+
+    earlyEntryRiskMultiplier,
+
+    riskDollars,
+
+    riskSizedNotional,
+
+    equityCap,
+
+    buyingPowerCap,
+
+    entryBuyingPowerFraction,
+
+    positionBudget,
+
+    maxPositionFraction,
+  };
+}
+
+async function enter(
+  mode
+) {
+  syncOpenTradeIds();
+
+  if (
+    state.openTradeIds
+      .length >=
+    maxOpenPositions()
+  ) {
+    state.lastDecision =
+      `${mode.toUpperCase()} managing ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} open positions`;
+
+    return false;
+  }
+
+  const session =
+    store.getOne(
+      'sessions',
+      state.sessionId
+    );
+
+  if (!session) {
+    throw new Error(
+      'Bot session was not found.'
+    );
+  }
+
+  const halt =
+    checkHaltConditions(
+      session
+    );
+
+  if (
+    halt.halt
+  ) {
+    if (
+      state.openTradeIds
+        .length >
+      0
+    ) {
+      state.lastDecision =
+        `SAFETY HALT â€” no new entries (${halt.reason}); ` +
+        `managing ${state.openTradeIds.length} open position(s)`;
+
+      return false;
+    }
+
+    store.update(
+      'sessions',
+      session.id,
+      {
+        status:
+          'halted',
+
+        halt_reason:
+          halt.reason,
+
+        completed_at:
+          new Date()
+            .toISOString(),
+      }
+    );
+    stop(
+      `Safety halt: ${halt.reason}`
+    );
+
+    return false;
+  }
+
+  if (
+    Date.now() <
+    entryBuyingPowerCooldownUntil
+  ) {
+    const waitSeconds =
+      Math.max(
+        1,
+        Math.ceil(
+          (
+            entryBuyingPowerCooldownUntil -
+            Date.now()
+          ) /
+          1000
+        )
+      );
+
+    state.lastDecision =
+      `${mode.toUpperCase()} new entries cooling down ${waitSeconds}s` +
+      (
+        entryBuyingPowerCooldownSymbol
+          ? ` after buying-power rejection on ${entryBuyingPowerCooldownSymbol}`
+          : ' after buying-power rejection'
+      );
+
+    return false;
+  }
+
+  if (
+    entryBuyingPowerCooldownUntil > 0 &&
+    Date.now() >=
+      entryBuyingPowerCooldownUntil
+  ) {
+    entryBuyingPowerCooldownUntil = 0;
+    entryBuyingPowerCooldownSymbol = null;
+  }
+
+  const best =
+    await scan(
+      mode
+    );
+
+  if (!best) {
+    const strategyEquity =
+      state
+        .scanDiagnostics
+        ?.topStrategyRejections
+        ?.equities
+        ?.[0];
+
+    const strategyCrypto =
+      state
+        .scanDiagnostics
+        ?.topStrategyRejections
+        ?.crypto
+        ?.[0];
+
+    const prefilterEquity =
+      state
+        .scanDiagnostics
+        ?.topPrefilterRejections
+        ?.equities
+        ?.[0];
+
+    const prefilterCrypto =
+      state
+        .scanDiagnostics
+        ?.topPrefilterRejections
+        ?.crypto
+        ?.[0];
+
+    const top =
+      strategyEquity ||
+      strategyCrypto ||
+      prefilterEquity ||
+      prefilterCrypto;
+
+    state.lastDecision =
+      `${mode.toUpperCase()} scanning ` +
+      `${state.universe.equities.length + state.universe.crypto.length} ` +
+      `Alpaca tradable assets â€” ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} positions open â€” waiting for v20 setup` +
+      (
+        top
+          ? ` â€” top reject: ${top.reason} (${top.count})`
+          : ''
+      );
+
+    return false;
+  }
+
+  const direction =
+    best.direction ||
+    'LONG';
+
+  const account =
+    await getAccount(
+      mode
+    );
+
+  const buyingPower =
+    Number(
+      account
+        .buying_power ||
+      account.cash ||
+      0
+    );
+
+  const equity =
+    Number(
+      account.equity ||
+      account
+        .portfolio_value ||
+      account.cash ||
+      0
+    );
 
   const sizing =
     buildPositionBudget({
@@ -5947,6 +7211,4 @@ router.post(
 );
 
 export default router;
-
-
 
