@@ -1,14 +1,15 @@
-const storedBase =
-  typeof localStorage !== 'undefined'
-    ? localStorage.getItem('momentumflow_api_url')
-    : null;
+﻿const DEFAULT_API_URL =
+  'https://momentumfloww-production.up.railway.app';
 
-const BASE = (
+const rawBase = (
   import.meta.env.VITE_API_URL ||
-  storedBase ||
-  '/api'
-).replace(/\/$/, '');
+  DEFAULT_API_URL
+)
+  .trim()
+  .replace(/\/+$/, '')
+  .replace(/\/api$/i, '');
 
+const BASE = `${rawBase}/api`;
 const CONFIG_DRAFT_KEY = 'momentumflow_trading_config_draft';
 
 async function request(path, options = {}) {
@@ -225,3 +226,4 @@ export const api = {
       method: 'POST',
     }),
 };
+
