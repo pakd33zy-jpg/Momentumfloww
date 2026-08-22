@@ -4844,18 +4844,38 @@ async function closeTrade(
           .filled_qty ||
         0
       ) <= 0 &&
-      [
-        'rejected',
-        'expired',
-      ].includes(
-        String(
-          settled.status ||
-          ''
-        )
-      )
+      String(
+        settled.status ||
+        ''
+      ) === 'expired'
+    ) {
+      state.exitRetryPending =
+        true;
+
+      state.lastDecision =
+        `Exit order ${order.id} expired without a fill for ${latest.market}; ` +
+        `position remains open and exit will retry without stopping the bot`;
+
+      console.warn(
+        `[${mode}-bot] ${state.lastDecision}`
+      );
+
+      continue;
+    }
+
+    if (
+      Number(
+        settled
+          .filled_qty ||
+        0
+      ) <= 0 &&
+      String(
+        settled.status ||
+        ''
+      ) === 'rejected'
     ) {
       throw new Error(
-        `Exit order ${order.id} ${settled.status} without a fill for ${latest.market}.`
+        `Exit order ${order.id} rejected without a fill for ${latest.market}.`
       );
     }
   }
