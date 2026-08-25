@@ -5875,6 +5875,29 @@ async function enter(
         0
       );
 
+  const currentCryptoPositions =
+    entryPositions.filter(
+      (position) =>
+        String(position.asset_class || '').toLowerCase() === 'crypto' &&
+        Math.abs(Number(position.qty || 0)) > 0
+    ).length;
+
+  const maxConcurrentCryptoPositions = Math.max(
+    1,
+    Number(strategyCfg().cryptoV33MaxConcurrentPositions || 1)
+  );
+
+  if (
+    best.strategy === 'CRYPTO_V33_TREND_PULLBACK' &&
+    currentCryptoPositions >= maxConcurrentCryptoPositions
+  ) {
+    state.lastDecision =
+      `${mode.toUpperCase()} ${best.symbol} skipped - ` +
+      `${currentCryptoPositions}/${maxConcurrentCryptoPositions} crypto position limit; ` +
+      'avoiding correlated exposure';
+    return false;
+  }
+
   if (
     !Number.isFinite(buyingPower) ||
     buyingPower <= 0

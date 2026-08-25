@@ -63,6 +63,37 @@ function candidate({ spreadPct = 0.05, bearish = false, omitDaily = false, recov
   });
 }
 
+function rollingOverCandidate() {
+  const daily = bars(50, 80, 0.28, 1440);
+  const hourly = bars(1000, 70, 0.025, 60);
+  const fifteen = bars(70, 98, 0.035, 15);
+
+  // Preserve the broad uptrend but make the latest hour continue downward.
+  // The old trigger accepted this as a shallow pullback.
+  const base = fifteen.at(-6).c;
+  for (let offset = 5; offset >= 0; offset -= 1) {
+    const index = fifteen.length - 1 - offset;
+    const step = 6 - offset;
+    fifteen[index] = {
+      ...fifteen[index],
+      o: base * (1 - (step - 1) * 0.0015),
+      c: base * (1 - step * 0.0015),
+      h: base * (1 - (step - 1) * 0.0010),
+      l: base * (1 - step * 0.0020),
+    };
+  }
+
+  const price = fifteen.at(-1).c;
+  const half = price * 0.05 / 200;
+  return evaluateCryptoCandidateV33({
+    asset: { symbol: 'BTC/USD', name: 'Bitcoin' },
+    snapshot: { latestQuote: { bp: price - half, ap: price + half } },
+    bars15m: fifteen,
+    bars1h: hourly,
+    bars1d: daily,
+  });
+}
+
 test('qualifies an aligned liquid multi-timeframe pullback', () => {
   const result = candidate();
   assert.ok(result.signal, result.diagnostics?.reason);
@@ -80,6 +111,13 @@ test('rejects spread that makes execution poor', () => {
   const result = candidate({ spreadPct: 0.40 });
   assert.equal(result.signal, null);
   assert.match(result.diagnostics.reason, /spread/);
+});
+
+test('rejects a pullback while immediate 15-minute momentum is still falling', () => {
+  const result = rollingOverCandidate();
+  assert.equal(result.signal, null);
+  assert.match(result.diagnostics.reason, /waiting for 15m/);
+  assert.equal(result.diagnostics.metrics.shortTermConfirmed, false);
 });
 
 test('derives daily trend from hourly bars when Alpaca daily history is sparse', () => {

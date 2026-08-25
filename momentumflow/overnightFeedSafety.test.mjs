@@ -10,8 +10,8 @@ function assert(value, message) {
 }
 
 assert(
-  /c\.stockFeed\s*=\s*['"]boats['"]\s*;/.test(text),
-  'historical overnight BOATS feed missing'
+  !/c\.stockFeed\s*=\s*['"]boats['"]\s*;/.test(text),
+  'unentitled BOATS feed must not be requested'
 );
 
 assert(
@@ -22,6 +22,11 @@ assert(
 assert(
   text.includes("mode === 'paper'"),
   'PAPER-only extended-hours guard missing'
+);
+
+assert(
+  text.includes("state.equitySession !== 'overnight'"),
+  'overnight equity scan skip missing when BOATS is unavailable'
 );
 
 console.log('overnight historical feed safety test passed');

@@ -29,6 +29,7 @@ export const CRYPTO_V33_DEFAULTS = {
   cryptoV33TrailDistanceR: 0.65,
   cryptoV33MaxPositionFraction: 0.12,
   cryptoV33MaxTotalExposureFraction: 0.35,
+  cryptoV33MaxConcurrentPositions: 1,
   cryptoV33RiskFraction: 0.0025,
 };
 
@@ -175,12 +176,15 @@ export function evaluateCryptoCandidateV33({
   const dFast = ema(dailyCloses, c.cryptoV33DailyFastEma);
   const dSlow = ema(dailyCloses, c.cryptoV33DailySlowEma);
   const hFast = ema(hourlyCloses, c.cryptoV33HourlyFastEma);
+  const priorHFast = ema(hourlyCloses.slice(0, -1), c.cryptoV33HourlyFastEma);
   const hSlow = ema(hourlyCloses, c.cryptoV33HourlySlowEma);
   const pullbackEma = ema(closes15, c.cryptoV33PullbackEma);
+  const priorPullbackEma = ema(closes15.slice(0, -1), c.cryptoV33PullbackEma);
   const ret7d = returnPct(b1d, 7);
   const ret28d = returnPct(b1d, 28);
   const ret6h = returnPct(b1h, 6);
   const ret24h = returnPct(b1h, 24);
+  const ret1h = returnPct(b15, 4);
   const volRatio = volumeRatio(b15);
 
   const establishedDailyTrend =
@@ -201,7 +205,10 @@ export function evaluateCryptoCandidateV33({
   const dailyTrend =
     establishedDailyTrend ||
     recoveryDailyTrend;
-  const hourlyTrend = hFast > hSlow && ret24h > 0;
+  const hourlyTrend =
+    hFast > hSlow &&
+    hFast > priorHFast &&
+    ret24h > 0;
   if (!dailyTrend || !hourlyTrend) {
     return rejection('V33: higher-timeframe trend not aligned', {
       ret7d,
@@ -219,12 +226,38 @@ export function evaluateCryptoCandidateV33({
   const previous = close(b15.at(-2));
   const recentHigh = Math.max(...b15.slice(-9, -1).map(high));
   const recentLow = Math.min(...b15.slice(-9, -1).map(low));
-  const reclaim = previous <= pullbackEma && latest > pullbackEma;
-  const shallowPullback = recentLow <= pullbackEma * 1.004 && latest > pullbackEma && ret6h > -0.5;
-  const breakout = latest > recentHigh && ret6h > 0;
+  // Do not buy a technically valid pullback while the immediate tape is still
+  // falling. Both the 15-minute EMA and the latest one-hour return must have
+  // turned upward; this prevents a single green candle from catching a slide.
+  const shortTermConfirmed =
+    latest > previous &&
+    pullbackEma > priorPullbackEma &&
+    ret1h > 0;
+  const reclaim =
+    previous <= priorPullbackEma &&
+    latest > pullbackEma &&
+    shortTermConfirmed;
+  const shallowPullback =
+    recentLow <= pullbackEma * 1.004 &&
+    latest > pullbackEma &&
+    ret6h > -0.5 &&
+    shortTermConfirmed;
+  const breakout =
+    latest > recentHigh &&
+    ret6h > 0 &&
+    shortTermConfirmed;
   if (!reclaim && !shallowPullback && !breakout) {
     return rejection('V33: waiting for 15m pullback/reclaim or breakout', {
-      latest, pullbackEma, recentHigh, reclaim, shallowPullback, breakout,
+      latest,
+      previous,
+      pullbackEma,
+      priorPullbackEma,
+      ret1h,
+      recentHigh,
+      shortTermConfirmed,
+      reclaim,
+      shallowPullback,
+      breakout,
     });
   }
 
@@ -270,6 +303,7 @@ export function evaluateCryptoCandidateV33({
     ret28dPct: ret28d,
     ret24hPct: ret24h,
     ret6hPct: ret6h,
+    ret1hPct: ret1h,
     trendRegime:
       establishedDailyTrend
         ? 'ESTABLISHED_TREND'
