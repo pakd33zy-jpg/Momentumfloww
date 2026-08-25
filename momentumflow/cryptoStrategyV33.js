@@ -44,6 +44,32 @@ function validBars(bars) {
   );
 }
 
+function aggregateHourlyToDaily(bars) {
+  const groups = new Map();
+  for (const bar of validBars(bars)) {
+    const timestamp = new Date(bar?.t ?? bar?.timestamp ?? 0);
+    if (!Number.isFinite(timestamp.getTime())) continue;
+    const key = timestamp.toISOString().slice(0, 10);
+    const row = groups.get(key);
+    if (!row) {
+      groups.set(key, {
+        t: `${key}T00:00:00.000Z`,
+        o: number(bar?.o ?? bar?.open, close(bar)),
+        h: high(bar),
+        l: low(bar),
+        c: close(bar),
+        v: volume(bar),
+      });
+    } else {
+      row.h = Math.max(row.h, high(bar));
+      row.l = Math.min(row.l, low(bar));
+      row.c = close(bar);
+      row.v += volume(bar);
+    }
+  }
+  return [...groups.values()];
+}
+
 export function ema(values, length) {
   const clean = (values || []).filter(Number.isFinite);
   if (clean.length < length || length < 2) return null;
@@ -85,7 +111,17 @@ function volumeRatio(bars, lookback = 20) {
 }
 
 function rejection(reason, metrics = {}) {
-  return { signal: null, diagnostics: { eligible: false, reason, metrics } };
+  const detail = { eligible: false, score: 0, reason, ...metrics };
+  return {
+    signal: null,
+    diagnostics: {
+      eligible: false,
+      reason,
+      metrics,
+      long: detail,
+      threshold: null,
+    },
+  };
 }
 
 export function evaluateCryptoCandidateV33({
@@ -102,10 +138,21 @@ export function evaluateCryptoCandidateV33({
 
   const b15 = validBars(bars15m);
   const b1h = validBars(bars1h);
-  const b1d = validBars(bars1d);
+  let b1d = validBars(bars1d);
+  let dailySource = '1Day';
+  if (b1d.length < 35) {
+    const derivedDaily = aggregateHourlyToDaily(b1h);
+    if (derivedDaily.length > b1d.length) {
+      b1d = derivedDaily;
+      dailySource = 'derived_from_1Hour';
+    }
+  }
   if (b15.length < 40 || b1h.length < 50 || b1d.length < 35) {
     return rejection('V33: insufficient multi-timeframe history', {
-      bars15m: b15.length, bars1h: b1h.length, bars1d: b1d.length,
+      bars15m: b15.length,
+      bars1h: b1h.length,
+      bars1d: b1d.length,
+      dailySource,
     });
   }
 
@@ -197,6 +244,7 @@ export function evaluateCryptoCandidateV33({
     hourlyAtrPct: volatility,
     expectedMovePct,
     estimatedRoundTripCostPct: c.cryptoV33EstimatedRoundTripCostPct,
+    dailySource,
     exitPlan: {
       stopLossPct,
       takeProfitPct,

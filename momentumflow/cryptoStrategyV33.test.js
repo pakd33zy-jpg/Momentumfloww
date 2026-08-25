@@ -24,9 +24,9 @@ function bars(count, start, driftPct, timeframeMinutes, overrides = {}) {
   });
 }
 
-function candidate({ spreadPct = 0.05, bearish = false } = {}) {
+function candidate({ spreadPct = 0.05, bearish = false, omitDaily = false } = {}) {
   const daily = bars(50, 80, bearish ? -0.18 : 0.28, 1440);
-  const hourly = bars(90, 90, bearish ? -0.05 : 0.09, 60);
+  const hourly = bars(1000, 70, bearish ? -0.015 : 0.025, 60);
   const fifteen = bars(70, 98, bearish ? -0.02 : 0.035, 15);
   if (!bearish) {
     // Create a shallow pullback followed by a reclaim of the 20-bar EMA.
@@ -46,7 +46,7 @@ function candidate({ spreadPct = 0.05, bearish = false } = {}) {
     snapshot: { latestQuote: { bp: price - half, ap: price + half } },
     bars15m: fifteen,
     bars1h: hourly,
-    bars1d: daily,
+    bars1d: omitDaily ? [] : daily,
   });
 }
 
@@ -67,6 +67,12 @@ test('rejects spread that makes execution poor', () => {
   const result = candidate({ spreadPct: 0.40 });
   assert.equal(result.signal, null);
   assert.match(result.diagnostics.reason, /spread/);
+});
+
+test('derives daily trend from hourly bars when Alpaca daily history is sparse', () => {
+  const result = candidate({ omitDaily: true });
+  assert.ok(result.signal, result.diagnostics?.reason);
+  assert.equal(result.signal.signal.dailySource, 'derived_from_1Hour');
 });
 
 test('cash-aware sizing cannot exceed cash, symbol cap, or portfolio cap', () => {

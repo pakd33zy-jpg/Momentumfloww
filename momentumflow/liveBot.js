@@ -2692,7 +2692,7 @@ function pushNearMiss(
     direction ===
     'SHORT'
       ? d.short
-      : d.long;
+      : d.long || d.metrics;
 
   const score =
     Number(
