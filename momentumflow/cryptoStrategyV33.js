@@ -148,7 +148,10 @@ export function evaluateCryptoCandidateV33({
     }
   }
   if (b15.length < 40 || b1h.length < 50 || b1d.length < 35) {
-    return rejection('V33: insufficient multi-timeframe history', {
+    const historyReason =
+      `V33: insufficient history ` +
+      `(15m=${b15.length}, 1h=${b1h.length}, 1d=${b1d.length}, source=${dailySource})`;
+    return rejection(historyReason, {
       bars15m: b15.length,
       bars1h: b1h.length,
       bars1d: b1d.length,
