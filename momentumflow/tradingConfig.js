@@ -12,7 +12,7 @@ export const TRADING_DEFAULTS = {
   dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
   consecutiveStopLoss: 3,
   fastScalpEnabled: false,
-  equityFocusMode: true,
+  equityFocusMode: false,
   equityV20Enabled: true,
   equityFastScalpEnabled: false,
 };

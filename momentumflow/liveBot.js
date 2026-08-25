@@ -55,6 +55,10 @@ import {
   buildCryptoV33Budget,
 } from './cryptoStrategyV33.js';
 
+import {
+  voidOpenPaperTradesAfterAccountReset,
+} from './paperAccountReconciliation.js';
+
 // UNIFIED BOT v20 ADAPTIVE EQUITIES
 //
 // PAPER and LIVE use the same scanner, signals, sizing and execution path.
@@ -748,6 +752,7 @@ function strategyPerformanceSummary() {
       .filter(
         (trade) =>
           trade.result !== null &&
+          trade.voided !== true &&
           (
             trade.execution_mode ||
             'paper'
@@ -1120,14 +1125,18 @@ function paperForwardSessionSummary() {
     trades.filter(
       (trade) =>
         trade.result !==
-        null
+        null &&
+        trade.voided !==
+        true
     );
 
   const open =
     trades.filter(
       (trade) =>
         trade.result ===
-        null
+        null &&
+        trade.voided !==
+        true
     );
 
   const numeric = (value) => {
@@ -1756,7 +1765,9 @@ function getSessionOpenTrades() {
         trade.session_id ===
           state.sessionId &&
         trade.result ===
-          null
+          null &&
+        trade.voided !==
+          true
     );
 }
 
@@ -2134,7 +2145,9 @@ function buildBlockedSymbols(
   ) {
     if (
       trade.result ===
-      null
+      null &&
+      trade.voided !==
+      true
     ) {
       blocked.add(
         normPos(
@@ -6788,6 +6801,87 @@ router.delete(
     res.json({
       ok: true,
     });
+  }
+);
+
+// Replacing/resetting an Alpaca PAPER account removes its broker positions but
+// intentionally leaves local history intact. This guarded endpoint voids only
+// stale, open PAPER records after independently confirming the new broker
+// account has no positions. It never submits or cancels an order.
+router.post(
+  '/reconcile-paper-account-reset',
+  async (req, res) => {
+    try {
+      if (state.running) {
+        return res.status(409).json({
+          error: 'Stop the PAPER bot before reconciling an account reset.',
+        });
+      }
+
+      if (req.body?.confirmation !== 'VOID_STALE_PAPER_TRADES') {
+        return res.status(400).json({
+          error: 'Explicit account-reset confirmation is required.',
+        });
+      }
+
+      const [account, brokerPositions] = await Promise.all([
+        getAccount('paper'),
+        getPositions('paper'),
+      ]);
+
+      if (account?.trading_blocked) {
+        return res.status(409).json({
+          error: 'The Alpaca PAPER account is trading-blocked.',
+        });
+      }
+
+      if (Array.isArray(brokerPositions) && brokerPositions.length > 0) {
+        return res.status(409).json({
+          error:
+            'The Alpaca PAPER account still has broker positions; refusing to void local trades.',
+          brokerPositionCount: brokerPositions.length,
+        });
+      }
+
+      const trades = store.getAll('trades');
+      const sessions = store.getAll('sessions');
+      const reconciled = voidOpenPaperTradesAfterAccountReset(
+        trades,
+        sessions
+      );
+
+      store.saveAll('trades', reconciled.trades);
+
+      for (const sessionId of reconciled.affectedSessionIds) {
+        const session = store.getOne('sessions', sessionId);
+        if (!session) continue;
+
+        recomputeSessionStats(session, reconciled.trades);
+        store.update('sessions', sessionId, {
+          ...session,
+          status: 'halted',
+          halt_reason: 'Paper account reset reconciled; stale local trades voided',
+          completed_at: session.completed_at || new Date().toISOString(),
+        });
+      }
+
+      state.openTradeIds = [];
+      state.exitRetryPending = false;
+      state.lastError = null;
+      state.lastDecision =
+        `paper account reset reconciled; voided ${reconciled.voidedTradeIds.length} stale trade(s)`;
+
+      return res.json({
+        ok: true,
+        accountNumber: account?.account_number || null,
+        voidedTradeIds: reconciled.voidedTradeIds,
+        ...pub(),
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: `Paper account reset reconciliation failed: ${error.message}`,
+      });
+    }
   }
 );
 function localRemainingQty(

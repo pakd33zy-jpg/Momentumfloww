@@ -14,7 +14,7 @@
 
 export const EQUITY_V20_DEFAULTS = {
   equityV20Enabled: true,
-  equityFocusMode: true,
+  equityFocusMode: false,
   equityFastScalpEnabled: false,
 
   equityV20ScoreThreshold: 7.5,

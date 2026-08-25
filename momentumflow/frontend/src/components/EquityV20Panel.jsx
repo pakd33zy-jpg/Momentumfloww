@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 
 export default function EquityV20Panel() {
   const [config, setConfig] = useState({
-    equityFocusMode: true,
+    equityFocusMode: false,
     equityV20Enabled: true,
     equityFastScalpEnabled: false,
   });
@@ -21,8 +21,8 @@ export default function EquityV20Panel() {
 
       setConfig({
         equityFocusMode:
-          saved?.equityFocusMode !==
-          false,
+          saved?.equityFocusMode ===
+          true,
         equityV20Enabled:
           saved?.equityV20Enabled !==
           false,
@@ -60,8 +60,8 @@ export default function EquityV20Panel() {
 
       setConfig({
         equityFocusMode:
-          saved?.equityFocusMode !==
-          false,
+          saved?.equityFocusMode ===
+          true,
         equityV20Enabled:
           saved?.equityV20Enabled !==
           false,

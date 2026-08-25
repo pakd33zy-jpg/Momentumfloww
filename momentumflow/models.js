@@ -166,7 +166,9 @@ export function recomputeSessionStats(
           trade.session_id ===
             session.id &&
           trade.result !==
-            null
+            null &&
+          trade.voided !==
+            true
       )
       .sort(
         (
