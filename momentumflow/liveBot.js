@@ -44,6 +44,7 @@ import {
 
 import {
   EQUITY_V20_DEFAULTS,
+  equityStrategyWindowOpen,
   equityPrefilterQuality,
   evaluateEquityCandidateV20,
 } from './equityStrategyV20.js';
@@ -3415,6 +3416,15 @@ if (
   diag.extendedEquityPaper =
     allowExtendedEquities;
 
+  const equityWindowOpen =
+    equityStrategyWindowOpen({
+      now,
+      config: sc,
+    });
+
+  diag.equityStrategyWindowOpen =
+    equityWindowOpen;
+
   // Free-plan overnight market data uses Alpaca's derived overnight feed.
   if (
     allowExtendedEquities &&
@@ -3429,10 +3439,13 @@ if (
   }
 
   const canScanEquities =
-    state.marketOpen ||
+    equityWindowOpen &&
     (
-      allowExtendedEquities &&
-      state.equitySession !== 'overnight'
+      state.marketOpen ||
+      (
+        allowExtendedEquities &&
+        state.equitySession !== 'overnight'
+      )
     );
 
   if (
@@ -4026,6 +4039,16 @@ if (
         );
       }
     }
+  } else if (
+    !equityWindowOpen
+  ) {
+    bump(
+      diag
+        .prefilter
+        .equities,
+
+      'outside equity strategy time window'
+    );
   } else if (
     !state.marketOpen &&
     !allowExtendedEquities

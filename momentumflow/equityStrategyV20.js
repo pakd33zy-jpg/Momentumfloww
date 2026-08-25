@@ -130,6 +130,36 @@ function etParts(value) {
   };
 }
 
+export function equityStrategyWindowOpen({ now = new Date(), config = {} } = {}) {
+  const settings = { ...EQUITY_V20_DEFAULTS, ...config };
+  const minutes = etParts(now).minutes;
+  const windows = [];
+
+  if (settings.equityV20Enabled !== false) {
+    windows.push(
+      [settings.equityV20OrbStartMinutesET, settings.equityV20OrbEndMinutesET],
+      [settings.equityV20VwapStartMinutesET, settings.equityV20VwapEndMinutesET],
+      [settings.equityV20ContinuationStartMinutesET, settings.equityV20ContinuationEndMinutesET],
+    );
+  } else {
+    windows.push([
+      settings.equityStartMinutesET ?? 575,
+      settings.equityEndMinutesET ?? 950,
+    ]);
+  }
+
+  if (settings.equityFastScalpEnabled === true) {
+    windows.push([
+      settings.equityFastScalpStartMinutesET,
+      settings.equityFastScalpEndMinutesET,
+    ]);
+  }
+
+  return windows.some(([start, end]) =>
+    minutes >= Number(start) && minutes <= Number(end)
+  );
+}
+
 function mergeCurrentMinuteBar(
   bars = [],
   snapshot = null
