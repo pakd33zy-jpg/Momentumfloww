@@ -3235,12 +3235,21 @@ if (
               end: now,
               limit: 10000,
             }),
-            getCryptoBars(mode, detailSymbols, {
-              timeframe: '1Hour',
-              start: new Date(Date.now() - 60 * 24 * 60 * 60000),
-              end: now,
-              limit: 10000,
-            }),
+            Promise.all(
+              detailSymbols.map(
+                async (symbol) =>
+                  getCryptoBars(mode, [symbol], {
+                    timeframe: '1Hour',
+                    start: new Date(Date.now() - 60 * 24 * 60 * 60000),
+                    end: now,
+                    limit: 2000,
+                    maxPages: 2,
+                  })
+              )
+            ).then(
+              (results) =>
+                Object.assign({}, ...results)
+            ),
             getCryptoBars(mode, detailSymbols, {
               timeframe: '1Day',
               start: new Date(Date.now() - 180 * 24 * 60 * 60000),
