@@ -59,6 +59,10 @@ import {
   voidOpenPaperTradesAfterAccountReset,
 } from './paperAccountReconciliation.js';
 
+import {
+  evaluateAlpacaAccountAccess,
+} from './alpacaAccountState.js';
+
 // UNIFIED BOT v20 ADAPTIVE EQUITIES
 //
 // PAPER and LIVE use the same scanner, signals, sizing and execution path.
@@ -6829,9 +6833,11 @@ router.post(
         getPositions('paper'),
       ]);
 
-      if (account?.trading_blocked) {
+      const accountAccess = evaluateAlpacaAccountAccess(account);
+
+      if (!accountAccess.allowed) {
         return res.status(409).json({
-          error: 'The Alpaca PAPER account is trading-blocked.',
+          error: `The Alpaca PAPER account cannot be reconciled: ${accountAccess.reason}`,
         });
       }
 
@@ -7012,9 +7018,13 @@ router.post(
           mode
         );
 
+      const accountAccess =
+        evaluateAlpacaAccountAccess(
+          account
+        );
+
       if (
-        account
-          .trading_blocked
+        !accountAccess.allowed
       ) {
         return res
           .status(
@@ -7022,7 +7032,7 @@ router.post(
           )
           .json({
             error:
-              `Alpaca reports trading_blocked=true for the ${mode} account.`,
+              `${mode.toUpperCase()} bot blocked: ${accountAccess.reason}`,
           });
       }
 
