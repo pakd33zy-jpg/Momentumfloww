@@ -18,6 +18,8 @@ export const CRYPTO_V33_DEFAULTS = {
   cryptoV33HourlyFastEma: 12,
   cryptoV33HourlySlowEma: 36,
   cryptoV33PullbackEma: 20,
+  cryptoV33Recovery7dPct: 4.0,
+  cryptoV33Recovery24hPct: 0.50,
   cryptoV33AtrStopMultiple: 1.8,
   cryptoV33MinStopPct: 1.25,
   cryptoV33MaxStopPct: 4.0,
@@ -181,11 +183,35 @@ export function evaluateCryptoCandidateV33({
   const ret24h = returnPct(b1h, 24);
   const volRatio = volumeRatio(b15);
 
-  const dailyTrend = price > dSlow && dFast > dSlow && ret7d > 0 && ret28d > 0;
+  const establishedDailyTrend =
+    price > dSlow &&
+    dFast > dSlow &&
+    ret7d > 0 &&
+    ret28d > 0;
+
+  // A sharp recovery should not have to wait weeks for a 28-day measure to
+  // turn positive. It must still reclaim the fast daily EMA and have strong
+  // 7-day plus 24-hour confirmation; the 15-minute trigger below prevents a
+  // market-order chase into an extended candle.
+  const recoveryDailyTrend =
+    price > dFast &&
+    ret7d >= c.cryptoV33Recovery7dPct &&
+    ret24h >= c.cryptoV33Recovery24hPct;
+
+  const dailyTrend =
+    establishedDailyTrend ||
+    recoveryDailyTrend;
   const hourlyTrend = hFast > hSlow && ret24h > 0;
   if (!dailyTrend || !hourlyTrend) {
     return rejection('V33: higher-timeframe trend not aligned', {
-      ret7d, ret28d, ret24h, dailyFast: dFast, dailySlow: dSlow,
+      ret7d,
+      ret28d,
+      ret24h,
+      dailyFast: dFast,
+      dailySlow: dSlow,
+      establishedDailyTrend,
+      recoveryDailyTrend,
+      hourlyTrend,
     });
   }
 
@@ -244,6 +270,10 @@ export function evaluateCryptoCandidateV33({
     ret28dPct: ret28d,
     ret24hPct: ret24h,
     ret6hPct: ret6h,
+    trendRegime:
+      establishedDailyTrend
+        ? 'ESTABLISHED_TREND'
+        : 'CONFIRMED_RECOVERY',
     hourlyAtrPct: volatility,
     expectedMovePct,
     estimatedRoundTripCostPct: c.cryptoV33EstimatedRoundTripCostPct,

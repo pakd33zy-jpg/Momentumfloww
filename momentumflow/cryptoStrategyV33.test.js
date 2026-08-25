@@ -24,8 +24,21 @@ function bars(count, start, driftPct, timeframeMinutes, overrides = {}) {
   });
 }
 
-function candidate({ spreadPct = 0.05, bearish = false, omitDaily = false } = {}) {
-  const daily = bars(50, 80, bearish ? -0.18 : 0.28, 1440);
+function candidate({ spreadPct = 0.05, bearish = false, omitDaily = false, recovery = false } = {}) {
+  const daily = bars(50, 80, bearish || recovery ? -0.50 : 0.28, 1440);
+  if (recovery) {
+    for (let index = daily.length - 8; index < daily.length; index += 1) {
+      const prior = daily[index - 1].c;
+      const next = prior * 1.012;
+      daily[index] = {
+        ...daily[index],
+        o: prior,
+        h: next * 1.003,
+        l: prior * 0.997,
+        c: next,
+      };
+    }
+  }
   const hourly = bars(1000, 70, bearish ? -0.015 : 0.025, 60);
   const fifteen = bars(70, 98, bearish ? -0.02 : 0.035, 15);
   if (!bearish) {
@@ -73,6 +86,14 @@ test('derives daily trend from hourly bars when Alpaca daily history is sparse',
   const result = candidate({ omitDaily: true });
   assert.ok(result.signal, result.diagnostics?.reason);
   assert.equal(result.signal.signal.dailySource, 'derived_from_1Hour');
+});
+
+test('recognizes a confirmed sharp recovery before the 28-day trend catches up', () => {
+  const result = candidate({ recovery: true });
+  assert.ok(result.signal, JSON.stringify(result.diagnostics));
+  assert.equal(result.signal.signal.trendRegime, 'CONFIRMED_RECOVERY');
+  assert.ok(result.signal.signal.ret7dPct >= 4);
+  assert.ok(result.signal.signal.ret28dPct < 0);
 });
 
 test('cash-aware sizing cannot exceed cash, symbol cap, or portfolio cap', () => {
