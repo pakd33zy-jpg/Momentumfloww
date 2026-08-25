@@ -48,6 +48,12 @@ import {
   evaluateEquityCandidateV20,
 } from './equityStrategyV20.js';
 
+import {
+  CRYPTO_V33_DEFAULTS,
+  evaluateCryptoCandidateV33,
+  buildCryptoV33Budget,
+} from './cryptoStrategyV33.js';
+
 // UNIFIED BOT v20 ADAPTIVE EQUITIES
 //
 // PAPER and LIVE use the same scanner, signals, sizing and execution path.
@@ -83,6 +89,14 @@ const state = {
   moverLeaderboard: [],
   rejectionOutcomes: [],
   scanDiagnostics: null,
+
+  cryptoV33Bars: {
+    fetchedAt: 0,
+    symbolsKey: '',
+    bars15m: {},
+    bars1h: {},
+    bars1d: {},
+  },
 
   universe: {
     equities: [],
@@ -169,7 +183,7 @@ let entryBuyingPowerCooldownSymbol = null;
 const hardLiquidityRejectUntilBySymbol = new Map();
 const HARD_LIQUIDITY_CACHE_MS = 6 * 60 * 60 * 1000;
 function isBuyingPowerEntryError(error) {
-  return /buying power/i.test(
+  return /(buying power|insufficient balance|insufficient.*usd)/i.test(
     String(
       error?.message ||
       ''
@@ -199,6 +213,7 @@ function buyingPowerFraction() {
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
   ...EQUITY_V20_DEFAULTS,
+  ...CRYPTO_V33_DEFAULTS,
   ...store.getConfig('strategyConfig', {}),
 
   equityFocusMode:
@@ -2865,6 +2880,11 @@ async function scan(
   // CRYPTO
   // ========================================
 
+  const configuredCryptoSymbols =
+    sc.cryptoV33Enabled === true
+      ? new Set(sc.cryptoV33Symbols)
+      : null;
+
   const cryptoSymbols =
     state.universe
       .crypto
@@ -2875,7 +2895,9 @@ async function scan(
           asset.symbol
       )
       .filter(
-        Boolean
+        (symbol) =>
+          Boolean(symbol) &&
+          (!configuredCryptoSymbols || configuredCryptoSymbols.has(symbol))
       );
 
   const equityFocusMode =
@@ -2953,6 +2975,9 @@ if (
         normPos(
           asset.symbol
         );
+
+      const cryptoV33Enabled =
+        sc.cryptoV33Enabled === true;
 
       snapshotsForStatus[
         asset.symbol
@@ -3036,6 +3061,15 @@ if (
       }
 
       if (
+        cryptoV33Enabled &&
+        !sc.cryptoV33Symbols.includes(asset.symbol)
+      ) {
+        bump(diag.prefilter.crypto, 'outside V33 liquid crypto universe');
+        continue;
+      }
+
+      if (
+        !cryptoV33Enabled &&
         momentum == null
       ) {
         bump(
@@ -3056,6 +3090,7 @@ if (
         );
 
       if (
+        !cryptoV33Enabled &&
         momentum <
         cryptoMomentumThreshold
       ) {
@@ -3074,8 +3109,9 @@ if (
         spread != null &&
         spread >
           Number(
-            sc
-              .maxCryptoSpreadPct
+            cryptoV33Enabled
+              ? sc.cryptoV33MaxSpreadPct
+              : sc.maxCryptoSpreadPct
           )
       ) {
         bump(
@@ -3097,7 +3133,7 @@ if (
       pre.push({
         asset,
         snapshot,
-        momentum,
+        momentum: momentum ?? 0,
       });
     }
 
@@ -3169,6 +3205,52 @@ if (
           }
         );
 
+      let bars15mBySymbol = null;
+      let bars1hBySymbol = null;
+      let bars1dBySymbol = null;
+
+      if (sc.cryptoV33Enabled === true) {
+        const symbolsKey = [...detailSymbols].sort().join(',');
+        const cacheFresh =
+          state.cryptoV33Bars.symbolsKey === symbolsKey &&
+          Date.now() - state.cryptoV33Bars.fetchedAt < 5 * 60000;
+
+        if (!cacheFresh) {
+          const [bars15m, bars1h, bars1d] = await Promise.all([
+            getCryptoBars(mode, detailSymbols, {
+              timeframe: '15Min',
+              start: new Date(Date.now() - 14 * 24 * 60 * 60000),
+              end: now,
+              limit: 10000,
+            }),
+            getCryptoBars(mode, detailSymbols, {
+              timeframe: '1Hour',
+              start: new Date(Date.now() - 60 * 24 * 60 * 60000),
+              end: now,
+              limit: 10000,
+            }),
+            getCryptoBars(mode, detailSymbols, {
+              timeframe: '1Day',
+              start: new Date(Date.now() - 180 * 24 * 60 * 60000),
+              end: now,
+              limit: 10000,
+            }),
+          ]);
+
+          state.cryptoV33Bars = {
+            fetchedAt: Date.now(),
+            symbolsKey,
+            bars15m,
+            bars1h,
+            bars1d,
+          };
+        }
+
+        bars15mBySymbol = state.cryptoV33Bars.bars15m;
+        bars1hBySymbol = state.cryptoV33Bars.bars1h;
+        bars1dBySymbol = state.cryptoV33Bars.bars1d;
+      }
+
       const btcRegime =
         buildCryptoMarketRegime(
           barsBySymbol[
@@ -3182,7 +3264,16 @@ if (
         shortlist
       ) {
         const result =
-          evaluateCryptoCandidate({
+          sc.cryptoV33Enabled === true
+            ? evaluateCryptoCandidateV33({
+                asset: item.asset,
+                snapshot: item.snapshot,
+                bars15m: bars15mBySymbol[item.asset.symbol] || [],
+                bars1h: bars1hBySymbol[item.asset.symbol] || [],
+                bars1d: bars1dBySymbol[item.asset.symbol] || [],
+                config: sc,
+              })
+            : evaluateCryptoCandidate({
             asset:
               item.asset,
 
@@ -3202,17 +3293,15 @@ if (
               sc,
 
             now,
-          });
+              });
 
         const signal =
           result.signal;
 
         if (!signal) {
           const reason =
-            candidateDiagnosticReason(
-              result,
-              'LONG'
-            );
+            result?.diagnostics?.reason ||
+            candidateDiagnosticReason(result, 'LONG');
 
           bump(
             diag
@@ -3423,7 +3512,7 @@ if (
         dollarVolume <
         liquidityThreshold
       ) {
-        
+
         // Cache only indisputably illiquid symbols: below the minimum
         // threshold even the strongest adaptive setup could receive.
         const completedBar = snapshot?.prevDailyBar;
@@ -5354,8 +5443,33 @@ async function settleEntry(
 function buildPositionBudget({
   equity,
   buyingPower,
+  cash,
+  currentCryptoExposure = 0,
   best,
 }) {
+  if (
+    best?.assetClass === 'crypto' &&
+    best?.strategy === 'CRYPTO_V33_TREND_PULLBACK'
+  ) {
+    const positionBudget = buildCryptoV33Budget({
+      equity,
+      cash,
+      currentCryptoExposure,
+      signal: best,
+      config: strategyCfg(),
+    });
+
+    return {
+      requestedRiskFraction: Number(strategyCfg().cryptoV33RiskFraction),
+      effectiveRiskFraction: Number(strategyCfg().cryptoV33RiskFraction),
+      stopPct: Number(best.signal.exitPlan.stopLossPct),
+      estimatedRoundTripCostPct: Number(best.signal.exitPlan.estimatedRoundTripCostPct),
+      totalRiskPct: Number(best.signal.exitPlan.stopLossPct) +
+        Number(best.signal.exitPlan.estimatedRoundTripCostPct),
+      riskDollars: equity * Number(strategyCfg().cryptoV33RiskFraction),
+      positionBudget,
+    };
+  }
   const requestedRisk =
     Number(
       tradingCfg()
@@ -5711,6 +5825,29 @@ async function enter(
       0
     );
 
+  const cash =
+    Number(
+      account.cash ||
+      0
+    );
+
+  const entryPositions =
+    best.assetClass === 'crypto'
+      ? await getPositions(mode)
+      : [];
+
+  const currentCryptoExposure =
+    entryPositions
+      .filter(
+        (position) =>
+          String(position.asset_class || '').toLowerCase() === 'crypto'
+      )
+      .reduce(
+        (sum, position) =>
+          sum + Math.abs(Number(position.market_value || 0)),
+        0
+      );
+
   if (
     !Number.isFinite(buyingPower) ||
     buyingPower <= 0
@@ -5752,6 +5889,8 @@ async function enter(
     buildPositionBudget({
       equity,
       buyingPower,
+      cash,
+      currentCryptoExposure,
       best,
     });
 
@@ -7268,5 +7407,3 @@ router.post(
 );
 
 export default router;
-
-
