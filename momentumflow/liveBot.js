@@ -2938,6 +2938,11 @@ if (
       const asset of
       state.universe
         .crypto
+        .filter(
+          (item) =>
+            !configuredCryptoSymbols ||
+            configuredCryptoSymbols.has(item.symbol)
+        )
     ) {
       const compact =
         String(
