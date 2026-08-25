@@ -1514,12 +1514,19 @@ function pub() {
 
     activeScanCounts: {
       equities:
-        state.equitySession === 'overnight' &&
-        state.overnightBoatsAvailable !== true
-          ? 0
-          : Number(state.lastEquityScanCount || 0),
+        Number(
+          state.scanDiagnostics
+            ?.counts
+            ?.equityDetailed ||
+          0
+        ),
       crypto:
-        Number(state.lastCryptoScanCount || 0),
+        Number(
+          state.scanDiagnostics
+            ?.counts
+            ?.cryptoDetailed ||
+          0
+        ),
     },
 
     universe: {
@@ -1579,7 +1586,7 @@ function pub() {
     },
 
     strategyVersion:
-      'v20-adaptive-equities',
+      'v33-crypto-trend-v20-equities',
 
     strategyConfig:
       strategyCfg(),
@@ -5785,11 +5792,17 @@ async function enter(
       prefilterEquity ||
       prefilterCrypto;
 
+    const detailedCrypto =
+      Number(state.scanDiagnostics?.counts?.cryptoDetailed || 0);
+
+    const detailedEquities =
+      Number(state.scanDiagnostics?.counts?.equityDetailed || 0);
+
     state.lastDecision =
-      `${mode.toUpperCase()} scanning ` +
-      `${state.universe.equities.length + state.universe.crypto.length} ` +
-      `Alpaca tradable assets â€” ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions open â€” waiting for v20 setup` +
+      `${mode.toUpperCase()} analyzed ` +
+      `${detailedCrypto} crypto / ${detailedEquities} equities ` +
+      `in detail â€” ${state.openTradeIds.length}/` +
+      `${maxOpenPositions()} positions open â€” waiting for V33 setup` +
       (
         top
           ? ` â€” top reject: ${top.reason} (${top.count})`
