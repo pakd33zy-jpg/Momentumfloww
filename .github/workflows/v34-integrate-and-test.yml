@@ -12,6 +12,7 @@ on:
       - "momentumflow/cryptoStrategyV34.test.js"
       - "momentumflow/marketIntelligenceV34.js"
       - "momentumflow/marketIntelligenceV34.test.js"
+      - "momentumflow/v34Replay.js"
       - "momentumflow/frontend/src/components/RejectionLogPanel.jsx"
   workflow_dispatch:
 
@@ -39,6 +40,7 @@ jobs:
           node --check alpacaClient.js
           node --check cryptoStrategyV34.js
           node --check marketIntelligenceV34.js
+          node --check v34Replay.js
 
       - name: Run focused V34 tests
         working-directory: momentumflow
