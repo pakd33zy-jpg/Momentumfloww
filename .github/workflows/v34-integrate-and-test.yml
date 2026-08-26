@@ -1,4 +1,4 @@
-name: Integrate and validate V34
+name: Validate V34
 
 on:
   push:
@@ -6,15 +6,20 @@ on:
       - v34-risk-model
     paths:
       - ".github/workflows/v34-integrate-and-test.yml"
-      - "momentumflow/integrate_v34.py"
+      - "momentumflow/liveBot.js"
+      - "momentumflow/alpacaClient.js"
+      - "momentumflow/cryptoStrategyV34.js"
       - "momentumflow/cryptoStrategyV34.test.js"
+      - "momentumflow/marketIntelligenceV34.js"
+      - "momentumflow/marketIntelligenceV34.test.js"
+      - "momentumflow/frontend/src/components/RejectionLogPanel.jsx"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate-and-test:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout V34 branch
@@ -23,33 +28,22 @@ jobs:
           ref: v34-risk-model
           fetch-depth: 0
 
-      - name: Apply V34 integration patch
-        run: python momentumflow/integrate_v34.py
-
       - name: Install backend dependencies
         working-directory: momentumflow
         run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Syntax check live bot
+      - name: Syntax checks
         working-directory: momentumflow
-        run: node --check liveBot.js
+        run: |
+          node --check liveBot.js
+          node --check alpacaClient.js
+          node --check cryptoStrategyV34.js
+          node --check marketIntelligenceV34.js
 
-      - name: Run V34 tests
+      - name: Run focused V34 tests
         working-directory: momentumflow
-        run: node --test cryptoStrategyV34.test.js
+        run: node --test cryptoStrategyV34.test.js marketIntelligenceV34.test.js
 
       - name: Run full backend test suite
         working-directory: momentumflow
         run: npm test
-
-      - name: Commit integrated V34 only after tests pass
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add momentumflow/liveBot.js momentumflow/cryptoStrategyV34.js momentumflow/frontend/src/components/RejectionLogPanel.jsx
-          if git diff --cached --quiet; then
-            echo "No integration changes to commit"
-          else
-            git commit -m "Wire V34 evidence strategy into live bot"
-            git push origin HEAD:v34-risk-model
-          fi
