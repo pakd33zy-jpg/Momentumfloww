@@ -60,21 +60,23 @@ function evaluate({
     fifteen.at(-1).h = base * 1.008;
     fifteen.at(-1).v *= 1.5;
   } else if (!bearish) {
-    // A true continuation fixture: no pullback/reclaim pattern, but the latest
-    // hour is actually advancing. Do not make the strategy buy a falling tape
-    // merely to satisfy this test.
-    const base = fifteen.at(-6).c;
-    for (let step = 1; step <= 5; step += 1) {
-      const index = fifteen.length - 6 + step;
-      const prior = step === 1 ? base : fifteen[index - 1].c;
-      const next = base * (1 + step * 0.0035);
+    // Deliberately hold the entire recent trigger window well above the EMA,
+    // then keep advancing. This represents continuation/breakout rather than
+    // accidentally satisfying the intentionally broad shallow-pullback test.
+    const base = fifteen.at(-10).c;
+    for (let step = 1; step <= 9; step += 1) {
+      const index = fifteen.length - 10 + step;
+      const prior = step === 1
+        ? base * 1.040
+        : fifteen[index - 1].c;
+      const next = base * (1.040 + step * 0.0025);
       fifteen[index] = {
         ...fifteen[index],
         o: prior,
-        h: next * 1.002,
-        l: prior * 0.998,
+        h: next * 1.001,
+        l: Math.min(prior, next) * 0.9995,
         c: next,
-        v: fifteen[index].v * 1.15,
+        v: fifteen[index].v * 1.25,
       };
     }
   }
@@ -171,6 +173,8 @@ test('continuation can qualify without requiring an exact pullback/reclaim patte
   const result = evaluate({ exactPullback: false });
   assert.ok(result.signal, JSON.stringify(result.diagnostics));
   assert.match(result.signal.signal.trigger, /CONTINUATION|BREAKOUT|POSITIVE_STRUCTURE/);
+  assert.notEqual(result.signal.signal.trigger, '15M_PULLBACK');
+  assert.notEqual(result.signal.signal.trigger, '15M_RECLAIM');
   assert.ok(result.signal.signal.ret1hPct > 0);
 });
 
