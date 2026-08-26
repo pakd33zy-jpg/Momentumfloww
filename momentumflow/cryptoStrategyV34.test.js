@@ -59,6 +59,24 @@ function evaluate({
     fifteen.at(-1).c = base * 1.006;
     fifteen.at(-1).h = base * 1.008;
     fifteen.at(-1).v *= 1.5;
+  } else if (!bearish) {
+    // A true continuation fixture: no pullback/reclaim pattern, but the latest
+    // hour is actually advancing. Do not make the strategy buy a falling tape
+    // merely to satisfy this test.
+    const base = fifteen.at(-6).c;
+    for (let step = 1; step <= 5; step += 1) {
+      const index = fifteen.length - 6 + step;
+      const prior = step === 1 ? base : fifteen[index - 1].c;
+      const next = base * (1 + step * 0.0035);
+      fifteen[index] = {
+        ...fifteen[index],
+        o: prior,
+        h: next * 1.002,
+        l: prior * 0.998,
+        c: next,
+        v: fifteen[index].v * 1.15,
+      };
+    }
   }
 
   const price = fifteen.at(-1).c;
@@ -153,6 +171,7 @@ test('continuation can qualify without requiring an exact pullback/reclaim patte
   const result = evaluate({ exactPullback: false });
   assert.ok(result.signal, JSON.stringify(result.diagnostics));
   assert.match(result.signal.signal.trigger, /CONTINUATION|BREAKOUT|POSITIVE_STRUCTURE/);
+  assert.ok(result.signal.signal.ret1hPct > 0);
 });
 
 test('supporting intelligence can improve confidence but cannot force a bearish setup', () => {
