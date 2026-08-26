@@ -6,6 +6,7 @@ import {
   getStockSnapshots,
   getStockBars,
   getMarketNews,
+  getTradableAssets,
 } from './alpacaClient.js';
 import { buildEquityMarketRegime } from './strategyEngine.js';
 import { evaluateEquityCandidateV34 } from './equityStrategyV34.js';
@@ -21,6 +22,7 @@ const RISK_FRACTION = Math.min(0.01, Math.max(0.001, Number(process.env.V34_EQUI
 const MAX_POSITIONS = Math.max(1, Math.min(8, Number(process.env.V34_EQUITY_SHADOW_MAX_POSITIONS || 5)));
 const MIN_SCORE = Math.max(5, Math.min(9, Number(process.env.V34_EQUITY_SHADOW_MIN_SCORE || 6.3)));
 const COOLDOWN_MS = 15 * 60000;
+const FIRST_SIGNAL_MINUTE_ET = 9 * 60 + 35;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const n = (v, f = NaN) => Number.isFinite(Number(v)) ? Number(v) : f;
@@ -46,6 +48,8 @@ function regularSessionState(date = new Date()) {
 let paperEquity = STARTING_EQUITY;
 let newsMap = {};
 let newsFetchedAt = 0;
+let assetMap = new Map();
+let assetsFetchedAt = 0;
 const positions = new Map();
 const cooldown = new Map();
 const closed = [];
@@ -71,6 +75,23 @@ function summary() {
     profitFactor: grossLoss > 0 ? Number((grossWin / grossLoss).toFixed(3)) : grossWin > 0 ? 999 : 0,
     netPnl: Number((paperEquity - STARTING_EQUITY).toFixed(2)),
   };
+}
+
+async function refreshAssets() {
+  if (Date.now() - assetsFetchedAt < 30 * 60000 && assetMap.size) return;
+  try {
+    const assets = await getTradableAssets('live');
+    assetMap = new Map(
+      (assets?.equities || [])
+        .filter((asset) => SYMBOLS.includes(String(asset?.symbol || '').toUpperCase()))
+        .map((asset) => [String(asset.symbol).toUpperCase(), asset])
+    );
+    assetsFetchedAt = Date.now();
+    console.log(`[V34 equity shadow] asset metadata refresh: ${assetMap.size}/${SYMBOLS.length}`);
+  } catch (error) {
+    assetsFetchedAt = Date.now();
+    console.warn(`[V34 equity shadow] asset metadata unavailable: ${error.message}`);
+  }
 }
 
 async function refreshNews(now) {
@@ -178,7 +199,10 @@ async function scanOnce() {
   const session = regularSessionState(now);
   if (session !== 'regular') return { session };
 
-  await refreshNews(now);
+  const et = etNow(now);
+  if (et.minutes < FIRST_SIGNAL_MINUTE_ET) return { session: 'opening-warmup' };
+
+  await Promise.all([refreshAssets(), refreshNews(now)]);
   const start = new Date(now.getTime() - 12 * 3600000);
   const [snapshots, bars] = await Promise.all([
     getStockSnapshots('live', SYMBOLS, { feed: 'iex' }),
@@ -196,8 +220,9 @@ async function scanOnce() {
     const rows = bars[symbol] || [];
     if (!snapshot || rows.length < 12) continue;
     const intel = newsMap[compact(symbol)] || null;
+    const asset = assetMap.get(symbol) || { symbol, shortable: false, easy_to_borrow: false };
     const result = evaluateEquityCandidateV34({
-      asset: { symbol, shortable: true, easy_to_borrow: true },
+      asset,
       snapshot,
       bars: rows,
       marketRegime,
@@ -232,6 +257,7 @@ console.log('[V34 equity shadow] starting', JSON.stringify({
   riskFraction: RISK_FRACTION,
   maxPositions: MAX_POSITIONS,
   minScore: MIN_SCORE,
+  firstSignalMinuteET: FIRST_SIGNAL_MINUTE_ET,
   pollMs: POLL_MS,
   orderPlacement: false,
 }));
