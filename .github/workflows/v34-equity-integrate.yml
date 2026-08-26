@@ -1,0 +1,113 @@
+name: Integrate V34 equities
+
+on:
+  push:
+    branches: [v34-risk-model]
+    paths:
+      - momentumflow/equityStrategyV34.js
+      - momentumflow/equityStrategyV34.test.js
+      - .github/workflows/v34-equity-integrate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout V34 branch
+        uses: actions/checkout@v4
+        with:
+          ref: v34-risk-model
+          fetch-depth: 0
+
+      - name: Patch live bot for V34 equities
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('momentumflow/liveBot.js')
+          s = p.read_text()
+
+          if "./equityStrategyV34.js" in s:
+              print('V34 equities already integrated; no patch needed.')
+              raise SystemExit(0)
+
+          old = """import {\n  EQUITY_V20_DEFAULTS,\n  equityStrategyWindowOpen,\n  equityPrefilterQuality,\n  evaluateEquityCandidateV20,\n} from './equityStrategyV20.js';\n"""
+          new = old + """\nimport {\n  EQUITY_V34_DEFAULTS,\n  equityStrategyWindowOpenV34,\n  evaluateEquityCandidateV34,\n} from './equityStrategyV34.js';\n"""
+          assert old in s, 'equity V20 import block not found'
+          s = s.replace(old, new, 1)
+
+          old = """  ...STRATEGY_DEFAULTS,\n  ...EQUITY_V20_DEFAULTS,\n  ...CRYPTO_V34_DEFAULTS,\n"""
+          new = """  ...STRATEGY_DEFAULTS,\n  ...EQUITY_V20_DEFAULTS,\n  ...EQUITY_V34_DEFAULTS,\n  ...CRYPTO_V34_DEFAULTS,\n"""
+          assert old in s, 'strategy defaults block not found'
+          s = s.replace(old, new, 1)
+
+          old = """  equityV20Enabled:\n    tradingCfg().equityV20Enabled !== false,\n\n  equityFastScalpEnabled:\n"""
+          new = """  equityV34Enabled:\n    tradingCfg().equityV34Enabled !== false,\n\n  equityV20Enabled:\n    tradingCfg().equityV20Enabled !== false,\n\n  equityFastScalpEnabled:\n"""
+          assert old in s, 'strategy enabled flags block not found'
+          s = s.replace(old, new, 1)
+
+          # Broaden the scanner enough to include smaller but still executable names.
+          s = s.replace('  minDailyDollarVolume: 5000000,\n', '  minDailyDollarVolume: 2000000,\n', 1)
+          s = s.replace('  adaptiveLiquidityMediumDollarVolume: 2000000,\n', '  adaptiveLiquidityMediumDollarVolume: 1000000,\n', 1)
+          s = s.replace('  adaptiveLiquidityStrongDollarVolume: 1000000,\n', '  adaptiveLiquidityStrongDollarVolume: 500000,\n', 1)
+
+          old = """  const equityWindowOpen =\n    equityStrategyWindowOpen({\n      now,\n      config: sc,\n    });\n"""
+          new = """  const equityWindowOpen =\n    sc.equityV34Enabled === true\n      ? equityStrategyWindowOpenV34({ now, config: sc })\n      : equityStrategyWindowOpen({ now, config: sc });\n"""
+          assert old in s, 'equity window block not found'
+          s = s.replace(old, new, 1)
+
+          old = """      const catalystRescue =\n        Number(intelligence?.netScore || 0) >=\n        Number(c.v34CatalystPrefilterNetScore || 3.0);\n\n      if (\n        !longPrefilter &&\n        !shortPrefilter &&\n        !catalystRescue\n      ) {\n"""
+          new = """      const catalystNetScore =\n        Number(intelligence?.netScore || 0);\n      const catalystRescue =\n        Math.abs(catalystNetScore) >=\n        Number(c.v34CatalystPrefilterNetScore || 3.0);\n\n      if (\n        sc.equityV34Enabled !== true &&\n        !longPrefilter &&\n        !shortPrefilter &&\n        !catalystRescue\n      ) {\n"""
+          assert old in s, 'equity prefilter/catalyst block not found'
+          s = s.replace(old, new, 1)
+
+          old = """        const preferredDirection =\n          item.catalystRescue === true\n            ? 'LONG'\n            : item.momentum >= 0\n              ? 'LONG'\n              : 'SHORT';\n\n        const result =\n        sc.equityV20Enabled !== false\n          ? evaluateEquityCandidateV20({\n"""
+          new = """        const preferredDirection =\n          item.catalystRescue === true\n            ? Number(item.intelligence?.netScore || 0) >= 0\n              ? 'LONG'\n              : 'SHORT'\n            : item.momentum >= 0\n              ? 'LONG'\n              : 'SHORT';\n\n        const result =\n        sc.equityV34Enabled === true\n          ? evaluateEquityCandidateV34({\n              asset:\n                item.asset,\n\n              snapshot:\n                item.snapshot,\n\n              bars:\n                barsBySymbol[\n                  item.asset\n                    .symbol\n                ] ||\n                [],\n\n              marketRegime,\n\n              intelligence:\n                item.intelligence,\n\n              config:\n                sc,\n\n              now,\n              mode,\n            })\n          : sc.equityV20Enabled !== false\n          ? evaluateEquityCandidateV20({\n"""
+          assert old in s, 'equity evaluator block not found'
+          s = s.replace(old, new, 1)
+
+          old = """        signal.intelligence = item.intelligence;\n        signal.rank =\n          rankSignal(\n            signal,\n            item.momentum,\n            item.prefilterQuality\n          ) +\n          Math.max(\n            -1.5,\n            Math.min(\n              1.5,\n              Number(item.intelligence?.netScore || 0) *\n                Number(c.v34CatalystRankWeight || 0.15)\n            )\n          );\n"""
+          new = """        signal.intelligence = item.intelligence;\n        const intelligenceDirection =\n          signal.direction === 'SHORT' ? -1 : 1;\n        signal.rank =\n          rankSignal(\n            signal,\n            item.momentum,\n            item.prefilterQuality\n          ) +\n          Math.max(\n            -1.5,\n            Math.min(\n              1.5,\n              intelligenceDirection *\n                Number(item.intelligence?.netScore || 0) *\n                Number(c.v34CatalystRankWeight || 0.15)\n            )\n          );\n"""
+          assert old in s, 'equity rank intelligence block not found'
+          s = s.replace(old, new, 1)
+
+          s = s.replace(
+            "'v34-evidence-crypto-v20-adaptive-equities'",
+            "'v34-evidence-equities-crypto'"
+          )
+          s = s.replace(
+            '// UNIFIED BOT v20 ADAPTIVE EQUITIES',
+            '// UNIFIED BOT V34 EVIDENCE EQUITIES + CRYPTO'
+          )
+
+          p.write_text(s)
+          PY
+
+      - name: Install dependencies
+        working-directory: momentumflow
+        run: npm install
+
+      - name: Run focused V34 equity tests
+        working-directory: momentumflow
+        run: node --test equityStrategyV34.test.js
+
+      - name: Run full backend suite
+        working-directory: momentumflow
+        run: npm test
+
+      - name: Syntax check integrated bot
+        working-directory: momentumflow
+        run: node --check liveBot.js
+
+      - name: Commit integration after tests pass
+        run: |
+          if git diff --quiet; then
+            echo "No integration diff to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add momentumflow/liveBot.js
+          git commit -m "Wire V34 equity evidence engine into live bot"
+          git push origin HEAD:v34-risk-model
