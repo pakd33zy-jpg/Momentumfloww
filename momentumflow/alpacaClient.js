@@ -455,6 +455,46 @@ async function alpacaDataRequest(
   return data;
 }
 
+export async function getMarketNews(
+  mode,
+  {
+    symbols = [],
+    start,
+    end,
+    limit = 50,
+    includeContent = false,
+  } = {}
+) {
+  const params = new URLSearchParams();
+  const normalizedSymbols = (symbols || [])
+    .map((symbol) => String(symbol || '').replace('/', '').trim())
+    .filter(Boolean);
+
+  if (normalizedSymbols.length) {
+    params.set('symbols', normalizedSymbols.join(','));
+  }
+  if (start) {
+    params.set(
+      'start',
+      start instanceof Date ? start.toISOString() : String(start)
+    );
+  }
+  if (end) {
+    params.set(
+      'end',
+      end instanceof Date ? end.toISOString() : String(end)
+    );
+  }
+  params.set('sort', 'desc');
+  params.set('limit', String(Math.max(1, Math.min(50, Number(limit) || 50))));
+  params.set('include_content', includeContent ? 'true' : 'false');
+
+  return alpacaDataRequest(
+    mode,
+    `/v1beta1/news?${params.toString()}`
+  );
+}
+
 const CASH_LIKE_CRYPTO_BASES =
   new Set([
     'USDT',

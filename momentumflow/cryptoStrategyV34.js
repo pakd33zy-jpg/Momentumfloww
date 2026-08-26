@@ -308,7 +308,9 @@ export function evaluateCryptoCandidateV34({
   else if (expectedMovePct >= requiredMovePct) feeEdgeScore = 0.45;
   else feeEdgeScore = -1.0;
 
-  const intelligenceRaw = clamp(number(intelligence?.score, 0), 0, 10);
+  const intelligenceRaw = Number.isFinite(Number(intelligence?.netScore))
+    ? clamp(Number(intelligence.netScore), -10, 10)
+    : clamp(number(intelligence?.score, 0), 0, 10);
   const intelligenceScore = intelligenceRaw * c.cryptoV34IntelligenceWeight;
 
   const rawScore =

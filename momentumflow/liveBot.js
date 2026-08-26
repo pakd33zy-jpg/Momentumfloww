@@ -22,6 +22,7 @@ import {
   getCryptoSnapshots,
   getStockBars,
   getCryptoBars,
+  getMarketNews,
   getLatestTradablePrice,
   hasCredentials,
   placeOrder,
@@ -54,6 +55,11 @@ import {
   evaluateCryptoCandidateV34,
   buildCryptoV34Budget,
 } from './cryptoStrategyV34.js';
+
+import {
+  buildNewsIntelligenceMapV34,
+  mergeIntelligenceV34,
+} from './marketIntelligenceV34.js';
 
 import {
   voidOpenPaperTradesAfterAccountReset,
@@ -108,6 +114,13 @@ const state = {
     bars1d: {},
   },
 
+  marketIntelligenceV34: {
+    fetchedAt: 0,
+    articleCount: 0,
+    map: {},
+    lastError: null,
+  },
+
   universe: {
     equities: [],
     crypto: [],
@@ -129,6 +142,14 @@ const DEFAULTS = {
   rejectionOutcomeSeedIntervalMs: 60000,
   rejectionOutcomeUpdateIntervalMs: 60000,
   rejectionOutcomeSeedLimit: 5,
+
+  // V34 catalyst/news evidence. News cannot force an entry; a strong fresh
+  // catalyst may rescue an otherwise liquid equity from the momentum prefilter
+  // so the full strategy gets a chance to evaluate it.
+  v34NewsRefreshMs: 60000,
+  v34NewsLookbackHours: 24,
+  v34CatalystPrefilterNetScore: 3.0,
+  v34CatalystRankWeight: 0.15,
 
   minEquityPrice: 1,
   minDailyDollarVolume: 5000000,
@@ -2815,6 +2836,56 @@ function pushNearMiss(
   });
 }
 
+function v34IntelligenceForSymbol(symbol) {
+  const compact = String(symbol || '').replace('/', '').toUpperCase();
+  const liveNews = state.marketIntelligenceV34.map?.[compact] || null;
+  const configured = store.getConfig('marketIntelligenceV34', {});
+  const external = configured?.[symbol] || configured?.[compact] || null;
+  return mergeIntelligenceV34(liveNews, external);
+}
+
+async function refreshMarketIntelligenceV34(mode, now = new Date()) {
+  const refreshMs = Math.max(30000, Number(cfg().v34NewsRefreshMs || 60000));
+  if (
+    state.marketIntelligenceV34.fetchedAt > 0 &&
+    Date.now() - state.marketIntelligenceV34.fetchedAt < refreshMs
+  ) {
+    return state.marketIntelligenceV34.map;
+  }
+
+  try {
+    const lookbackHours = Math.max(1, Math.min(72, Number(cfg().v34NewsLookbackHours || 24)));
+    const response = await getMarketNews(mode, {
+      start: new Date(new Date(now).getTime() - lookbackHours * 3600000),
+      end: now,
+      limit: 50,
+      includeContent: false,
+    });
+    const articles = Array.isArray(response?.news)
+      ? response.news
+      : Array.isArray(response?.articles)
+        ? response.articles
+        : [];
+    const map = buildNewsIntelligenceMapV34({ articles, now });
+
+    state.marketIntelligenceV34 = {
+      fetchedAt: Date.now(),
+      articleCount: articles.length,
+      map,
+      lastError: null,
+    };
+    return map;
+  } catch (error) {
+    // News is supporting evidence, never a dependency that can stop trading.
+    state.marketIntelligenceV34 = {
+      ...state.marketIntelligenceV34,
+      fetchedAt: Date.now(),
+      lastError: String(error?.message || error),
+    };
+    return state.marketIntelligenceV34.map || {};
+  }
+}
+
 async function scan(
   mode
 ) {
@@ -2866,6 +2937,8 @@ async function scan(
 
   const now =
     new Date();
+
+  await refreshMarketIntelligenceV34(mode, now);
 
   const finalCandidates =
     [];
@@ -3354,12 +3427,7 @@ if (
                 bars15m: bars15mBySymbol[item.asset.symbol] || [],
                 bars1h: bars1hBySymbol[item.asset.symbol] || [],
                 bars1d: bars1dBySymbol[item.asset.symbol] || [],
-                intelligence: (() => {
-                  const intelligence = store.getConfig('marketIntelligenceV34', {});
-                  return intelligence?.[item.asset.symbol] ||
-                    intelligence?.[String(item.asset.symbol || '').replace('/', '')] ||
-                    null;
-                })(),
+                intelligence: v34IntelligenceForSymbol(item.asset.symbol),
                 config: sc,
               })
             : evaluateCryptoCandidate({
@@ -3830,9 +3898,16 @@ if (
         asset.easy_to_borrow ===
           true;
 
+      const intelligence =
+        v34IntelligenceForSymbol(asset.symbol);
+      const catalystRescue =
+        Number(intelligence?.netScore || 0) >=
+        Number(c.v34CatalystPrefilterNetScore || 3.0);
+
       if (
         !longPrefilter &&
-        !shortPrefilter
+        !shortPrefilter &&
+        !catalystRescue
       ) {
         bump(
           diag
@@ -3843,6 +3918,15 @@ if (
         );
 
         continue;
+      }
+
+      if (catalystRescue && !longPrefilter && !shortPrefilter) {
+        bump(
+          diag
+            .prefilter
+            .equities,
+          'rescued by fresh material catalyst'
+        );
       }
 
       if (
@@ -3886,6 +3970,8 @@ if (
         preQuality.quality,
       dayMovePct:
         preQuality.dayMovePct,
+      intelligence,
+      catalystRescue,
     });
     }
 
@@ -3894,13 +3980,13 @@ if (
         a,
         b
       ) =>
-        Number(
-          b.prefilterQuality ||
-          0
+        (
+          Number(b.prefilterQuality || 0) +
+          Math.max(-2, Math.min(2, Number(b.intelligence?.netScore || 0) * 0.20))
         ) -
-        Number(
-          a.prefilterQuality ||
-          0
+        (
+          Number(a.prefilterQuality || 0) +
+          Math.max(-2, Math.min(2, Number(a.intelligence?.netScore || 0) * 0.20))
         ) ||
         Math.abs(
           b.momentum
@@ -3990,9 +4076,11 @@ if (
         shortlist
       ) {
         const preferredDirection =
-          item.momentum >= 0
+          item.catalystRescue === true
             ? 'LONG'
-            : 'SHORT';
+            : item.momentum >= 0
+              ? 'LONG'
+              : 'SHORT';
 
         const result =
         sc.equityV20Enabled !== false
@@ -4094,11 +4182,20 @@ if (
               )
           );
 
+        signal.intelligence = item.intelligence;
         signal.rank =
           rankSignal(
             signal,
             item.momentum,
             item.prefilterQuality
+          ) +
+          Math.max(
+            -1.5,
+            Math.min(
+              1.5,
+              Number(item.intelligence?.netScore || 0) *
+                Number(c.v34CatalystRankWeight || 0.15)
+            )
           );
 
         finalCandidates.push(
@@ -4260,6 +4357,16 @@ if (
               .signal
               ?.breakoutDistanceAtr ??
             null,
+
+          intelligenceNetScore:
+            candidate.intelligence?.netScore ??
+            candidate.signal?.intelligenceNetScore ??
+            null,
+
+          intelligenceReasons:
+            candidate.intelligence?.reasons ??
+            candidate.signal?.intelligenceReasons ??
+            [],
         })
       );
 
@@ -4311,6 +4418,17 @@ if (
             .strategy
             .equities
         ),
+    },
+
+    marketIntelligenceV34: {
+      fetchedAt: state.marketIntelligenceV34.fetchedAt
+        ? new Date(state.marketIntelligenceV34.fetchedAt).toISOString()
+        : null,
+      articleCount: state.marketIntelligenceV34.articleCount,
+      symbolsWithMaterialNews: Object.values(state.marketIntelligenceV34.map || {})
+        .filter((item) => Math.abs(Number(item?.netScore || 0)) >= 1)
+        .length,
+      lastError: state.marketIntelligenceV34.lastError,
     },
   };
   recordRejectionSnapshot(
