@@ -426,7 +426,9 @@ export function buildCryptoV34Budget({
   const usableRiskDollars = Math.min(requestedRiskDollars, portfolioRiskRoom);
   if (!(usableRiskDollars > 0)) return 0;
 
-  const riskSizedNotional = usableRiskDollars / (stopPct / 100);
+  const totalRiskPct =
+    stopPct + Math.max(0, Number(signal?.signal?.exitPlan?.estimatedRoundTripCostPct || 0));
+  const riskSizedNotional = usableRiskDollars / (totalRiskPct / 100);
   const symbolCap = equity * c.cryptoV34MaxPositionFraction;
   const exposureRoom = Math.max(
     0,

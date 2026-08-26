@@ -50,11 +50,15 @@ function summarize(entries) {
         reason: miss?.reason || 'unknown',
         assetClass: miss?.assetClass || 'unknown',
         count: 0,
-        bestScore: 0,
+        bestScore: null,
         symbols: new Set(),
       };
       current.count += 1;
-      current.bestScore = Math.max(current.bestScore, Number(miss?.score || 0));
+      if (miss?.score != null && Number.isFinite(Number(miss.score))) {
+        current.bestScore = current.bestScore == null
+          ? Number(miss.score)
+          : Math.max(current.bestScore, Number(miss.score));
+      }
       if (miss?.symbol) current.symbols.add(miss.symbol);
       near.set(key, current);
     }
@@ -70,7 +74,7 @@ function summarize(entries) {
       .sort((a, b) => b.count - a.count)
       .slice(0, 8),
     near: [...near.values()]
-      .sort((a, b) => b.bestScore - a.bestScore || b.count - a.count)
+      .sort((a, b) => Number(b.bestScore ?? -1) - Number(a.bestScore ?? -1) || b.count - a.count)
       .slice(0, 8)
       .map((row) => ({ ...row, symbols: [...row.symbols].slice(0, 5) })),
   };
@@ -165,7 +169,7 @@ export default function RejectionLogPanel() {
               {summary.near.map((item) => (
                 <div key={`${item.assetClass}:${item.reason}`} style={nearSummaryRow}>
                   <div>
-                    <strong>{item.bestScore}/10</strong> · {item.reason}
+                    <strong>{item.bestScore == null ? 'N/A' : `${item.bestScore}/10`}</strong> · {item.reason}
                     {!!item.symbols.length && (
                       <div style={symbols}>{item.symbols.join(', ')}</div>
                     )}
@@ -237,7 +241,7 @@ export default function RejectionLogPanel() {
               <div style={nearMiss}>
                 Near miss: {near.symbol}
                 {' · '}
-                score {near.score}/10
+                score {near.score == null ? 'N/A' : `${near.score}/10`}
                 {' · '}
                 {near.reason}
               </div>

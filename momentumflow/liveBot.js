@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import { store } from './store.js';
 
 import {
@@ -50,10 +50,10 @@ import {
 } from './equityStrategyV20.js';
 
 import {
-  CRYPTO_V33_DEFAULTS,
-  evaluateCryptoCandidateV33,
-  buildCryptoV33Budget,
-} from './cryptoStrategyV33.js';
+  CRYPTO_V34_DEFAULTS,
+  evaluateCryptoCandidateV34,
+  buildCryptoV34Budget,
+} from './cryptoStrategyV34.js';
 
 import {
   voidOpenPaperTradesAfterAccountReset,
@@ -87,6 +87,7 @@ const state = {
   startedAt: null,
   lastTickAt: null,
   lastError: null,
+  lastAccountEquity: null,
 
   openTradeIds: [],
   exitRetryPending: false,
@@ -99,7 +100,7 @@ const state = {
   rejectionOutcomes: [],
   scanDiagnostics: null,
 
-  cryptoV33Bars: {
+  cryptoV34Bars: {
     fetchedAt: 0,
     symbolsKey: '',
     bars15m: {},
@@ -120,7 +121,7 @@ const state = {
 
 const DEFAULTS = {
   pollSeconds: 5,
-  maxOpenPositions: 3,
+  maxOpenPositions: 8,
   equityBatchSize: 300,
   universeRefreshMinutes: 5,
   moverLeaderboardSize: 30,
@@ -222,7 +223,7 @@ function buyingPowerFraction() {
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
   ...EQUITY_V20_DEFAULTS,
-  ...CRYPTO_V33_DEFAULTS,
+  ...CRYPTO_V34_DEFAULTS,
   ...store.getConfig('strategyConfig', {}),
 
   equityFocusMode:
@@ -239,19 +240,27 @@ function maxOpenPositions() {
   const value = Math.trunc(
     Number(
       cfg().maxOpenPositions ??
-      3
+      8
     )
   );
 
-  return Number.isFinite(value)
+  const configured = Number.isFinite(value)
+    ? Math.max(1, Math.min(10, value))
+    : 8;
+
+  // V34 uses portfolio risk as the primary limiter. Do not let an old
+  // maxOpenPositions=3 setting recreate the V33 one-position bottleneck.
+  const v34Floor = strategyCfg().cryptoV34Enabled === true
     ? Math.max(
         1,
         Math.min(
           10,
-          value
+          Number(strategyCfg().cryptoV34MaxConcurrentPositions || 6)
         )
       )
-    : 3;
+    : 1;
+
+  return Math.max(configured, v34Floor);
 }
 
 function equitySessionNow(date = new Date()) {
@@ -1599,8 +1608,40 @@ function pub() {
             : null,
     },
 
+    v34Risk: (() => {
+      const openRiskDollars = currentOpenPortfolioRiskDollars();
+      const referenceEquity = Number(
+        state.lastAccountEquity ||
+        paperForwardSessionSummary()?.startingCapital ||
+        0
+      );
+      const maxRiskFraction = Number(
+        strategyCfg().cryptoV34MaxPortfolioRiskFraction || 0.025
+      );
+      const maxRiskDollars = referenceEquity > 0
+        ? referenceEquity * maxRiskFraction
+        : null;
+      return {
+        openRiskDollars: Number(openRiskDollars.toFixed(4)),
+        openRiskFraction: referenceEquity > 0
+          ? Number((openRiskDollars / referenceEquity).toFixed(6))
+          : null,
+        maxPortfolioRiskFraction: maxRiskFraction,
+        maxPortfolioRiskDollars: maxRiskDollars == null
+          ? null
+          : Number(maxRiskDollars.toFixed(4)),
+        remainingRiskDollars: maxRiskDollars == null
+          ? null
+          : Number(Math.max(0, maxRiskDollars - openRiskDollars).toFixed(4)),
+        openCryptoPositions: currentOpenCryptoTradeCount(),
+        maxCryptoPositions: Number(
+          strategyCfg().cryptoV34MaxConcurrentPositions || 6
+        ),
+      };
+    })(),
+
     strategyVersion:
-      'v33-crypto-trend-v20-equities',
+      'v34-evidence-crypto-v20-equities',
 
     strategyConfig:
       strategyCfg(),
@@ -2548,7 +2589,7 @@ function recordRejectionSnapshot(
     mode,
 
     strategy_version:
-      'v20-adaptive-equities',
+      'v34-evidence-crypto-v20-adaptive-equities',
 
     market_open:
       Boolean(
@@ -2719,12 +2760,15 @@ function pushNearMiss(
       ? d.short
       : d.long || d.metrics;
 
+  const rawScore =
+    detail?.score ??
+    d.score ??
+    null;
+
   const score =
-    Number(
-      detail
-        ?.score ||
-      0
-    );
+    rawScore == null
+      ? null
+      : Number(rawScore);
 
   list.push({
     symbol,
@@ -2906,8 +2950,8 @@ async function scan(
   // ========================================
 
   const configuredCryptoSymbols =
-    sc.cryptoV33Enabled === true
-      ? new Set(sc.cryptoV33Symbols)
+    sc.cryptoV34Enabled === true
+      ? new Set(sc.cryptoV34Symbols)
       : null;
 
   const cryptoSymbols =
@@ -3006,8 +3050,8 @@ if (
           asset.symbol
         );
 
-      const cryptoV33Enabled =
-        sc.cryptoV33Enabled === true;
+      const cryptoV34Enabled =
+        sc.cryptoV34Enabled === true;
 
       snapshotsForStatus[
         asset.symbol
@@ -3091,15 +3135,15 @@ if (
       }
 
       if (
-        cryptoV33Enabled &&
-        !sc.cryptoV33Symbols.includes(asset.symbol)
+        cryptoV34Enabled &&
+        !sc.cryptoV34Symbols.includes(asset.symbol)
       ) {
-        bump(diag.prefilter.crypto, 'outside V33 liquid crypto universe');
+        bump(diag.prefilter.crypto, 'outside V34 configured crypto universe');
         continue;
       }
 
       if (
-        !cryptoV33Enabled &&
+        !cryptoV34Enabled &&
         momentum == null
       ) {
         bump(
@@ -3120,7 +3164,7 @@ if (
         );
 
       if (
-        !cryptoV33Enabled &&
+        !cryptoV34Enabled &&
         momentum <
         cryptoMomentumThreshold
       ) {
@@ -3139,8 +3183,8 @@ if (
         spread != null &&
         spread >
           Number(
-            cryptoV33Enabled
-              ? sc.cryptoV33MaxSpreadPct
+            cryptoV34Enabled
+              ? sc.cryptoV34MaxSpreadPct
               : sc.maxCryptoSpreadPct
           )
       ) {
@@ -3239,11 +3283,11 @@ if (
       let bars1hBySymbol = null;
       let bars1dBySymbol = null;
 
-      if (sc.cryptoV33Enabled === true) {
+      if (sc.cryptoV34Enabled === true) {
         const symbolsKey = [...detailSymbols].sort().join(',');
         const cacheFresh =
-          state.cryptoV33Bars.symbolsKey === symbolsKey &&
-          Date.now() - state.cryptoV33Bars.fetchedAt < 5 * 60000;
+          state.cryptoV34Bars.symbolsKey === symbolsKey &&
+          Date.now() - state.cryptoV34Bars.fetchedAt < 5 * 60000;
 
         if (!cacheFresh) {
           const [bars15m, bars1h, bars1d] = await Promise.all([
@@ -3276,7 +3320,7 @@ if (
             }),
           ]);
 
-          state.cryptoV33Bars = {
+          state.cryptoV34Bars = {
             fetchedAt: Date.now(),
             symbolsKey,
             bars15m,
@@ -3285,9 +3329,9 @@ if (
           };
         }
 
-        bars15mBySymbol = state.cryptoV33Bars.bars15m;
-        bars1hBySymbol = state.cryptoV33Bars.bars1h;
-        bars1dBySymbol = state.cryptoV33Bars.bars1d;
+        bars15mBySymbol = state.cryptoV34Bars.bars15m;
+        bars1hBySymbol = state.cryptoV34Bars.bars1h;
+        bars1dBySymbol = state.cryptoV34Bars.bars1d;
       }
 
       const btcRegime =
@@ -3303,13 +3347,19 @@ if (
         shortlist
       ) {
         const result =
-          sc.cryptoV33Enabled === true
-            ? evaluateCryptoCandidateV33({
+          sc.cryptoV34Enabled === true
+            ? evaluateCryptoCandidateV34({
                 asset: item.asset,
                 snapshot: item.snapshot,
                 bars15m: bars15mBySymbol[item.asset.symbol] || [],
                 bars1h: bars1hBySymbol[item.asset.symbol] || [],
                 bars1d: bars1dBySymbol[item.asset.symbol] || [],
+                intelligence: (() => {
+                  const intelligence = store.getConfig('marketIntelligenceV34', {});
+                  return intelligence?.[item.asset.symbol] ||
+                    intelligence?.[String(item.asset.symbol || '').replace('/', '')] ||
+                    null;
+                })(),
                 config: sc,
               })
             : evaluateCryptoCandidate({
@@ -5501,34 +5551,88 @@ async function settleEntry(
   return fill;
 }
 
+function currentOpenPortfolioRiskDollars() {
+  return getSessionOpenTrades().reduce((sum, trade) => {
+    const notional = Number(
+      trade.actual_entry_notional ??
+      trade.planned_position_budget ??
+      0
+    );
+    const totalRiskPct = Number(
+      trade.sizing_total_risk_pct ??
+      (
+        Number(trade.sizing_stop_pct ?? trade.stop_loss_pct ?? 0) +
+        Number(trade.estimated_round_trip_cost_pct ?? 0)
+      )
+    );
+    const recorded = Number(trade.planned_risk_dollars ?? 0);
+    const estimated =
+      Number.isFinite(notional) && notional > 0 &&
+      Number.isFinite(totalRiskPct) && totalRiskPct > 0
+        ? notional * (totalRiskPct / 100)
+        : recorded;
+    return sum + (Number.isFinite(estimated) ? Math.max(0, estimated) : 0);
+  }, 0);
+}
+
+function currentOpenCryptoTradeCount() {
+  return getSessionOpenTrades().filter((trade) =>
+    trade.asset_class === 'crypto' || String(trade.market || '').includes('/')
+  ).length;
+}
+
 function buildPositionBudget({
   equity,
   buyingPower,
   cash,
   currentCryptoExposure = 0,
+  currentOpenRiskDollars = 0,
   best,
 }) {
   if (
     best?.assetClass === 'crypto' &&
-    best?.strategy === 'CRYPTO_V33_TREND_PULLBACK'
+    best?.strategy === 'CRYPTO_V34_EVIDENCE'
   ) {
-    const positionBudget = buildCryptoV33Budget({
+    const sc = strategyCfg();
+    const stopPct = Number(best.signal.exitPlan.stopLossPct);
+    const estimatedRoundTripCostPct = Number(
+      best.signal.exitPlan.estimatedRoundTripCostPct || 0
+    );
+    const totalRiskPct = stopPct + estimatedRoundTripCostPct;
+    const requestedRiskFraction = Number(sc.cryptoV34RiskFraction);
+    const maxPortfolioRiskDollars =
+      equity * Number(sc.cryptoV34MaxPortfolioRiskFraction);
+    const remainingPortfolioRiskDollars = Math.max(
+      0,
+      maxPortfolioRiskDollars - Math.max(0, currentOpenRiskDollars)
+    );
+    const riskDollars = Math.min(
+      equity * requestedRiskFraction,
+      remainingPortfolioRiskDollars
+    );
+    const positionBudget = buildCryptoV34Budget({
       equity,
       cash,
       currentCryptoExposure,
+      currentOpenRiskDollars,
       signal: best,
-      config: strategyCfg(),
+      config: sc,
     });
 
     return {
-      requestedRiskFraction: Number(strategyCfg().cryptoV33RiskFraction),
-      effectiveRiskFraction: Number(strategyCfg().cryptoV33RiskFraction),
-      stopPct: Number(best.signal.exitPlan.stopLossPct),
-      estimatedRoundTripCostPct: Number(best.signal.exitPlan.estimatedRoundTripCostPct),
-      totalRiskPct: Number(best.signal.exitPlan.stopLossPct) +
-        Number(best.signal.exitPlan.estimatedRoundTripCostPct),
-      riskDollars: equity * Number(strategyCfg().cryptoV33RiskFraction),
+      requestedRiskFraction,
+      effectiveRiskFraction: requestedRiskFraction,
+      stopPct,
+      estimatedRoundTripCostPct,
+      totalRiskPct,
+      riskDollars,
       positionBudget,
+      qualityRiskMultiplier: 1,
+      earlyEntryRiskMultiplier: 1,
+      maxPositionFraction: Number(sc.cryptoV34MaxPositionFraction),
+      currentOpenRiskDollars,
+      maxPortfolioRiskDollars,
+      remainingPortfolioRiskDollars,
     };
   }
   const requestedRisk =
@@ -5856,7 +5960,7 @@ async function enter(
       `${mode.toUpperCase()} analyzed ` +
       `${detailedCrypto} crypto / ${detailedEquities} equities ` +
       `in detail â€” ${state.openTradeIds.length}/` +
-      `${maxOpenPositions()} positions open â€” waiting for V33 setup` +
+      `${maxOpenPositions()} positions open â€” waiting for V34 evidence setup` +
       (
         top
           ? ` â€” top reject: ${top.reason} (${top.count})`
@@ -5898,6 +6002,10 @@ async function enter(
       0
     );
 
+  if (Number.isFinite(equity) && equity > 0) {
+    state.lastAccountEquity = equity;
+  }
+
   const entryPositions =
     best.assetClass === 'crypto'
       ? await getPositions(mode)
@@ -5924,11 +6032,11 @@ async function enter(
 
   const maxConcurrentCryptoPositions = Math.max(
     1,
-    Number(strategyCfg().cryptoV33MaxConcurrentPositions || 1)
+    Number(strategyCfg().cryptoV34MaxConcurrentPositions || 1)
   );
 
   if (
-    best.strategy === 'CRYPTO_V33_TREND_PULLBACK' &&
+    best.strategy === 'CRYPTO_V34_EVIDENCE' &&
     currentCryptoPositions >= maxConcurrentCryptoPositions
   ) {
     state.lastDecision =
@@ -5975,12 +6083,16 @@ async function enter(
 
     return false;
   }
+  const currentOpenRiskDollars =
+    currentOpenPortfolioRiskDollars();
+
   const sizing =
     buildPositionBudget({
       equity,
       buyingPower,
       cash,
       currentCryptoExposure,
+      currentOpenRiskDollars,
       best,
     });
 
