@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/v34-integrate-and-test.yml"
       - "momentumflow/integrate_v34.py"
+      - "momentumflow/cryptoStrategyV34.test.js"
   workflow_dispatch:
 
 permissions:
