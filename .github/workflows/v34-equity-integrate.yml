@@ -6,6 +6,7 @@ on:
     paths:
       - momentumflow/equityStrategyV34.js
       - momentumflow/equityStrategyV34.test.js
+      - momentumflow/adaptiveScannerGates.test.mjs
       - .github/workflows/v34-equity-integrate.yml
 
 permissions:
@@ -47,7 +48,6 @@ jobs:
           assert old in s, 'strategy enabled flags block not found'
           s = s.replace(old, new, 1)
 
-          # Broaden the scanner enough to include smaller but still executable names.
           s = s.replace('  minDailyDollarVolume: 5000000,\n', '  minDailyDollarVolume: 2000000,\n', 1)
           s = s.replace('  adaptiveLiquidityMediumDollarVolume: 2000000,\n', '  adaptiveLiquidityMediumDollarVolume: 1000000,\n', 1)
           s = s.replace('  adaptiveLiquidityStrongDollarVolume: 1000000,\n', '  adaptiveLiquidityStrongDollarVolume: 500000,\n', 1)
@@ -72,14 +72,8 @@ jobs:
           assert old in s, 'equity rank intelligence block not found'
           s = s.replace(old, new, 1)
 
-          s = s.replace(
-            "'v34-evidence-crypto-v20-adaptive-equities'",
-            "'v34-evidence-equities-crypto'"
-          )
-          s = s.replace(
-            '// UNIFIED BOT v20 ADAPTIVE EQUITIES',
-            '// UNIFIED BOT V34 EVIDENCE EQUITIES + CRYPTO'
-          )
+          s = s.replace("'v34-evidence-crypto-v20-adaptive-equities'", "'v34-evidence-equities-crypto'")
+          s = s.replace('// UNIFIED BOT v20 ADAPTIVE EQUITIES', '// UNIFIED BOT V34 EVIDENCE EQUITIES + CRYPTO')
 
           p.write_text(s)
           PY
