@@ -51,6 +51,12 @@ import {
 } from './equityStrategyV20.js';
 
 import {
+  EQUITY_V34_DEFAULTS,
+  equityStrategyWindowOpenV34,
+  evaluateEquityCandidateV34,
+} from './equityStrategyV34.js';
+
+import {
   CRYPTO_V34_DEFAULTS,
   evaluateCryptoCandidateV34,
   buildCryptoV34Budget,
@@ -69,7 +75,7 @@ import {
   evaluateAlpacaAccountAccess,
 } from './alpacaAccountState.js';
 
-// UNIFIED BOT v20 ADAPTIVE EQUITIES
+// UNIFIED BOT V34 EVIDENCE EQUITIES + CRYPTO
 //
 // PAPER and LIVE use the same scanner, signals, sizing and execution path.
 // v19 changes:
@@ -152,10 +158,10 @@ const DEFAULTS = {
   v34CatalystRankWeight: 0.15,
 
   minEquityPrice: 1,
-  minDailyDollarVolume: 5000000,
+  minDailyDollarVolume: 2000000,
   adaptiveLiquidityEnabled: true,
-  adaptiveLiquidityMediumDollarVolume: 2000000,
-  adaptiveLiquidityStrongDollarVolume: 1000000,
+  adaptiveLiquidityMediumDollarVolume: 1000000,
+  adaptiveLiquidityStrongDollarVolume: 500000,
   adaptiveLiquidityMediumMomentumPct: 0.04,
   adaptiveLiquidityStrongMomentumPct: 0.08,
   adaptiveLiquidityMediumMaxSpreadPct: 0.10,
@@ -244,11 +250,15 @@ function buyingPowerFraction() {
 const strategyCfg = () => ({
   ...STRATEGY_DEFAULTS,
   ...EQUITY_V20_DEFAULTS,
+  ...EQUITY_V34_DEFAULTS,
   ...CRYPTO_V34_DEFAULTS,
   ...store.getConfig('strategyConfig', {}),
 
   equityFocusMode:
     tradingCfg().equityFocusMode === true,
+
+  equityV34Enabled:
+    tradingCfg().equityV34Enabled !== false,
 
   equityV20Enabled:
     tradingCfg().equityV20Enabled !== false,
@@ -2610,7 +2620,7 @@ function recordRejectionSnapshot(
     mode,
 
     strategy_version:
-      'v34-evidence-crypto-v20-adaptive-equities',
+      'v34-evidence-equities-crypto',
 
     market_open:
       Boolean(
@@ -3552,10 +3562,9 @@ if (
     allowExtendedEquities;
 
   const equityWindowOpen =
-    equityStrategyWindowOpen({
-      now,
-      config: sc,
-    });
+    sc.equityV34Enabled === true
+      ? equityStrategyWindowOpenV34({ now, config: sc })
+      : equityStrategyWindowOpen({ now, config: sc });
 
   diag.equityStrategyWindowOpen =
     equityWindowOpen;
@@ -3900,11 +3909,14 @@ if (
 
       const intelligence =
         v34IntelligenceForSymbol(asset.symbol);
+      const catalystNetScore =
+        Number(intelligence?.netScore || 0);
       const catalystRescue =
-        Number(intelligence?.netScore || 0) >=
+        Math.abs(catalystNetScore) >=
         Number(c.v34CatalystPrefilterNetScore || 3.0);
 
       if (
+        sc.equityV34Enabled !== true &&
         !longPrefilter &&
         !shortPrefilter &&
         !catalystRescue
@@ -4077,13 +4089,41 @@ if (
       ) {
         const preferredDirection =
           item.catalystRescue === true
-            ? 'LONG'
+            ? Number(item.intelligence?.netScore || 0) >= 0
+              ? 'LONG'
+              : 'SHORT'
             : item.momentum >= 0
               ? 'LONG'
               : 'SHORT';
 
         const result =
-        sc.equityV20Enabled !== false
+        sc.equityV34Enabled === true
+          ? evaluateEquityCandidateV34({
+              asset:
+                item.asset,
+
+              snapshot:
+                item.snapshot,
+
+              bars:
+                barsBySymbol[
+                  item.asset
+                    .symbol
+                ] ||
+                [],
+
+              marketRegime,
+
+              intelligence:
+                item.intelligence,
+
+              config:
+                sc,
+
+              now,
+              mode,
+            })
+          : sc.equityV20Enabled !== false
           ? evaluateEquityCandidateV20({
               asset:
                 item.asset,
@@ -4183,6 +4223,8 @@ if (
           );
 
         signal.intelligence = item.intelligence;
+        const intelligenceDirection =
+          signal.direction === 'SHORT' ? -1 : 1;
         signal.rank =
           rankSignal(
             signal,
@@ -4193,7 +4235,8 @@ if (
             -1.5,
             Math.min(
               1.5,
-              Number(item.intelligence?.netScore || 0) *
+              intelligenceDirection *
+                Number(item.intelligence?.netScore || 0) *
                 Number(c.v34CatalystRankWeight || 0.15)
             )
           );
