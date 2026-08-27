@@ -1,5 +1,6 @@
 // V35 EQUITY LIVE-MARKET SHADOW/PAPER TESTER
-// Market-data-driven forward validator. No live-money order path is imported.
+// Rotating-universe forward validator. No broker-order path is imported.
+// Hard prefilters are intentionally minimal: invalid/untradeable data only.
 
 import {
   getStockSnapshots,
@@ -11,18 +12,18 @@ import { buildEquityMarketRegime } from './strategyEngine.js';
 import { evaluateEquityCandidateV35 } from './equityStrategyV35.js';
 import { buildNewsIntelligenceMapV34 } from './marketIntelligenceV34.js';
 
-const SYMBOLS = (process.env.V35_EQUITY_SHADOW_SYMBOLS || process.env.V34_EQUITY_SHADOW_SYMBOLS ||
+const CORE_SYMBOLS = (process.env.V35_EQUITY_CORE_SYMBOLS ||
   'SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AMD,AVGO,PLTR,COIN,MSTR,SOFI,INTC,MU,SMCI,RIVN,NIO,LCID,MARA,RIOT,HOOD,UBER,CRM,ORCL,NFLX,F,SNAP,BAC,CCL,AAL')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 
-const POLL_MS = Math.max(30000, Number(process.env.V35_EQUITY_SHADOW_POLL_MS || process.env.V34_EQUITY_SHADOW_POLL_MS || 60000));
-const STARTING_EQUITY = Math.max(1000, Number(process.env.V35_EQUITY_SHADOW_EQUITY || process.env.V34_EQUITY_SHADOW_EQUITY || 100000));
-const RISK_FRACTION = Math.min(0.01, Math.max(0.001, Number(process.env.V35_EQUITY_SHADOW_RISK || process.env.V34_EQUITY_SHADOW_RISK || 0.003)));
-const MAX_POSITIONS = Math.max(1, Math.min(8, Number(process.env.V35_EQUITY_SHADOW_MAX_POSITIONS || process.env.V34_EQUITY_SHADOW_MAX_POSITIONS || 3)));
-const MIN_SCORE = Math.max(5, Math.min(10, Number(process.env.V35_EQUITY_SHADOW_MIN_SCORE || process.env.V34_EQUITY_SHADOW_MIN_SCORE || 8.5)));
-const CONFIRM_SCANS = Math.max(1, Math.min(5, Number(process.env.V35_CONFIRM_SCANS || 2)));
-const MAX_CONSECUTIVE_LOSSES = Math.max(1, Math.min(10, Number(process.env.V35_MAX_CONSECUTIVE_LOSSES || 3)));
-const LOSS_PAUSE_MS = Math.max(5, Number(process.env.V35_LOSS_PAUSE_MINUTES || 30)) * 60000;
+const POLL_MS = Math.max(30000, Number(process.env.V35_EQUITY_SHADOW_POLL_MS || 60000));
+const STARTING_EQUITY = Math.max(1000, Number(process.env.V35_EQUITY_SHADOW_EQUITY || 100000));
+const RISK_FRACTION = Math.min(0.01, Math.max(0.001, Number(process.env.V35_EQUITY_SHADOW_RISK || 0.01)));
+const MAX_POSITIONS = Math.max(1, Math.min(20, Number(process.env.V35_EQUITY_SHADOW_MAX_POSITIONS || 8)));
+const MIN_SCORE = Math.max(0, Math.min(10, Number(process.env.V35_EQUITY_SHADOW_MIN_SCORE || 6.5)));
+const CONFIRM_SCANS = Math.max(1, Math.min(5, Number(process.env.V35_CONFIRM_SCANS || 1)));
+const ROTATING_BATCH_SIZE = Math.max(100, Math.min(1200, Number(process.env.V35_EQUITY_ROTATING_BATCH_SIZE || 500)));
+const DETAIL_LIMIT = Math.max(20, Math.min(150, Number(process.env.V35_EQUITY_DETAIL_LIMIT || 80)));
 const FIRST_SIGNAL_MINUTE_ET = Math.max(570, Number(process.env.V35_FIRST_SIGNAL_MINUTE_ET || (9 * 60 + 35)));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -55,17 +56,17 @@ let maxDrawdownPct = 0;
 let newsMap = {};
 let newsFetchedAt = 0;
 let assetMap = new Map();
+let universe = [];
 let assetsFetchedAt = 0;
+let equityCursor = 0;
 const positions = new Map();
 const closed = [];
 const confirmations = new Map();
-const tradedSymbols = new Set();
 const lastPrices = new Map();
 let scanCount = 0;
-let qualifiedCount = 0;
+let qualificationCount = 0;
 let confirmedCount = 0;
 let consecutiveLosses = 0;
-let pauseUntil = 0;
 let activeSessionDate = null;
 let lastFinalDate = null;
 
@@ -88,8 +89,9 @@ function summary() {
     returnPct: Number(((paperEquity / STARTING_EQUITY - 1) * 100).toFixed(3)),
     maxDrawdownPct: Number(maxDrawdownPct.toFixed(3)),
     scans: scanCount,
-    qualifications: qualifiedCount,
+    qualifications: qualificationCount,
     confirmedSetups: confirmedCount,
+    universe: universe.length,
     openPositions: positions.size,
     closedTrades: closed.length,
     wins,
@@ -98,7 +100,6 @@ function summary() {
     profitFactor: grossLoss > 0 ? Number((grossWin / grossLoss).toFixed(3)) : grossWin > 0 ? 999 : 0,
     netPnl: Number((paperEquity - STARTING_EQUITY).toFixed(2)),
     consecutiveLosses,
-    paused: Date.now() < pauseUntil,
   };
 }
 
@@ -106,35 +107,28 @@ function resetSessionState(dateKey) {
   if (!activeSessionDate) activeSessionDate = dateKey;
   if (activeSessionDate === dateKey) return;
   activeSessionDate = dateKey;
-  tradedSymbols.clear();
   confirmations.clear();
   consecutiveLosses = 0;
-  pauseUntil = 0;
+  equityCursor = 0;
   console.log('[V35 equity shadow] NEW_SESSION', dateKey);
 }
 
 async function refreshAssets() {
-  if (Date.now() - assetsFetchedAt < 30 * 60000 && assetMap.size) return;
-  try {
-    const assets = await getTradableAssets('live');
-    assetMap = new Map(
-      (assets?.equities || [])
-        .filter((asset) => SYMBOLS.includes(String(asset?.symbol || '').toUpperCase()))
-        .map((asset) => [String(asset.symbol).toUpperCase(), asset])
-    );
-    assetsFetchedAt = Date.now();
-    console.log(`[V35 equity shadow] asset metadata refresh: ${assetMap.size}/${SYMBOLS.length}`);
-  } catch (error) {
-    assetsFetchedAt = Date.now();
-    console.warn(`[V35 equity shadow] asset metadata unavailable: ${error.message}`);
-  }
+  if (Date.now() - assetsFetchedAt < 30 * 60000 && universe.length) return;
+  const assets = await getTradableAssets('live');
+  const rows = Array.isArray(assets?.equities) ? assets.equities : [];
+  assetMap = new Map(rows.map((asset) => [String(asset.symbol || '').toUpperCase(), asset]));
+  universe = [...assetMap.keys()];
+  assetsFetchedAt = Date.now();
+  if (equityCursor >= universe.length) equityCursor = 0;
+  console.log('[V35 equity shadow] UNIVERSE', JSON.stringify({ equities: universe.length }));
 }
 
-async function refreshNews(now) {
+async function refreshNews(now, symbols) {
   if (Date.now() - newsFetchedAt < 5 * 60000) return;
   try {
     const response = await getMarketNews('live', {
-      symbols: SYMBOLS,
+      symbols,
       start: new Date(now.getTime() - 24 * 3600000),
       end: now,
       limit: 50,
@@ -143,17 +137,41 @@ async function refreshNews(now) {
     const articles = Array.isArray(response?.news) ? response.news : Array.isArray(response?.articles) ? response.articles : [];
     newsMap = buildNewsIntelligenceMapV34({ articles, now });
     newsFetchedAt = Date.now();
-    console.log(`[V35 equity shadow] news refresh: ${articles.length} articles, ${Object.keys(newsMap).length} symbol maps`);
   } catch (error) {
     newsFetchedAt = Date.now();
-    console.warn(`[V35 equity shadow] news unavailable: ${error.message}`);
+    console.warn('[V35 equity shadow] news unavailable:', error.message);
   }
+}
+
+function snapshotScore(snapshot) {
+  const trade = n(snapshot?.latestTrade?.p ?? snapshot?.minuteBar?.c ?? snapshot?.dailyBar?.c);
+  if (!(trade > 0)) return -Infinity;
+  const minuteOpen = n(snapshot?.minuteBar?.o, trade);
+  const minuteMove = minuteOpen > 0 ? Math.abs((trade / minuteOpen - 1) * 100) : 0;
+  const prev = n(snapshot?.prevDailyBar?.c);
+  const dayMove = prev > 0 ? Math.abs((trade / prev - 1) * 100) : 0;
+  const vol = Math.max(0, n(snapshot?.dailyBar?.v, 0));
+  const dollarVolume = trade * vol;
+  const bid = n(snapshot?.latestQuote?.bp);
+  const ask = n(snapshot?.latestQuote?.ap);
+  const spread = bid > 0 && ask > 0 ? (ask - bid) / ((ask + bid) / 2) * 100 : 0.25;
+  return minuteMove * 4 + dayMove * 0.35 + Math.log10(dollarVolume + 10) * 0.15 - spread * 2;
+}
+
+function rotatingSymbols() {
+  if (!universe.length) return [...new Set(CORE_SYMBOLS)];
+  const count = Math.min(ROTATING_BATCH_SIZE, universe.length);
+  const batch = [];
+  for (let i = 0; i < count; i += 1) {
+    batch.push(universe[(equityCursor + i) % universe.length]);
+  }
+  equityCursor = (equityCursor + count) % universe.length;
+  return [...new Set([...CORE_SYMBOLS, ...positions.keys(), ...batch, 'SPY', 'QQQ'])];
 }
 
 function closePosition(symbol, exit, reason, now) {
   const p = positions.get(symbol);
   if (!p || !(exit > 0)) return false;
-
   const grossPct = p.direction === 'LONG'
     ? ((exit / p.entry) - 1) * 100
     : ((p.entry / exit) - 1) * 100;
@@ -161,7 +179,6 @@ function closePosition(symbol, exit, reason, now) {
   const pnl = p.notional * netPct / 100;
   paperEquity += pnl;
   updateDrawdown();
-
   const trade = {
     symbol,
     direction: p.direction,
@@ -176,23 +193,10 @@ function closePosition(symbol, exit, reason, now) {
     openedAt: new Date(p.openedAt).toISOString(),
     closedAt: now.toISOString(),
   };
-
   closed.push(trade);
   positions.delete(symbol);
-
-  if (pnl < 0) {
-    consecutiveLosses += 1;
-    if (consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
-      pauseUntil = Math.max(pauseUntil, now.getTime() + LOSS_PAUSE_MS);
-      console.warn('[V35 equity shadow] LOSS_STREAK_PAUSE', JSON.stringify({
-        consecutiveLosses,
-        pauseUntil: new Date(pauseUntil).toISOString(),
-      }));
-    }
-  } else if (pnl > 0) {
-    consecutiveLosses = 0;
-  }
-
+  if (pnl < 0) consecutiveLosses += 1;
+  else if (pnl > 0) consecutiveLosses = 0;
   console.log('[V35 equity shadow] EXIT', JSON.stringify(trade));
   return true;
 }
@@ -220,7 +224,6 @@ function checkExit(symbol, snapshot, now) {
     if (stopHit) { exit = p.stopPrice; reason = targetHit ? 'STOP_SAME_BAR' : 'STOP'; }
     else if (targetHit) { exit = p.targetPrice; reason = 'TARGET'; }
   }
-
   if (!exit && now.getTime() - p.openedAt >= p.maxHoldMinutes * 60000) {
     exit = latest;
     reason = 'MAX_HOLD';
@@ -229,18 +232,15 @@ function checkExit(symbol, snapshot, now) {
 }
 
 function enter(signal, now) {
-  if (!signal || positions.has(signal.symbol) || tradedSymbols.has(signal.symbol)) return false;
-  if (positions.size >= MAX_POSITIONS || now.getTime() < pauseUntil) return false;
+  if (!signal || positions.has(signal.symbol) || positions.size >= MAX_POSITIONS) return false;
   const plan = signal.signal?.exitPlan || {};
   const stopPct = n(plan.stopLossPct);
   const targetPct = n(plan.takeProfitPct);
   const entry = n(signal.price);
   if (!(stopPct > 0) || !(targetPct > 0) || !(entry > 0)) return false;
-
   const riskDollars = paperEquity * RISK_FRACTION;
   const notional = Math.min(paperEquity * 0.20, riskDollars / (stopPct / 100));
   if (!(notional > 0)) return false;
-
   const direction = signal.direction;
   const stopPrice = direction === 'LONG' ? entry * (1 - stopPct / 100) : entry * (1 + stopPct / 100);
   const targetPrice = direction === 'LONG' ? entry * (1 + targetPct / 100) : entry * (1 - targetPct / 100);
@@ -258,26 +258,16 @@ function enter(signal, now) {
     maxHoldMinutes: Math.max(5, n(plan.maxHoldMinutes, 45)),
     openedAt: now.getTime(),
   };
-
   positions.set(signal.symbol, p);
-  tradedSymbols.add(signal.symbol);
-  console.log('[V35 equity shadow] ENTER', JSON.stringify({
-    ...p,
-    openedAt: now.toISOString(),
-    notional: Number(notional.toFixed(2)),
-  }));
+  console.log('[V35 equity shadow] ENTER', JSON.stringify({ ...p, openedAt: now.toISOString(), notional: Number(notional.toFixed(2)) }));
   return true;
 }
 
 function updateConfirmation(signal, now) {
-  const key = signal.symbol;
-  const prior = confirmations.get(key);
-  const closeEnough = prior &&
-    prior.direction === signal.direction &&
-    now.getTime() - prior.lastSeen <= POLL_MS * 2.5;
+  const prior = confirmations.get(signal.symbol);
+  const closeEnough = prior && prior.direction === signal.direction && now.getTime() - prior.lastSeen <= POLL_MS * 2.5;
   const count = closeEnough ? prior.count + 1 : 1;
-  const next = { direction: signal.direction, count, lastSeen: now.getTime() };
-  confirmations.set(key, next);
+  confirmations.set(signal.symbol, { direction: signal.direction, count, lastSeen: now.getTime() });
   return count;
 }
 
@@ -291,19 +281,13 @@ async function finalizeSession(now) {
         if (latest > 0) closePosition(symbol, latest, 'SESSION_CLOSE', now);
       }
     } catch (error) {
-      console.warn('[V35 equity shadow] close snapshot unavailable:', error.message);
       for (const symbol of [...positions.keys()]) {
         const latest = n(lastPrices.get(symbol));
         if (latest > 0) closePosition(symbol, latest, 'SESSION_CLOSE_LAST_PRICE', now);
       }
     }
   }
-
-  console.log('[V35 equity shadow] FINAL_DAILY', JSON.stringify({
-    at: now.toISOString(),
-    summary: summary(),
-    closed: closed.slice(-100),
-  }));
+  console.log('[V35 equity shadow] FINAL_DAILY', JSON.stringify({ at: now.toISOString(), summary: summary(), closed: closed.slice(-200) }));
 }
 
 async function scanOnce() {
@@ -322,32 +306,46 @@ async function scanOnce() {
   if (session !== 'regular') return { session };
   if (et.minutes < FIRST_SIGNAL_MINUTE_ET) return { session: 'opening-warmup' };
 
-  await Promise.all([refreshAssets(), refreshNews(now)]);
-  const start = new Date(now.getTime() - 12 * 3600000);
-  const [snapshots, bars] = await Promise.all([
-    getStockSnapshots('live', SYMBOLS, { feed: 'iex' }),
-    getStockBars('live', SYMBOLS, { timeframe: '1Min', start, end: now, limit: 10000, feed: 'iex', maxPages: 3 }),
-  ]);
+  await refreshAssets();
+  const batchSymbols = rotatingSymbols();
+  await refreshNews(now, batchSymbols);
+  const snapshots = await getStockSnapshots('live', batchSymbols, { feed: 'iex' });
   scanCount += 1;
 
-  const marketRegime = buildEquityMarketRegime(bars.SPY || [], bars.QQQ || []);
-  for (const symbol of SYMBOLS) {
-    const latest = n(snapshots?.[symbol]?.latestTrade?.p ?? snapshots?.[symbol]?.minuteBar?.c);
-    if (latest > 0) lastPrices.set(symbol, latest);
-    checkExit(symbol, snapshots[symbol], now);
+  for (const symbol of [...positions.keys()]) {
+    if (snapshots[symbol]) checkExit(symbol, snapshots[symbol], now);
   }
+
+  const ranked = batchSymbols
+    .filter((symbol) => !positions.has(symbol) && snapshots[symbol])
+    .map((symbol) => ({ symbol, score: snapshotScore(snapshots[symbol]) }))
+    .filter((x) => Number.isFinite(x.score))
+    .sort((a, b) => b.score - a.score);
+
+  const detailSymbols = [...new Set([
+    ...ranked.slice(0, DETAIL_LIMIT).map((x) => x.symbol),
+    'SPY', 'QQQ',
+  ])];
+
+  const start = new Date(now.getTime() - 12 * 3600000);
+  const bars = await getStockBars('live', detailSymbols, {
+    timeframe: '1Min', start, end: now, limit: 10000, feed: 'iex', maxPages: 4,
+  });
+  const marketRegime = buildEquityMarketRegime(bars.SPY || [], bars.QQQ || []);
 
   const candidates = [];
   const rejectCounts = new Map();
   const seenThisScan = new Set();
 
-  for (const symbol of SYMBOLS) {
-    if (positions.has(symbol) || tradedSymbols.has(symbol)) continue;
+  for (const symbol of ranked.slice(0, DETAIL_LIMIT).map((x) => x.symbol)) {
     const snapshot = snapshots[symbol];
     const rows = bars[symbol] || [];
-    if (!snapshot || rows.length < 31) continue;
-    const intel = newsMap[compact(symbol)] || null;
+    if (!snapshot || rows.length < 12) {
+      rejectCounts.set('insufficient detailed market data', (rejectCounts.get('insufficient detailed market data') || 0) + 1);
+      continue;
+    }
     const asset = assetMap.get(symbol) || { symbol, shortable: false, easy_to_borrow: false };
+    const intel = newsMap[compact(symbol)] || null;
     const result = evaluateEquityCandidateV35({
       asset,
       snapshot,
@@ -360,71 +358,60 @@ async function scanOnce() {
     });
 
     if (result.signal) {
-      qualifiedCount += 1;
+      qualificationCount += 1;
       result.signal.intelligence = intel;
       const confirmationCount = updateConfirmation(result.signal, now);
       seenThisScan.add(symbol);
       candidates.push({ ...result.signal, confirmationCount });
     } else {
-      const reason = result?.reason || 'V35: rejected';
+      const reason = result?.reason || result?.diagnostics?.reason || 'V35: rejected';
       rejectCounts.set(reason, (rejectCounts.get(reason) || 0) + 1);
     }
   }
 
   for (const [symbol, value] of confirmations.entries()) {
-    if (!seenThisScan.has(symbol) && now.getTime() - value.lastSeen > POLL_MS * 2.5) {
-      confirmations.delete(symbol);
-    }
+    if (!seenThisScan.has(symbol) && now.getTime() - value.lastSeen > POLL_MS * 2.5) confirmations.delete(symbol);
   }
 
   candidates.sort((a, b) => Number(b.score) - Number(a.score));
   const confirmed = candidates.filter((x) => x.confirmationCount >= CONFIRM_SCANS);
   confirmedCount += confirmed.length;
-
   const slots = Math.max(0, MAX_POSITIONS - positions.size);
-  if (Date.now() >= pauseUntil && slots > 0) {
-    for (const signal of confirmed.slice(0, slots)) enter(signal, now);
-  }
+  for (const signal of confirmed.slice(0, slots)) enter(signal, now);
 
   const topRejects = [...rejectCounts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .slice(0, 8)
     .map(([reason, count]) => ({ reason, count }));
 
-  if (scanCount % 10 === 0 || candidates.length || topRejects.length) {
-    console.log('[V35 equity shadow] SCAN', JSON.stringify({
-      at: now.toISOString(),
-      marketRegime,
-      qualified: candidates.length,
-      confirmed: confirmed.length,
-      top: candidates.slice(0, 5).map((x) => ({
-        symbol: x.symbol,
-        direction: x.direction,
-        score: x.score,
-        confirmationCount: x.confirmationCount,
-        playbook: x.signal?.playbook,
-        evidence: x.signal?.evidence?.slice(-6),
-      })),
-      topRejects,
-      summary: summary(),
-    }));
-  }
+  console.log('[V35 equity shadow] SCAN', JSON.stringify({
+    at: now.toISOString(),
+    marketRegime,
+    batchScanned: batchSymbols.length,
+    detailed: Math.min(DETAIL_LIMIT, ranked.length),
+    qualified: candidates.length,
+    confirmed: confirmed.length,
+    top: candidates.slice(0, 8).map((x) => ({ symbol: x.symbol, direction: x.direction, score: x.score, confirmationCount: x.confirmationCount, playbook: x.signal?.playbook, regimeAligned: x.signal?.regimeAligned, trendAligned: x.signal?.trendAligned })),
+    topRejects,
+    summary: summary(),
+  }));
 
   return { session, candidates: candidates.length, confirmed: confirmed.length };
 }
 
 console.log('[V35 equity shadow] starting', JSON.stringify({
-  symbols: SYMBOLS.length,
+  coreSymbols: CORE_SYMBOLS.length,
   startingEquity: STARTING_EQUITY,
   riskFraction: RISK_FRACTION,
   maxPositions: MAX_POSITIONS,
   minScore: MIN_SCORE,
   confirmScans: CONFIRM_SCANS,
-  maxConsecutiveLosses: MAX_CONSECUTIVE_LOSSES,
-  lossPauseMinutes: LOSS_PAUSE_MS / 60000,
+  rotatingBatchSize: ROTATING_BATCH_SIZE,
+  detailLimit: DETAIL_LIMIT,
   firstSignalMinuteET: FIRST_SIGNAL_MINUTE_ET,
   pollMs: POLL_MS,
   orderPlacement: false,
+  lossStreakAutoPause: false,
 }));
 
 while (true) {
