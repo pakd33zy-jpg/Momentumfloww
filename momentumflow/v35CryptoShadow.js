@@ -86,39 +86,84 @@ async function refreshUniverse() {
   console.log('[V35 crypto shadow] UNIVERSE', JSON.stringify({ symbols: symbols.length }));
 }
 
+function chunks(list, size = 4) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
+async function fetchGroupedBars(timeframe, start, end, batchSize = 4) {
+  const out = Object.fromEntries(symbols.map((symbol) => [symbol, []]));
+  for (const group of chunks(symbols, batchSize)) {
+    const part = await getCryptoBars('live', group, {
+      timeframe,
+      start,
+      end,
+      limit: 10000,
+      maxPages: 4,
+    });
+    for (const symbol of group) out[symbol] = part?.[symbol] || [];
+  }
+  return out;
+}
+
+async function backfillMissingBars(target, timeframe, start, end, minimumBars) {
+  const missing = symbols.filter((symbol) => (target?.[symbol] || []).length < minimumBars);
+  for (const symbol of missing) {
+    try {
+      const part = await getCryptoBars('live', [symbol], {
+        timeframe,
+        start,
+        end,
+        limit: 10000,
+        maxPages: 4,
+      });
+      if ((part?.[symbol] || []).length > (target?.[symbol] || []).length) {
+        target[symbol] = part[symbol];
+      }
+    } catch (error) {
+      console.warn('[V35 crypto shadow] history backfill failed', symbol, timeframe, error.message);
+    }
+  }
+}
+
 async function refreshHistory(now) {
   if (!symbols.length) return;
   if (historyFetchedAt && Date.now() - historyFetchedAt < DATA_REFRESH_MS) return;
 
+  const start15m = new Date(now.getTime() - 14 * 24 * 60 * 60000);
+  const start1h = new Date(now.getTime() - 60 * 24 * 60 * 60000);
+  const start1d = new Date(now.getTime() - 220 * 24 * 60 * 60000);
+
   const [f15, f1h, f1d] = await Promise.all([
-    getCryptoBars('live', symbols, {
-      timeframe: '15Min',
-      start: new Date(now.getTime() - 14 * 24 * 60 * 60000),
-      end: now,
-      limit: 10000,
-      maxPages: 8,
-    }),
-    getCryptoBars('live', symbols, {
-      timeframe: '1Hour',
-      start: new Date(now.getTime() - 60 * 24 * 60 * 60000),
-      end: now,
-      limit: 10000,
-      maxPages: 8,
-    }),
+    fetchGroupedBars('15Min', start15m, now, 4),
+    fetchGroupedBars('1Hour', start1h, now, 4),
     getCryptoBars('live', symbols, {
       timeframe: '1Day',
-      start: new Date(now.getTime() - 220 * 24 * 60 * 60000),
+      start: start1d,
       end: now,
       limit: 10000,
-      maxPages: 8,
+      maxPages: 4,
     }),
+  ]);
+
+  await Promise.all([
+    backfillMissingBars(f15, '15Min', start15m, now, 32),
+    backfillMissingBars(f1h, '1Hour', start1h, now, 40),
   ]);
 
   bars15m = f15 || {};
   bars1h = f1h || {};
   bars1d = f1d || {};
   historyFetchedAt = Date.now();
-  console.log('[V35 crypto shadow] HISTORY_REFRESH', JSON.stringify({ symbols: symbols.length }));
+
+  const coverage = {
+    symbols: symbols.length,
+    with15m: symbols.filter((s) => (bars15m[s] || []).length >= 32).length,
+    with1h: symbols.filter((s) => (bars1h[s] || []).length >= 40).length,
+    with1d: symbols.filter((s) => (bars1d[s] || []).length >= 28).length,
+  };
+  console.log('[V35 crypto shadow] HISTORY_REFRESH', JSON.stringify(coverage));
 }
 
 async function refreshNews(now) {
