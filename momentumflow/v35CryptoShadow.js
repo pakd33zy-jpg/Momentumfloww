@@ -23,6 +23,7 @@ const MAX_PORTFOLIO_RISK = Math.max(RISK_FRACTION, Math.min(0.20, Number(process
 const MAX_TOTAL_EXPOSURE = Math.max(0.10, Math.min(1.0, Number(process.env.V35_CRYPTO_SHADOW_MAX_TOTAL_EXPOSURE || 0.80)));
 const MAX_POSITION_FRACTION = Math.max(0.02, Math.min(0.50, Number(process.env.V35_CRYPTO_SHADOW_MAX_POSITION_FRACTION || 0.20)));
 const DATA_REFRESH_MS = Math.max(60000, Number(process.env.V35_CRYPTO_HISTORY_REFRESH_MS || 5 * 60000));
+const REENTRY_COOLDOWN_MS = Math.max(0, Number(process.env.V35_CRYPTO_SHADOW_REENTRY_COOLDOWN_MS || 15 * 60000));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const n = (v, fallback = NaN) => Number.isFinite(Number(v)) ? Number(v) : fallback;
@@ -44,6 +45,7 @@ let scanCount = 0;
 let qualificationCount = 0;
 const positions = new Map();
 const closed = [];
+const reentryAfter = new Map();
 
 function updateDrawdown() {
   peakEquity = Math.max(peakEquity, paperEquity);
@@ -217,6 +219,9 @@ function closePosition(symbol, exit, reason, now) {
   };
   closed.push(trade);
   positions.delete(symbol);
+  if (String(reason).startsWith('STOP') && REENTRY_COOLDOWN_MS > 0) {
+    reentryAfter.set(symbol, now.getTime() + REENTRY_COOLDOWN_MS);
+  }
   console.log('[V35 crypto shadow] EXIT', JSON.stringify(trade));
   return true;
 }
@@ -257,6 +262,7 @@ function checkExit(symbol, snapshot, now) {
 
 function enter(signal, now) {
   if (!signal || positions.has(signal.symbol) || positions.size >= MAX_POSITIONS) return false;
+  if ((reentryAfter.get(signal.symbol) || 0) > now.getTime()) return false;
   const plan = signal.signal?.exitPlan || {};
   const stopPct = n(plan.stopLossPct);
   const targetPct = n(plan.takeProfitPct);
@@ -333,6 +339,13 @@ async function scanOnce() {
 
   for (const symbol of symbols) {
     if (positions.has(symbol)) continue;
+    const cooldownUntil = reentryAfter.get(symbol) || 0;
+    if (cooldownUntil > now.getTime()) {
+      const reason = 'V35 shadow: waiting for fresh 15m setup after stop';
+      rejectCounts.set(reason, (rejectCounts.get(reason) || 0) + 1);
+      continue;
+    }
+    if (cooldownUntil) reentryAfter.delete(symbol);
     const asset = assetMap.get(symbol);
     const snapshot = snapshots?.[symbol] || snapshots?.[compact(symbol)];
     if (!asset || !snapshot) {
@@ -393,6 +406,7 @@ console.log('[V35 crypto shadow] starting', JSON.stringify({
   maxPositions: MAX_POSITIONS,
   minScore: MIN_SCORE,
   maxTotalExposureFraction: MAX_TOTAL_EXPOSURE,
+  reentryCooldownMs: REENTRY_COOLDOWN_MS,
   pollMs: POLL_MS,
   orderPlacement: false,
   market: 'CRYPTO_24_7',
