@@ -12,6 +12,7 @@ export const TRADING_DEFAULTS = {
   dailyLossLimit: 0.10,        // fraction: 0.10 = 10%
   consecutiveStopLoss: 3,
   fastScalpEnabled: false,
+  // Deprecated in V35. Equity and crypto are independent engines and may run together.
   equityFocusMode: false,
   equityV20Enabled: true,
   equityFastScalpEnabled: false,
@@ -50,7 +51,11 @@ function normalize(raw = {}) {
 
   for (const k of NUMERIC_KEYS) out[k] = Number(out[k]);
   out.fastScalpEnabled = asBoolean(out.fastScalpEnabled);
-  out.equityFocusMode = asBoolean(out.equityFocusMode);
+
+  // V35 no longer uses a mutually-exclusive equity focus switch. Keep the
+  // legacy field false so old stored configs cannot disable crypto.
+  out.equityFocusMode = false;
+
   out.equityV20Enabled = asBoolean(out.equityV20Enabled);
   out.equityFastScalpEnabled = asBoolean(out.equityFastScalpEnabled);
 
@@ -97,14 +102,13 @@ router.post('/', (req, res) => {
   merged.updatedAt = new Date().toISOString();
   store.setConfig('tradingConfig', merged);
 
-  // liveBot reads strategyConfig, so mirror the toggle and use a short
-  // cooldown while scalping. Turning Fast Scalp off restores v19's
-  // normal 30-minute crypto cooldown.
+  // liveBot reads strategyConfig. Keep the retired equity-focus flag false so
+  // equities and crypto remain independently available.
   const strategyCurrent = store.getConfig('strategyConfig', {});
   store.setConfig('strategyConfig', {
     ...strategyCurrent,
     fastScalpEnabled: merged.fastScalpEnabled,
-    equityFocusMode: merged.equityFocusMode,
+    equityFocusMode: false,
     equityV20Enabled: merged.equityV20Enabled,
     equityFastScalpEnabled: merged.equityFastScalpEnabled,
     cryptoCooldownMinutes: merged.fastScalpEnabled ? 1 : 30,
