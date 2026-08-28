@@ -49,6 +49,18 @@ button {
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .display { font-family: var(--font-display); }
 
+/* V35: the Dashboard JSX still carries a legacy UI-v13 text literal.
+   Do not present that stale UI label as the active strategy version. */
+h1 + span {
+  font-size: 0 !important;
+}
+
+h1 + span::after {
+  content: 'V35';
+  font-size: 11px;
+  font-weight: bold;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
