@@ -231,12 +231,14 @@ function checkExit(symbol, snapshot, now) {
   if (!p) return;
   const bar = snapshot?.minuteBar || {};
   const latest = n(snapshot?.latestTrade?.p ?? bar?.c);
-  const high = n(bar?.h, latest);
-  const low = n(bar?.l, latest);
   if (!(latest > 0)) return;
 
-  p.peakPrice = Math.max(n(p.peakPrice, p.entry), high, latest);
+  // For the entry minute only: use latest price, not bar high/low
+  const isEntryMinute = now.getTime() - p.entryMinuteStart < 60000;
+  const high = isEntryMinute ? latest : n(bar?.h, latest);
+  const low = isEntryMinute ? latest : n(bar?.l, latest);
 
+  // Calculate trailing stop from prior peak before updating peak
   let effectiveStop = p.stopPrice;
   const gainFromEntryPct = (p.peakPrice / p.entry - 1) * 100;
   if (gainFromEntryPct >= p.trailTriggerPct) {
@@ -257,7 +259,11 @@ function checkExit(symbol, snapshot, now) {
   }
   if (now.getTime() - p.openedAt >= p.maxHoldMinutes * 60000) {
     closePosition(symbol, latest, 'MAX_HOLD', now);
+    return;
   }
+
+  // Update peak only after no exit
+  p.peakPrice = Math.max(n(p.peakPrice, p.entry), high, latest);
 }
 
 function enter(signal, now) {
@@ -307,12 +313,14 @@ function enter(signal, now) {
     trailDistancePct: Math.max(0.05, n(plan.trailDistancePct, stopPct * 0.65)),
     trailFloorPct: Math.max(0, n(plan.trailFloorPct, 0)),
     peakPrice: entry,
+    entryMinuteStart: now.getTime(),
     openedAt: now.getTime(),
   };
   positions.set(signal.symbol, p);
   console.log('[V35 crypto shadow] ENTER', JSON.stringify({
     ...p,
     openedAt: now.toISOString(),
+    entryMinuteStart: new Date(p.entryMinuteStart).toISOString(),
     notional: Number(notional.toFixed(2)),
     riskDollars: Number(riskDollars.toFixed(2)),
   }));
@@ -420,3 +428,4 @@ while (true) {
   }
   await sleep(POLL_MS);
 }
+
