@@ -26,6 +26,11 @@ const close = (bar) => n(bar?.c ?? bar?.close);
 const high = (bar) => n(bar?.h ?? bar?.high);
 const low = (bar) => n(bar?.l ?? bar?.low);
 const volume = (bar) => n(bar?.v ?? bar?.volume, 0);
+const stampMs = (bar) => {
+  const value = bar?.t ?? bar?.timestamp;
+  const ms = new Date(value ?? 0).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+};
 
 function validBars(bars = []) {
   return (bars || []).filter((bar) => close(bar) > 0);
@@ -37,6 +42,27 @@ function retPct(bars = [], lookback = 1) {
   const last = close(rows.at(-1));
   const prior = close(rows.at(-(lookback + 1)));
   return prior > 0 ? (last / prior - 1) * 100 : 0;
+}
+
+function retPctWindow(bars = [], windowMs, fallbackLookback = 1) {
+  const rows = validBars(bars);
+  if (rows.length < 2 || !(windowMs > 0)) return 0;
+  const lastRow = rows.at(-1);
+  const lastTs = stampMs(lastRow);
+  if (!Number.isFinite(lastTs)) return retPct(rows, fallbackLookback);
+  const cutoff = lastTs - windowMs;
+  let prior = null;
+  for (let i = rows.length - 2; i >= 0; i -= 1) {
+    const ts = stampMs(rows[i]);
+    if (Number.isFinite(ts) && ts <= cutoff) {
+      prior = rows[i];
+      break;
+    }
+  }
+  if (!prior) return retPct(rows, Math.min(fallbackLookback, rows.length - 1));
+  const last = close(lastRow);
+  const base = close(prior);
+  return base > 0 ? (last / base - 1) * 100 : 0;
 }
 
 function avg(xs = []) {
@@ -148,14 +174,16 @@ export function evaluateCryptoCandidateV35({
   if (!(price > 0)) return { signal: null, reason: 'V35: invalid price', diagnostics: { hardReject: true, reason: 'invalid price' } };
 
   const spread = snapshotSpreadPct(snapshot);
-  const ret1h = retPct(b15, 4);
-  const ret3h = retPct(b15, 12);
-  const ret6h = retPct(b1h, 6);
-  const ret24h = retPct(b1h, 24);
-  const ret7d = retPct(b1d, 7);
-  const ret20d = retPct(b1d, Math.min(20, b1d.length - 1));
-  const btc6h = retPct(btcBars1h, 6);
-  const btc24h = retPct(btcBars1h, 24);
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  const ret1h = retPctWindow(b15, HOUR, 4);
+  const ret3h = retPctWindow(b15, 3 * HOUR, 12);
+  const ret6h = retPctWindow(b1h, 6 * HOUR, 6);
+  const ret24h = retPctWindow(b1h, DAY, 24);
+  const ret7d = retPctWindow(b1d, 7 * DAY, 7);
+  const ret20d = retPctWindow(b1d, 20 * DAY, Math.min(20, b1d.length - 1));
+  const btc6h = retPctWindow(btcBars1h, 6 * HOUR, 6);
+  const btc24h = retPctWindow(btcBars1h, DAY, 24);
   const relative6h = ret6h - btc6h;
   const relative24h = ret24h - btc24h;
   const vr = volumeRatio(b15);
