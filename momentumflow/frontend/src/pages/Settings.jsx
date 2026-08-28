@@ -98,7 +98,7 @@ export default function Settings() {
 
   return (
     <div style={page}>
-      <div style={versionLabel}>MOMENTUMFLOW SETTINGS v20</div>
+      <div style={versionLabel}>MOMENTUMFLOW SETTINGS V35</div>
 
       {errors.length > 0 && (
         <div style={warningCard}>
@@ -187,27 +187,26 @@ export default function Settings() {
         <TradingConfigPanel />
       </section>
 
-           <section>
-      <h2 style={h2}>Fast Scalp</h2>
-      <FastScalpToggle />
-    </section>
+      <section>
+        <h2 style={h2}>Fast Scalp</h2>
+        <FastScalpToggle />
+      </section>
 
-    <section>
-      <h2 style={h2}>Equity v20 Adaptive</h2>
-      <EquityV20Panel />
-    </section>
+      <section>
+        <h2 style={h2}>V35 Market Engines</h2>
+        <EquityV20Panel />
+      </section>
 
-    <section>
-        <h2 style={h2}>
-          Strategy Analysis
-        </h2>
-
+      <section>
+        <h2 style={h2}>Strategy Analysis</h2>
         <StrategyPerformancePanel />
         <div style={{ height: 10 }} />
         <PaperForwardSessionPanel />
         <div style={{ height: 10 }} />
         <RejectionLogPanel />
-      </section> <section>
+      </section>
+
+      <section>
         <h2 style={h2}>Safety behavior</h2>
         <div style={card}>
           <SafetyRow>Daily loss halt uses your saved Daily Loss Halt setting.</SafetyRow>
