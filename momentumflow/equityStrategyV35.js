@@ -1,262 +1,253 @@
-// EQUITY STRATEGY V35 — evidence-weighted expectancy layer over frozen V34.
-// Adds a direct tape/candle lane so obvious price action can qualify without
-// first surviving every legacy V34 soft gate.
-
-import { evaluateEquityCandidateV34 } from './equityStrategyV34.js';
+// EQUITY STRATEGY V35 — standalone evidence-weighted market model.
+// No V33/V20/V34 strategy imports. Prior versions remain only as frozen baselines.
 
 export const EQUITY_V35_DEFAULTS = {
   equityV35Enabled: true,
-  equityV35ScoreThreshold: 6.5,
-  equityV35BlockNeutralRegime: false,
-  equityV35RequireRegimeAlignment: false,
-  equityV35RequireTrendAlignment: false,
-  equityV35MinTrend15Pct: 0.02,
-  equityV35MinTrend30Pct: 0.02,
-  equityV35MaxCounterTrend5Pct: 0.05,
-
-  equityV35TapeEnabled: true,
-  equityV35TapeScoreThreshold: 5.5,
-  equityV35TapeMaxSpreadPct: 0.50,
-  equityV35TapeMinBars: 8,
-  equityV35TapeStopPct: 0.45,
-  equityV35TapeRewardRisk: 1.70,
-  equityV35TapeMaxHoldMinutes: 20,
+  equityV35ScoreThreshold: 5.8,
+  equityV35EstimatedRoundTripCostPct: 0.04,
+  equityV35PreferredSpreadPct: 0.08,
+  equityV35MinBars: 12,
+  equityV35MinStopPct: 0.30,
+  equityV35MaxStopPct: 1.60,
+  equityV35AtrStopMultiplier: 1.25,
+  equityV35RewardRisk: 1.75,
+  equityV35MaxHoldMinutes: 35,
+  equityV35TrailTriggerR: 0.90,
+  equityV35TrailDistanceR: 0.45,
+  equityV35TrailFloorPct: 0.12,
 };
 
-const num = (value, fallback = NaN) =>
-  Number.isFinite(Number(value)) ? Number(value) : fallback;
-const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
-const closeOf = (bar) => num(bar?.c ?? bar?.close);
-const openOf = (bar) => num(bar?.o ?? bar?.open);
-const highOf = (bar) => num(bar?.h ?? bar?.high);
-const lowOf = (bar) => num(bar?.l ?? bar?.low);
-const volumeOf = (bar) => num(bar?.v ?? bar?.volume, 0);
+const n = (v, fallback = NaN) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const c = (b) => n(b?.c ?? b?.close);
+const o = (b) => n(b?.o ?? b?.open);
+const h = (b) => n(b?.h ?? b?.high);
+const l = (b) => n(b?.l ?? b?.low);
+const v = (b) => n(b?.v ?? b?.volume, 0);
 
-function avg(values = []) {
-  const clean = values.filter(Number.isFinite);
-  return clean.length ? clean.reduce((a, b) => a + b, 0) / clean.length : 0;
+function avg(xs = []) {
+  const good = xs.filter(Number.isFinite);
+  return good.length ? good.reduce((a, b) => a + b, 0) / good.length : 0;
 }
 
-function returnPct(bars = [], lookback = 1) {
-  if (!Array.isArray(bars) || bars.length < 2) return 0;
-  const last = closeOf(bars.at(-1));
-  const prior = closeOf(bars[Math.max(0, bars.length - 1 - Math.max(1, lookback))]);
-  if (!(last > 0) || !(prior > 0)) return 0;
-  return ((last / prior) - 1) * 100;
+function cleanBars(bars = []) {
+  return (bars || []).filter((bar) => c(bar) > 0);
+}
+
+function retPct(bars = [], lookback = 1) {
+  const rows = cleanBars(bars);
+  if (rows.length <= lookback) return 0;
+  const last = c(rows.at(-1));
+  const prior = c(rows.at(-(lookback + 1)));
+  return prior > 0 ? (last / prior - 1) * 100 : 0;
 }
 
 function spreadPct(snapshot = {}) {
-  const bid = num(snapshot?.latestQuote?.bp ?? snapshot?.bp);
-  const ask = num(snapshot?.latestQuote?.ap ?? snapshot?.ap);
+  const bid = n(snapshot?.latestQuote?.bp ?? snapshot?.bp);
+  const ask = n(snapshot?.latestQuote?.ap ?? snapshot?.ap);
   if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
-  const mid = (bid + ask) / 2;
-  return mid > 0 ? ((ask - bid) / mid) * 100 : null;
+  return (ask - bid) / ((ask + bid) / 2) * 100;
+}
+
+function atrPct(bars = [], length = 14) {
+  const rows = cleanBars(bars);
+  if (rows.length < 3) return 0;
+  const start = Math.max(1, rows.length - length);
+  const trs = [];
+  for (let i = start; i < rows.length; i += 1) {
+    const hi = h(rows[i]);
+    const lo = l(rows[i]);
+    const prev = c(rows[i - 1]);
+    if (!(hi > 0) || !(lo > 0)) continue;
+    trs.push(Math.max(hi - lo, Math.abs(hi - prev), Math.abs(lo - prev)));
+  }
+  const price = c(rows.at(-1));
+  return price > 0 && trs.length ? avg(trs) / price * 100 : 0;
+}
+
+function volumeRatio(bars = [], lookback = 12) {
+  const rows = cleanBars(bars);
+  if (rows.length < 3) return 1;
+  const current = v(rows.at(-1));
+  const base = avg(rows.slice(Math.max(0, rows.length - 1 - lookback), -1).map(v).filter((x) => x > 0));
+  return base > 0 && current > 0 ? current / base : 1;
+}
+
+function simpleVwap(bars = [], lookback = 30) {
+  const rows = cleanBars(bars).slice(-lookback);
+  let pv = 0;
+  let vv = 0;
+  for (const bar of rows) {
+    const vol = v(bar);
+    const hi = h(bar);
+    const lo = l(bar);
+    const close = c(bar);
+    if (!(vol > 0) || ![hi, lo, close].every(Number.isFinite)) continue;
+    pv += ((hi + lo + close) / 3) * vol;
+    vv += vol;
+  }
+  return vv > 0 ? pv / vv : null;
+}
+
+function intelligenceBias(intelligence, direction) {
+  if (!intelligence || typeof intelligence !== 'object') return 0;
+  const sign = direction === 'SHORT' ? -1 : 1;
+  const raw = n(
+    intelligence?.netScore ??
+    intelligence?.directionalScore ??
+    intelligence?.score ??
+    intelligence?.catalystScore,
+    0,
+  );
+  return clamp(raw * sign * 0.12, -0.8, 0.8);
+}
+
+function marketRegimeDirection(regime = {}) {
+  const d = String(regime?.direction || '').toUpperCase();
+  return ['LONG', 'SHORT'].includes(d) ? d : 'NEUTRAL';
 }
 
 export function normalizeEquityRegimeV35(regime = {}) {
-  const direction = String(regime?.direction || '').toUpperCase();
-  const semanticBias = direction === 'LONG'
-    ? 'bull risk-on up strong'
-    : direction === 'SHORT'
-      ? 'bear risk-off down weak'
-      : 'neutral mixed';
-  return { ...regime, direction, semanticBias };
+  return { ...regime, direction: marketRegimeDirection(regime) };
 }
 
-function evaluateTapeLane(args, config) {
-  if (config.equityV35TapeEnabled === false) return null;
-
-  const bars = (Array.isArray(args.bars) ? args.bars : [])
-    .filter((bar) => closeOf(bar) > 0)
-    .slice(-12);
-  if (bars.length < Math.max(6, num(config.equityV35TapeMinBars, 8))) return null;
-
-  const asset = args.asset || {};
-  const symbol = String(asset?.symbol || '').toUpperCase();
-  const latest = bars.at(-1);
-  const price = num(args.snapshot?.latestTrade?.p ?? latest?.c);
+function scoreDirection({ direction, asset, snapshot, bars, marketRegime, intelligence, settings }) {
+  const sign = direction === 'SHORT' ? -1 : 1;
+  const rows = cleanBars(bars);
+  const latest = rows.at(-1);
+  const price = n(snapshot?.latestTrade?.p ?? snapshot?.minuteBar?.c ?? c(latest));
   if (!(price > 0)) return null;
 
-  const spread = spreadPct(args.snapshot);
-  if (spread != null && spread > num(config.equityV35TapeMaxSpreadPct, 0.50)) return null;
-
-  const ret1 = returnPct(bars, 1);
-  const ret3 = returnPct(bars, 3);
-  const ret5 = returnPct(bars, 5);
-  const direction = ret3 >= 0 ? 'LONG' : 'SHORT';
-  const sign = direction === 'SHORT' ? -1 : 1;
-
-  if (
-    direction === 'SHORT' &&
-    !(asset?.shortable === true && (asset?.easy_to_borrow === true || asset?.easyToBorrow === true))
-  ) return null;
-
-  const changes = [];
-  for (let i = Math.max(1, bars.length - 5); i < bars.length; i += 1) {
-    const prior = closeOf(bars[i - 1]);
-    const current = closeOf(bars[i]);
-    if (prior > 0 && current > 0) changes.push(((current / prior) - 1) * 100);
+  if (direction === 'SHORT' && !(asset?.shortable === true && (asset?.easy_to_borrow === true || asset?.easyToBorrow === true))) {
+    return null;
   }
 
+  const r1 = retPct(rows, 1);
+  const r3 = retPct(rows, 3);
+  const r5 = retPct(rows, 5);
+  const r15 = retPct(rows, 15);
+  const r30 = retPct(rows, 30);
+  const vr = volumeRatio(rows);
+  const spread = spreadPct(snapshot);
+  const atr = atrPct(rows);
+  const vw = simpleVwap(rows);
+  const vwapDistance = vw > 0 ? (price / vw - 1) * 100 : 0;
+  const bodyPct = o(latest) > 0 ? (c(latest) / o(latest) - 1) * 100 : 0;
+
+  const changes = [];
+  for (let i = Math.max(1, rows.length - 6); i < rows.length; i += 1) {
+    const prior = c(rows[i - 1]);
+    const cur = c(rows[i]);
+    if (prior > 0 && cur > 0) changes.push((cur / prior - 1) * 100);
+  }
   const alignedCloses = changes.filter((x) => x * sign > 0).length;
-  const bodyPct = ((closeOf(latest) - openOf(latest)) / Math.max(openOf(latest), 0.0000001)) * 100;
-  const priorRanges = bars.slice(-6, -1).map((bar) => {
-    const c = closeOf(bar);
-    return c > 0 ? ((highOf(bar) - lowOf(bar)) / c) * 100 : 0;
-  });
-  const latestRangePct = ((highOf(latest) - lowOf(latest)) / price) * 100;
-  const rangeRatio = avg(priorRanges) > 0 ? latestRangePct / avg(priorRanges) : 1;
-  const priorVolumes = bars.slice(-6, -1).map(volumeOf);
-  const volumeRatio = avg(priorVolumes) > 0 ? volumeOf(latest) / avg(priorVolumes) : 1;
 
-  const regimeDirection = String(args.marketRegime?.direction || '').toUpperCase();
-  const regimeAligned = !['LONG', 'SHORT'].includes(regimeDirection) || regimeDirection === direction;
+  const regimeDirection = marketRegimeDirection(marketRegime);
+  const regimeAligned = regimeDirection === 'NEUTRAL' || regimeDirection === direction;
 
-  let score = 2.4;
-  score += alignedCloses >= 4 ? 1.5 : alignedCloses >= 3 ? 1.0 : alignedCloses >= 2 ? 0.4 : 0;
-  score += ret3 * sign >= 0.20 ? 1.5 : ret3 * sign >= 0.10 ? 1.0 : ret3 * sign >= 0.04 ? 0.5 : 0;
-  score += ret5 * sign >= 0.30 ? 1.0 : ret5 * sign >= 0.15 ? 0.6 : ret5 * sign > 0 ? 0.2 : 0;
-  if (ret1 * sign > 0) score += 0.35;
-  if (bodyPct * sign > 0) score += 0.35;
-  if (rangeRatio >= 1.5) score += 0.65;
-  else if (rangeRatio >= 1.15) score += 0.30;
-  if (volumeRatio >= 1.75) score += 0.65;
-  else if (volumeRatio >= 1.15) score += 0.30;
-  score += regimeAligned ? 0.20 : -0.20;
+  let score = 2.0;
+  score += alignedCloses >= 5 ? 1.25 : alignedCloses >= 4 ? 0.95 : alignedCloses >= 3 ? 0.55 : 0;
+  score += r3 * sign >= 0.20 ? 1.2 : r3 * sign >= 0.10 ? 0.8 : r3 * sign > 0 ? 0.35 : -0.25;
+  score += r15 * sign >= 0.40 ? 1.0 : r15 * sign >= 0.15 ? 0.65 : r15 * sign > 0 ? 0.25 : -0.30;
+  score += r30 * sign >= 0.60 ? 0.75 : r30 * sign > 0 ? 0.30 : -0.20;
+  score += r1 * sign > 0 ? 0.30 : -0.15;
+  score += bodyPct * sign > 0 ? 0.25 : -0.10;
+  score += vr >= 1.75 ? 0.85 : vr >= 1.2 ? 0.55 : vr >= 0.85 ? 0.20 : -0.25;
+  score += vwapDistance * sign >= 0 && Math.abs(vwapDistance) <= 1.2 ? 0.55 : vwapDistance * sign < -0.75 ? -0.35 : 0;
+  score += regimeAligned ? 0.35 : -0.35;
+  score += intelligenceBias(intelligence, direction);
+
+  if (spread != null) {
+    const preferred = n(settings.equityV35PreferredSpreadPct, 0.08);
+    if (spread <= preferred) score += 0.35;
+    else if (spread <= preferred * 2) score += 0.10;
+    else if (spread <= 0.50) score -= 0.30;
+    else score -= clamp((spread - 0.50) * 0.8, 0.3, 1.5);
+  }
+
   score = Number(clamp(score, 0, 10).toFixed(2));
-
-  const threshold = num(config.equityV35TapeScoreThreshold, 5.5);
-  if (score < threshold) return null;
-
   const stopLossPct = clamp(
-    Math.max(num(config.equityV35TapeStopPct, 0.45), latestRangePct * 1.25),
-    0.30,
-    1.50,
+    Math.max(n(settings.equityV35MinStopPct, 0.30), atr * n(settings.equityV35AtrStopMultiplier, 1.25)),
+    n(settings.equityV35MinStopPct, 0.30),
+    n(settings.equityV35MaxStopPct, 1.60),
   );
-  const estimatedRoundTripCostPct = 0.04;
-  const takeProfitPct = stopLossPct * num(config.equityV35TapeRewardRisk, 1.70) + estimatedRoundTripCostPct;
+  const cost = Math.max(0, n(settings.equityV35EstimatedRoundTripCostPct, 0.04)) + Math.max(0, n(spread, 0) * 0.25);
+  const takeProfitPct = Math.max(
+    stopLossPct * n(settings.equityV35RewardRisk, 1.75) + cost,
+    cost * 2.5,
+  );
 
-  const detail = {
-    version: 'V35',
-    playbook: 'TAPE_CANDLE_MOMENTUM',
+  return {
+    direction,
     score,
-    threshold,
-    ret1Pct: ret1,
-    ret3Pct: ret3,
-    ret5Pct: ret5,
-    alignedCloses,
-    bodyPct,
-    rangeRatio,
-    volumeRatio,
-    spreadPct: spread,
-    regimeDirection,
-    regimeAligned,
-    evidence: [
-      `tape ${direction} ${alignedCloses}/${changes.length} aligned closes`,
-      `move 1/3/5m ${ret1.toFixed(3)}/${ret3.toFixed(3)}/${ret5.toFixed(3)}%`,
-      `range x${rangeRatio.toFixed(2)} volume x${volumeRatio.toFixed(2)}`,
-    ],
+    price,
+    metrics: { r1, r3, r5, r15, r30, vr, spread, atr, vwapDistance, bodyPct, alignedCloses, regimeDirection, regimeAligned },
     exitPlan: {
-      stopLossPct,
-      takeProfitPct,
-      trailTriggerPct: stopLossPct * 0.9,
-      trailDistancePct: stopLossPct * 0.45,
-      trailFloorPct: Math.max(0.12, estimatedRoundTripCostPct + 0.05),
-      maxHoldMinutes: Math.max(5, num(config.equityV35TapeMaxHoldMinutes, 20)),
-      estimatedRoundTripCostPct,
+      stopLossPct: Number(stopLossPct.toFixed(4)),
+      takeProfitPct: Number(takeProfitPct.toFixed(4)),
+      estimatedRoundTripCostPct: Number(cost.toFixed(4)),
+      trailTriggerPct: Number((stopLossPct * n(settings.equityV35TrailTriggerR, 0.90)).toFixed(4)),
+      trailDistancePct: Number((stopLossPct * n(settings.equityV35TrailDistanceR, 0.45)).toFixed(4)),
+      trailFloorPct: Number(Math.max(n(settings.equityV35TrailFloorPct, 0.12), cost + 0.03).toFixed(4)),
+      maxHoldMinutes: Math.max(5, n(settings.equityV35MaxHoldMinutes, 35)),
     },
   };
+}
+
+export function evaluateEquityCandidateV35(args = {}) {
+  const settings = { ...EQUITY_V35_DEFAULTS, ...(args.config || {}) };
+  const asset = args.asset || {};
+  const symbol = String(asset?.symbol || '').toUpperCase();
+  const rows = cleanBars(args.bars || []);
+
+  if (!symbol) return { signal: null, reason: 'V35: missing symbol', diagnostics: { hardReject: true, reason: 'missing symbol' } };
+  if (asset?.tradable === false) return { signal: null, reason: 'V35: asset not tradable', diagnostics: { hardReject: true, reason: 'asset not tradable' } };
+  if (rows.length < n(settings.equityV35MinBars, 12)) {
+    return { signal: null, reason: `V35: insufficient market history (${rows.length})`, diagnostics: { hardReject: true, reason: 'insufficient history', bars: rows.length } };
+  }
+
+  const long = scoreDirection({ direction: 'LONG', asset, snapshot: args.snapshot, bars: rows, marketRegime: args.marketRegime, intelligence: args.intelligence, settings });
+  const short = scoreDirection({ direction: 'SHORT', asset, snapshot: args.snapshot, bars: rows, marketRegime: args.marketRegime, intelligence: args.intelligence, settings });
+  const choices = [long, short].filter(Boolean).sort((a, b) => b.score - a.score);
+  const best = choices[0];
+  const threshold = n(settings.equityV35ScoreThreshold, 5.8);
+
+  if (!best || best.score < threshold) {
+    return {
+      signal: null,
+      reason: 'V35: evidence below threshold',
+      score: best?.score ?? null,
+      diagnostics: { hardReject: false, reason: 'evidence below threshold', threshold, long, short },
+    };
+  }
+
+  const evidence = [
+    `${best.direction} tape 1/3/15/30m ${best.metrics.r1.toFixed(3)}/${best.metrics.r3.toFixed(3)}/${best.metrics.r15.toFixed(3)}/${best.metrics.r30.toFixed(3)}%`,
+    `aligned closes ${best.metrics.alignedCloses}/5 rel volume x${best.metrics.vr.toFixed(2)}`,
+    `regime ${best.metrics.regimeDirection} ${best.metrics.regimeAligned ? 'supporting' : 'counter'}`,
+    `VWAP distance ${best.metrics.vwapDistance.toFixed(3)}% spread ${Number.isFinite(best.metrics.spread) ? best.metrics.spread.toFixed(3) : 'n/a'}%`,
+  ];
 
   return {
     signal: {
       symbol,
       name: asset?.name || symbol,
       assetClass: 'us_equity',
-      direction,
-      score,
-      price,
-      strategy: 'EQUITY_V35_TAPE',
-      signal: detail,
-    },
-    diagnostics: {
-      eligible: true,
-      hardReject: false,
-      reason: null,
-      score,
-      threshold,
-      metrics: detail,
-    },
-    reason: null,
-    tapeLane: true,
-  };
-}
-
-export function evaluateEquityCandidateV35(args = {}) {
-  const config = { ...EQUITY_V35_DEFAULTS, ...(args.config || {}) };
-  const rawRegime = args.marketRegime || {};
-
-  // First evaluate direct candle/tape behavior. This is intentionally independent
-  // of legacy V34 soft filters.
-  const tape = evaluateTapeLane(args, config);
-  if (tape?.signal) return tape;
-
-  const marketRegime = normalizeEquityRegimeV35(rawRegime);
-  const threshold = num(config.equityV35ScoreThreshold, 6.5);
-  const base = evaluateEquityCandidateV34({
-    ...args,
-    marketRegime,
-    config: { ...(args.config || {}), equityV34ScoreThreshold: threshold },
-  });
-
-  if (!base?.signal) {
-    return { ...base, reason: base?.reason || 'V35: base scorer rejected candidate' };
-  }
-
-  const signal = base.signal;
-  const direction = String(signal.direction || '').toUpperCase();
-  const regimeDirection = String(rawRegime?.direction || '').toUpperCase();
-  const bars = Array.isArray(args.bars) ? args.bars : [];
-  const trend5 = returnPct(bars, 5);
-  const trend15 = returnPct(bars, 15);
-  const trend30 = returnPct(bars, 30);
-  const sign = direction === 'SHORT' ? -1 : 1;
-  const favored5 = trend5 * sign;
-  const favored15 = trend15 * sign;
-  const favored30 = trend30 * sign;
-  const regimeAligned = !['LONG', 'SHORT'].includes(regimeDirection) || direction === regimeDirection;
-  const trendAligned = favored15 >= num(config.equityV35MinTrend15Pct, 0.02) &&
-    favored30 >= num(config.equityV35MinTrend30Pct, 0.02) &&
-    favored5 >= -Math.abs(num(config.equityV35MaxCounterTrend5Pct, 0.05));
-
-  if (config.equityV35BlockNeutralRegime === true && !['LONG', 'SHORT'].includes(regimeDirection)) {
-    return { ...base, signal: null, reason: 'V35: neutral/uncertain market regime', score: signal.score };
-  }
-  if (config.equityV35RequireRegimeAlignment === true && !regimeAligned) {
-    return { ...base, signal: null, reason: `V35: ${direction} conflicts with ${regimeDirection} market regime`, score: signal.score };
-  }
-  if (config.equityV35RequireTrendAlignment === true && !trendAligned) {
-    return { ...base, signal: null, reason: 'V35: multi-horizon trend alignment requirement failed', score: signal.score };
-  }
-
-  return {
-    ...base,
-    signal: {
-      ...signal,
-      strategy: 'EQUITY_V35_EXPECTANCY',
+      direction: best.direction,
+      score: best.score,
+      price: best.price,
+      strategy: 'EQUITY_V35_STANDALONE',
       signal: {
-        ...(signal.signal || {}),
         version: 'V35',
-        regimeAligned,
-        trendAligned,
-        v35Trend: { trend5, trend15, trend30 },
-        evidence: [
-          ...(signal.signal?.evidence || []),
-          `V35 regime ${regimeDirection || 'UNKNOWN'} ${regimeAligned ? 'aligned' : 'counter'}`,
-          `V35 trend ${trend5.toFixed(4)}/${trend15.toFixed(4)}/${trend30.toFixed(4)}% ${trendAligned ? 'aligned' : 'mixed'}`,
-        ],
+        playbook: 'MARKET_EVIDENCE',
+        score: best.score,
+        threshold,
+        evidence,
+        metrics: best.metrics,
+        exitPlan: best.exitPlan,
       },
     },
+    diagnostics: { eligible: true, hardReject: false, reason: null, score: best.score, threshold, long, short },
     reason: null,
-    v35Trend: { trend5, trend15, trend30 },
   };
 }
