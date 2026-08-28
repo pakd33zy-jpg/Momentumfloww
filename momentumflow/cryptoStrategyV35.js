@@ -16,6 +16,11 @@ export const CRYPTO_V35_DEFAULTS = {
   cryptoV35MaxPositionFraction: 0.20,
   cryptoV35MaxTotalExposureFraction: 0.80,
   cryptoV35MaxConcurrentPositions: 8,
+
+  // V35 owns spread treatment. Width is evidence/cost, not an inherited V34 gate.
+  cryptoV35PreferredSpreadPct: 0.20,
+  cryptoV35SpreadPenaltyStartPct: 0.30,
+  cryptoV35SpreadPenaltyFullPct: 2.00,
 };
 
 const n = (v, fallback = NaN) => Number.isFinite(Number(v)) ? Number(v) : fallback;
@@ -34,6 +39,24 @@ function retPct(bars = [], lookback = 1) {
   return prior > 0 ? (last / prior - 1) * 100 : null;
 }
 
+function snapshotSpreadPct(snapshot = {}) {
+  const bid = n(snapshot?.latestQuote?.bp ?? snapshot?.bp);
+  const ask = n(snapshot?.latestQuote?.ap ?? snapshot?.ap);
+  if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
+  return (ask - bid) / ((ask + bid) / 2) * 100;
+}
+
+function spreadPenalty(spreadPct, c) {
+  if (!Number.isFinite(spreadPct)) return 0;
+  const preferred = Math.max(0, n(c.cryptoV35PreferredSpreadPct, 0.20));
+  const start = Math.max(preferred, n(c.cryptoV35SpreadPenaltyStartPct, 0.30));
+  const full = Math.max(start + 0.01, n(c.cryptoV35SpreadPenaltyFullPct, 2.00));
+  if (spreadPct <= preferred) return 0.30;
+  if (spreadPct <= start) return 0;
+  const t = clamp((spreadPct - start) / (full - start), 0, 1);
+  return -1.50 * t;
+}
+
 export function evaluateCryptoCandidateV35({
   asset,
   snapshot,
@@ -46,9 +69,11 @@ export function evaluateCryptoCandidateV35({
 }) {
   const c = { ...CRYPTO_V35_DEFAULTS, ...config };
   const symbol = String(asset?.symbol || '').toUpperCase();
+  const observedSpreadPct = snapshotSpreadPct(snapshot);
 
-  // Let V34 calculate its detailed technical/execution evidence, but do not let
-  // the old score threshold become an early kill switch. V35 owns qualification.
+  // Let V34 calculate its detailed technical evidence, but V35 owns both
+  // qualification and spread treatment. Disable only the inherited width gate;
+  // missing/invalid quote data can still remain a genuine data-quality blocker.
   const base = evaluateCryptoCandidateV34({
     asset,
     snapshot,
@@ -59,6 +84,7 @@ export function evaluateCryptoCandidateV35({
     config: {
       ...c,
       cryptoV34MinScore: 0,
+      cryptoV34MaxSpreadPct: 100,
       cryptoV34Symbols: [...new Set([...(c.cryptoV34Symbols || []), symbol])],
     },
   });
@@ -92,14 +118,18 @@ export function evaluateCryptoCandidateV35({
   if (relative6h > 0.5) contextScore += 0.20;
   else if (relative6h < -0.75) contextScore -= 0.20;
 
+  const spreadEvidenceScore = spreadPenalty(observedSpreadPct, c);
   const baseScore = n(base.signal.score, 0);
-  const score = Number(clamp(baseScore + contextScore, 0, 10).toFixed(2));
+  const score = Number(clamp(baseScore + contextScore + spreadEvidenceScore, 0, 10).toFixed(2));
   const threshold = n(c.cryptoV35MinScore, 5.5);
 
   const evidence = [
     ...(base.signal?.signal?.intelligenceReasons || []),
     `BTC 24h ${btc24h.toFixed(3)}% / 6h ${btc6h.toFixed(3)}%`,
     `relative 24h ${relative24h.toFixed(3)}% / 6h ${relative6h.toFixed(3)}%`,
+    Number.isFinite(observedSpreadPct)
+      ? `spread ${observedSpreadPct.toFixed(3)}% evidence ${spreadEvidenceScore.toFixed(2)}`
+      : 'spread unavailable',
   ];
 
   if (score < threshold) {
@@ -116,6 +146,8 @@ export function evaluateCryptoCandidateV35({
           ...metrics,
           baseScore,
           contextScore,
+          spreadEvidenceScore,
+          observedSpreadPct,
           btc24hPct: btc24h,
           btc6hPct: btc6h,
           relative24hPct: relative24h,
@@ -138,6 +170,8 @@ export function evaluateCryptoCandidateV35({
         version: 'V35',
         baseScore,
         contextScore,
+        spreadEvidenceScore,
+        observedSpreadPct,
         btc24hPct: btc24h,
         btc6hPct: btc6h,
         relative24hPct: relative24h,
@@ -154,6 +188,8 @@ export function evaluateCryptoCandidateV35({
         ...metrics,
         baseScore,
         contextScore,
+        spreadEvidenceScore,
+        observedSpreadPct,
         btc24hPct: btc24h,
         btc6hPct: btc6h,
         relative24hPct: relative24h,
@@ -186,7 +222,8 @@ export function buildCryptoV35Budget({
   if (!(usableRiskDollars > 0)) return 0;
 
   const costPct = Math.max(0, n(signal?.signal?.exitPlan?.estimatedRoundTripCostPct, 0.50));
-  const riskSizedNotional = usableRiskDollars / ((stopPct + costPct) / 100);
+  const observedSpreadPct = Math.max(0, n(signal?.signal?.observedSpreadPct, 0));
+  const riskSizedNotional = usableRiskDollars / ((stopPct + costPct + observedSpreadPct) / 100);
   const symbolCap = equity * n(c.cryptoV35MaxPositionFraction, 0.20);
   const exposureRoom = Math.max(
     0,
