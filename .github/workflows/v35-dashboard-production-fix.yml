@@ -1,0 +1,81 @@
+name: Fix V35 production dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/v35-dashboard-production-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Retire legacy unified-bot diagnostics from V35 dashboard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('momentumflow/frontend/src/pages/Dashboard.jsx')
+          s = p.read_text(encoding='utf-8')
+
+          s = s.replace('UNIFIED BOT UI v13', 'MOMENTUMFLOW V35')
+
+          old_scan = """        <div style={{marginTop:'10px',fontSize:'12px',color:'#94a3b8'}}>
+          <b>ACTIVE SCAN NOW:</b>{' '}
+          {Number(bot?.activeScanCounts?.equities || 0)} equities /{' '}
+          {Number(bot?.activeScanCounts?.crypto || 0)} crypto
+          {' · '}
+          <b>STORED UNIVERSE:</b>{' '}
+          {Number(bot?.universe?.total || bot?.universeSize || 0)} assets
+        </div>
+"""
+          new_scan = """        <div style={{marginTop:'10px',fontSize:'12px',color:'#94a3b8',lineHeight:1.5}}>
+          <b>V35 MARKET ENGINES:</b>{' '}
+          Equity V35 and Crypto V35 run independently. The old unified V33/V20 scan counter is retired and is not V35 telemetry.
+        </div>
+"""
+          if old_scan not in s:
+              raise SystemExit('active-scan block not found; refusing unsafe patch')
+          s = s.replace(old_scan, new_scan, 1)
+
+          # The backend's legacy live-bot lastDecision can still contain V33/V20
+          # rejection text. Do not present it as current V35 state.
+          old_decision = """        {bot?.lastDecision && (
+"""
+          if old_decision not in s:
+              raise SystemExit('lastDecision block not found; refusing unsafe patch')
+          s = s.replace(old_decision, """        {bot?.lastDecision &&
+          !/\\bV(?:19|20|33|34)\\b/i.test(String(bot.lastDecision)) && (
+""", 1)
+
+          s = s.replace('SAME STRATEGY — PAPER & LIVE', 'V35 ENGINE STATUS')
+          s = s.replace('PAPER = real Alpaca\n            market data + real\n            strategy + Alpaca paper\n            orders.', 'V35 equity and crypto are separate strategy engines. The current V35 validators use live market data with PAPER/shadow execution.')
+          s = s.replace('LIVE = the same scanner,\n            signals, entries, exits and\n            risk rules using the Alpaca\n            live account.', 'The legacy unified V33/V20 scanner is not the V35 engine and its old rejection counts are not shown here.')
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Build frontend
+        working-directory: momentumflow/frontend
+        run: npm ci && npm run build
+
+      - name: Commit dashboard fix
+        run: |
+          if git diff --quiet -- momentumflow/frontend/src/pages/Dashboard.jsx; then
+            echo "Dashboard already patched."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add momentumflow/frontend/src/pages/Dashboard.jsx
+          git commit -m "Production dashboard: retire legacy V33 scan display"
+          git push origin HEAD:main
