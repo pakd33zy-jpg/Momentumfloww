@@ -4,7 +4,6 @@ import LiveGateChecklist from '../components/LiveGateChecklist.jsx';
 import TradingModeToggle from '../components/TradingModeToggle.jsx';
 import TradingConfigPanel from '../components/TradingConfigPanel.jsx';
 import { api } from '../lib/api.js';
-import RejectionLogPanel from '../components/RejectionLogPanel.jsx';
 import FastScalpToggle from '../components/FastScalpToggle.jsx';
 import EquityV20Panel from '../components/EquityV20Panel.jsx';
 import StrategyPerformancePanel from '../components/StrategyPerformancePanel.jsx';
@@ -15,8 +14,6 @@ const EMPTY_CREDS = {
 };
 
 export default function Settings() {
-  // Keep credential forms mounted even when the credential-status GET request
-  // fails. This lets the user enter/replace keys instead of hiding the inputs.
   const [creds, setCreds] = useState(EMPTY_CREDS);
   const [gate, setGate] = useState(null);
   const [tradingMode, setTradingMode] = useState(null);
@@ -98,7 +95,7 @@ export default function Settings() {
 
   return (
     <div style={page}>
-      <div style={versionLabel}>MOMENTUMFLOW SETTINGS v20</div>
+      <div style={versionLabel}>MOMENTUMFLOW SETTINGS V35</div>
 
       {errors.length > 0 && (
         <div style={warningCard}>
@@ -187,27 +184,27 @@ export default function Settings() {
         <TradingConfigPanel />
       </section>
 
-           <section>
-      <h2 style={h2}>Fast Scalp</h2>
-      <FastScalpToggle />
-    </section>
+      <section>
+        <h2 style={h2}>Fast Scalp</h2>
+        <FastScalpToggle />
+      </section>
 
-    <section>
-      <h2 style={h2}>Equity v20 Adaptive</h2>
-      <EquityV20Panel />
-    </section>
+      <section>
+        <h2 style={h2}>V35 Market Engines</h2>
+        <EquityV20Panel />
+      </section>
 
-    <section>
-        <h2 style={h2}>
-          Strategy Analysis
-        </h2>
-
+      <section>
+        <h2 style={h2}>Historical Strategy Analysis</h2>
         <StrategyPerformancePanel />
         <div style={{ height: 10 }} />
         <PaperForwardSessionPanel />
-        <div style={{ height: 10 }} />
-        <RejectionLogPanel />
-      </section> <section>
+        <div style={legacyNotice}>
+          Legacy unified rejection diagnostics are hidden here because they can contain V20/V33/V34 data and do not represent the isolated V35 shadow engines.
+        </div>
+      </section>
+
+      <section>
         <h2 style={h2}>Safety behavior</h2>
         <div style={card}>
           <SafetyRow>Daily loss halt uses your saved Daily Loss Halt setting.</SafetyRow>
@@ -294,6 +291,14 @@ const warningCard = {
   ...card,
   color: '#fbbf24',
   fontSize: 12,
+  lineHeight: 1.45,
+};
+
+const legacyNotice = {
+  ...card,
+  marginTop: 10,
+  color: '#93c5fd',
+  fontSize: 11,
   lineHeight: 1.45,
 };
 
