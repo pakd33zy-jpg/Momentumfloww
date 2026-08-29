@@ -1,7 +1,9 @@
 import fs from "fs";
 const t = fs.readFileSync(new URL("./liveBot.js", import.meta.url), "utf8");
 const ok = (v,m) => { if (!v) throw new Error(m); };
-ok(t.includes("adaptiveLiquidityStrongDollarVolume: 1000000"), "adaptive equity floor missing");
+ok(t.includes("minDailyDollarVolume: 2000000"), "V34 base equity liquidity floor missing");
+ok(t.includes("adaptiveLiquidityMediumDollarVolume: 1000000"), "V34 medium equity liquidity floor missing");
+ok(t.includes("adaptiveLiquidityStrongDollarVolume: 500000"), "V34 strong equity liquidity floor missing");
 ok(t.includes("function adaptiveLiquidityThreshold("), "adaptive liquidity helper missing");
 ok(t.includes("function adaptiveCryptoPrefilterMomentum("), "crypto adaptive prefilter missing");
 ok(t.includes("maxRiskFraction: 0.005"), "risk cap changed");

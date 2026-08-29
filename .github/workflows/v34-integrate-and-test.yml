@@ -1,0 +1,51 @@
+name: Validate V34
+
+on:
+  push:
+    branches:
+      - v34-risk-model
+    paths:
+      - ".github/workflows/v34-integrate-and-test.yml"
+      - "momentumflow/liveBot.js"
+      - "momentumflow/alpacaClient.js"
+      - "momentumflow/cryptoStrategyV34.js"
+      - "momentumflow/cryptoStrategyV34.test.js"
+      - "momentumflow/marketIntelligenceV34.js"
+      - "momentumflow/marketIntelligenceV34.test.js"
+      - "momentumflow/v34Replay.js"
+      - "momentumflow/frontend/src/components/RejectionLogPanel.jsx"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout V34 branch
+        uses: actions/checkout@v4
+        with:
+          ref: v34-risk-model
+          fetch-depth: 0
+
+      - name: Install backend dependencies
+        working-directory: momentumflow
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax checks
+        working-directory: momentumflow
+        run: |
+          node --check liveBot.js
+          node --check alpacaClient.js
+          node --check cryptoStrategyV34.js
+          node --check marketIntelligenceV34.js
+          node --check v34Replay.js
+
+      - name: Run focused V34 tests
+        working-directory: momentumflow
+        run: node --test cryptoStrategyV34.test.js marketIntelligenceV34.test.js
+
+      - name: Run full backend test suite
+        working-directory: momentumflow
+        run: npm test

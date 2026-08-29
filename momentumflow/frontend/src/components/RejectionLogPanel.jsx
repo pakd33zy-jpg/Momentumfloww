@@ -50,11 +50,15 @@ function summarize(entries) {
         reason: miss?.reason || 'unknown',
         assetClass: miss?.assetClass || 'unknown',
         count: 0,
-        bestScore: 0,
+        bestScore: null,
         symbols: new Set(),
       };
       current.count += 1;
-      current.bestScore = Math.max(current.bestScore, Number(miss?.score || 0));
+      if (miss?.score != null && Number.isFinite(Number(miss.score))) {
+        current.bestScore = current.bestScore == null
+          ? Number(miss.score)
+          : Math.max(current.bestScore, Number(miss.score));
+      }
       if (miss?.symbol) current.symbols.add(miss.symbol);
       near.set(key, current);
     }
@@ -70,7 +74,7 @@ function summarize(entries) {
       .sort((a, b) => b.count - a.count)
       .slice(0, 8),
     near: [...near.values()]
-      .sort((a, b) => b.bestScore - a.bestScore || b.count - a.count)
+      .sort((a, b) => Number(b.bestScore ?? -1) - Number(a.bestScore ?? -1) || b.count - a.count)
       .slice(0, 8)
       .map((row) => ({ ...row, symbols: [...row.symbols].slice(0, 5) })),
   };
@@ -115,9 +119,9 @@ export default function RejectionLogPanel() {
     <div style={panel}>
       <div style={header}>
         <div>
-          <strong style={title}>Strategy Rejection Log</strong>
+          <strong style={title}>Strategy Diagnostics</strong>
           <div style={subtitle}>
-            Shows what blocks setups most often. Diagnostic only; strategy thresholds are unchanged.
+            Aggregated rejection counts from recent scans. Counts are rejection events, not unique symbols.
           </div>
         </div>
 
@@ -146,7 +150,7 @@ export default function RejectionLogPanel() {
             <div style={analysisCard}>
               <strong>Top blockers across recent scans</strong>
               <div style={helper}>
-                High counts show where candidates are being removed most often.
+                Repeated scans can reject the same symbol more than once; these are event counts, not unique stocks.
               </div>
               {summary.blockers.map((item) => (
                 <div key={`${item.source}:${item.reason}`} style={analysisRow}>
@@ -165,7 +169,7 @@ export default function RejectionLogPanel() {
               {summary.near.map((item) => (
                 <div key={`${item.assetClass}:${item.reason}`} style={nearSummaryRow}>
                   <div>
-                    <strong>{item.bestScore}/10</strong> · {item.reason}
+                    <strong>{item.bestScore == null ? 'N/A' : `${item.bestScore}/10`}</strong> · {item.reason}
                     {!!item.symbols.length && (
                       <div style={symbols}>{item.symbols.join(', ')}</div>
                     )}
@@ -178,8 +182,8 @@ export default function RejectionLogPanel() {
           </div>
 
           <div style={liquidityNote}>
-            Liquidity-gate rejects represented in these snapshots: <strong>{summary.liquidityRejects}</strong>.
-            The scanner now uses a completed daily bar for the $5M gate.
+            Recent liquidity-gate rejection events: <strong>{summary.liquidityRejects}</strong>.
+            The backend now uses adaptive liquidity thresholds rather than a fixed $5M gate.
           </div>
         </>
       )}
@@ -195,51 +199,29 @@ export default function RejectionLogPanel() {
         const strategyCrypto = entry?.top_strategy_rejections?.crypto?.[0];
         const prefilterEquity = entry?.top_prefilter_rejections?.equities?.[0];
         const prefilterCrypto = entry?.top_prefilter_rejections?.crypto?.[0];
-        const top =
-          strategyEquity ||
-          strategyCrypto ||
-          prefilterEquity ||
-          prefilterCrypto;
+        const top = strategyEquity || strategyCrypto || prefilterEquity || prefilterCrypto;
         const near = entry?.near_misses?.[0];
 
         return (
           <div key={entry.id} style={row}>
-            <div style={time}>
-              {new Date(entry.timestamp).toLocaleString()}
-            </div>
-
+            <div style={time}>{new Date(entry.timestamp).toLocaleString()}</div>
             <div>
               <strong>{String(entry.mode || '').toUpperCase()}</strong>
-              {' · '}
-              Qualified setups: {entry.qualified ?? 0}
+              {' · '}Qualified setups: {entry.qualified ?? 0}
             </div>
-
             <div style={reject}>
-              Top reject:{' '}
-              <strong>
-                {top ? `${top.reason} (${top.count})` : 'None'}
-              </strong>
+              Top reject: <strong>{top ? `${top.reason} (${top.count})` : 'None'}</strong>
             </div>
-
             {entry?.liquidity_gate?.samples?.length > 0 && (
               <div style={liquiditySamples}>
-                Liquidity samples:{' '}
-                {entry.liquidity_gate.samples
-                  .slice(0, 3)
-                  .map((x) =>
-                    `${x.symbol} prev $${Number(x.completedDayDollarVolume || 0).toLocaleString()}`
-                  )
-                  .join(' · ')}
+                Liquidity samples: {entry.liquidity_gate.samples.slice(0, 3).map((x) =>
+                  `${x.symbol} prev $${Number(x.completedDayDollarVolume || 0).toLocaleString()}`
+                ).join(' · ')}
               </div>
             )}
-
             {near && (
               <div style={nearMiss}>
-                Near miss: {near.symbol}
-                {' · '}
-                score {near.score}/10
-                {' · '}
-                {near.reason}
+                Near miss: {near.symbol} · score {near.score == null ? 'N/A' : `${near.score}/10`} · {near.reason}
               </div>
             )}
           </div>
@@ -258,159 +240,27 @@ function Metric({ label, value }) {
   );
 }
 
-const panel = {
-  background: 'var(--bg-raised)',
-  border: '1px solid var(--line)',
-  borderRadius: 10,
-  padding: 14,
-};
-
-const header = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 10,
-  flexWrap: 'wrap',
-  marginBottom: 12,
-};
-
+const panel = { background: 'var(--bg-raised)', border: '1px solid var(--line)', borderRadius: 10, padding: 14 };
+const header = { display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 12 };
 const title = { color: '#4ade80' };
-
-const subtitle = {
-  color: '#94a3b8',
-  fontSize: 11,
-  marginTop: 4,
-  maxWidth: 720,
-};
-
-const button = {
-  background: '#1e293b',
-  color: '#fff',
-  border: '1px solid #475569',
-  borderRadius: 7,
-  padding: '7px 10px',
-  cursor: 'pointer',
-};
-
-const clearButton = {
-  ...button,
-  marginLeft: 6,
-  color: '#f87171',
-};
-
-const summaryGrid = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-  gap: 8,
-  marginBottom: 10,
-};
-
-const metric = {
-  background: '#0f172a',
-  border: '1px solid #334155',
-  borderRadius: 8,
-  padding: 10,
-};
-
-const metricLabel = {
-  color: '#94a3b8',
-  fontSize: 10,
-};
-
-const metricValue = {
-  display: 'block',
-  marginTop: 3,
-  fontSize: 16,
-  color: '#e2e8f0',
-};
-
-const analysisGrid = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-  gap: 10,
-  marginBottom: 10,
-};
-
-const analysisCard = {
-  background: '#0b1220',
-  border: '1px solid #334155',
-  borderRadius: 8,
-  padding: 10,
-  color: '#cbd5e1',
-  fontSize: 11,
-};
-
-const helper = {
-  color: '#64748b',
-  fontSize: 10,
-  margin: '3px 0 7px',
-};
-
-const analysisRow = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 10,
-  padding: '5px 0',
-  borderTop: '1px solid rgba(255,255,255,0.04)',
-};
-
-const nearSummaryRow = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 10,
-  padding: '6px 0',
-  borderTop: '1px solid rgba(255,255,255,0.04)',
-};
-
-const symbols = {
-  color: '#94a3b8',
-  fontSize: 10,
-  marginTop: 2,
-};
-
-const liquidityNote = {
-  background: '#0f172a',
-  border: '1px solid #334155',
-  borderRadius: 8,
-  padding: 9,
-  marginBottom: 10,
-  color: '#93c5fd',
-  fontSize: 10,
-  lineHeight: 1.45,
-};
-
-const row = {
-  background: '#0f172a',
-  border: '1px solid #334155',
-  borderRadius: 8,
-  padding: 10,
-  marginTop: 8,
-  fontSize: 11,
-  color: '#cbd5e1',
-};
-
-const time = {
-  color: '#94a3b8',
-  marginBottom: 5,
-};
-
+const subtitle = { color: '#94a3b8', fontSize: 11, marginTop: 4, maxWidth: 720 };
+const button = { background: '#1e293b', color: '#fff', border: '1px solid #475569', borderRadius: 7, padding: '7px 10px', cursor: 'pointer' };
+const clearButton = { ...button, marginLeft: 6, color: '#f87171' };
+const summaryGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginBottom: 10 };
+const metric = { background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: 10 };
+const metricLabel = { color: '#94a3b8', fontSize: 10 };
+const metricValue = { display: 'block', marginTop: 3, fontSize: 16, color: '#e2e8f0' };
+const analysisGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10, marginBottom: 10 };
+const analysisCard = { background: '#0b1220', border: '1px solid #334155', borderRadius: 8, padding: 10, color: '#cbd5e1', fontSize: 11 };
+const helper = { color: '#64748b', fontSize: 10, margin: '3px 0 7px' };
+const analysisRow = { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', borderTop: '1px solid rgba(255,255,255,0.04)' };
+const nearSummaryRow = { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderTop: '1px solid rgba(255,255,255,0.04)' };
+const symbols = { color: '#94a3b8', fontSize: 10, marginTop: 2 };
+const liquidityNote = { background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: 9, marginBottom: 10, color: '#93c5fd', fontSize: 10, lineHeight: 1.45 };
+const row = { background: '#0f172a', border: '1px solid #334155', borderRadius: 8, padding: 10, marginTop: 8, fontSize: 11, color: '#cbd5e1' };
+const time = { color: '#94a3b8', marginBottom: 5 };
 const reject = { marginTop: 5 };
-
-const nearMiss = {
-  marginTop: 5,
-  color: '#fbbf24',
-};
-
-const liquiditySamples = {
-  marginTop: 5,
-  color: '#93c5fd',
-};
-
-const empty = {
-  color: '#94a3b8',
-  padding: 10,
-};
-
-const errorStyle = {
-  color: '#f87171',
-  padding: 10,
-};
+const nearMiss = { marginTop: 5, color: '#fbbf24' };
+const liquiditySamples = { marginTop: 5, color: '#93c5fd' };
+const empty = { color: '#94a3b8', padding: 10 };
+const errorStyle = { color: '#f87171', padding: 10 };

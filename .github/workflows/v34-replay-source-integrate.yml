@@ -1,0 +1,49 @@
+name: Integrate V34 replay data source
+
+on:
+  push:
+    branches:
+      - v34-risk-model
+    paths:
+      - ".github/workflows/v34-replay-source-integrate.yml"
+      - "momentumflow/patch_v34_replay_remote.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout V34 branch
+        uses: actions/checkout@v4
+        with:
+          ref: v34-risk-model
+          fetch-depth: 0
+
+      - name: Patch replay to protected research export
+        run: python momentumflow/patch_v34_replay_remote.py
+
+      - name: Install dependencies
+        working-directory: momentumflow
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate replay syntax and V34 suite
+        working-directory: momentumflow
+        run: |
+          node --check v34Replay.js
+          node --test cryptoStrategyV34.test.js marketIntelligenceV34.test.js
+          npm test
+
+      - name: Commit patch after validation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add momentumflow/v34Replay.js
+          if git diff --cached --quiet; then
+            echo "No replay patch to commit"
+          else
+            git commit -m "Use protected research export for V34 replay"
+            git push origin HEAD:v34-risk-model
+          fi
