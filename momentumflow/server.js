@@ -26,7 +26,39 @@ function resetToPaperModeOnBoot() {
   console.log('[boot] Live Gate consents reset and trading mode forced to paper.');
   console.log(`[boot] LIVE_TRADING_ENABLED=${String(process.env.LIVE_TRADING_ENABLED).toLowerCase() === 'true'}`);
 }
+
+function migrateV35RuntimeConfigOnBoot() {
+  const bot = store.getConfig('liveBotConfig', {});
+  if (bot.v35RuntimeMigrated !== true) {
+    store.setConfig('liveBotConfig', {
+      ...bot,
+      maxOpenPositions: 8,
+      maxEquityPositions: 8,
+      v35RuntimeMigrated: true,
+    });
+  }
+
+  const strategy = store.getConfig('strategyConfig', {});
+  store.setConfig('strategyConfig', {
+    ...strategy,
+    cryptoV35Enabled: strategy.cryptoV35Enabled !== false,
+    equityV35Enabled: strategy.equityV35Enabled !== false,
+    cryptoV35MaxConcurrentPositions: 8,
+  });
+
+  const trading = store.getConfig('tradingConfig', {});
+  if (trading.equityFocusMode === true) {
+    store.setConfig('tradingConfig', {
+      ...trading,
+      equityFocusMode: false,
+    });
+  }
+
+  console.log('[boot] V35 runtime active: independent equity/crypto engines; crypto max concurrent positions=8.');
+}
+
 resetToPaperModeOnBoot();
+migrateV35RuntimeConfigOnBoot();
 startFastScalpMonitor();
 startEquityFastScalpMonitor();
 
