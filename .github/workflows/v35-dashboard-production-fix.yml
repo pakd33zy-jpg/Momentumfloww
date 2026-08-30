@@ -43,23 +43,34 @@ jobs:
           Equity V35 and Crypto V35 run independently. The old unified V33/V20 scan counter is retired and is not V35 telemetry.
         </div>
 """
-          if old_scan not in s:
-              raise SystemExit('active-scan block not found; refusing unsafe patch')
-          s = s.replace(old_scan, new_scan, 1)
+          if old_scan in s:
+              s = s.replace(old_scan, new_scan, 1)
 
-          # The backend's legacy live-bot lastDecision can still contain V33/V20
-          # rejection text. Do not present it as current V35 state.
           old_decision = """        {bot?.lastDecision && (
 """
-          if old_decision not in s:
-              raise SystemExit('lastDecision block not found; refusing unsafe patch')
-          s = s.replace(old_decision, """        {bot?.lastDecision &&
+          if old_decision in s:
+              s = s.replace(old_decision, """        {bot?.lastDecision &&
           !/\\bV(?:19|20|33|34)\\b/i.test(String(bot.lastDecision)) && (
 """, 1)
 
-          s = s.replace('SAME STRATEGY — PAPER & LIVE', 'V35 ENGINE STATUS')
-          s = s.replace('PAPER = real Alpaca\n            market data + real\n            strategy + Alpaca paper\n            orders.', 'V35 equity and crypto are separate strategy engines. The current V35 validators use live market data with PAPER/shadow execution.')
-          s = s.replace('LIVE = the same scanner,\n            signals, entries, exits and\n            risk rules using the Alpaca\n            live account.', 'The legacy unified V33/V20 scanner is not the V35 engine and its old rejection counts are not shown here.')
+          s = s.replace('SAME STRATEGY — PAPER & LIVE', 'SEPARATE V35 ENGINES — PAPER/LIVE PARITY')
+          s = s.replace('V35 ENGINE STATUS', 'SEPARATE V35 ENGINES — PAPER/LIVE PARITY')
+
+          old_paper = """PAPER = real Alpaca
+            market data + real
+            strategy + Alpaca paper
+            orders."""
+          old_live = """LIVE = the same scanner,
+            signals, entries, exits and
+            risk rules using the Alpaca
+            live account."""
+          s = s.replace(old_paper, 'Equity V35 and Crypto V35 are separate strategy engines. They run independently.')
+          s = s.replace(old_live, 'For each engine, PAPER and LIVE use the same decision logic; only the account/execution destination changes.')
+
+          old_v35_paper = 'V35 equity and crypto are separate strategy engines. The current V35 validators use live market data with PAPER/shadow execution.'
+          old_v35_live = 'The legacy unified V33/V20 scanner is not the V35 engine and its old rejection counts are not shown here.'
+          s = s.replace(old_v35_paper, 'Equity V35 and Crypto V35 are separate strategy engines. They run independently.')
+          s = s.replace(old_v35_live, 'For each engine, PAPER and LIVE use the same decision logic; only the account/execution destination changes.')
 
           p.write_text(s, encoding='utf-8')
           PY
@@ -77,5 +88,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add momentumflow/frontend/src/pages/Dashboard.jsx
-          git commit -m "Production dashboard: retire legacy V33 scan display"
+          git commit -m "Production dashboard: clarify separate V35 engines"
           git push origin HEAD:main
