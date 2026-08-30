@@ -5,6 +5,15 @@ import { getAccountSummary, getCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 
+// Credential status changes immediately after a save/remove. Never let a browser
+// or intermediary reuse an old configured/connection response.
+router.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 // GET /api/credentials — returns masked/configured status only, never plaintext secrets
 router.get('/', (req, res) => {
   const saved = store.getConfig('credentials', {});
@@ -25,7 +34,7 @@ router.get('/', (req, res) => {
 });
 
 // GET /api/credentials/accounts — verifies Alpaca and returns current account values.
-// The frontend polls this endpoint so LIVE dashboard values mirror Alpaca.
+// The frontend polls this endpoint so dashboard values mirror Alpaca.
 router.get('/accounts', async (req, res) => {
   const result = {};
   for (const mode of ['paper', 'live']) {
@@ -43,25 +52,56 @@ router.get('/accounts', async (req, res) => {
 });
 
 // POST /api/credentials — body: { mode: 'paper'|'live', keyId, secretKey }
-router.post('/', (req, res) => {
+// Save first, then immediately verify against Alpaca so the UI can distinguish
+// "saved" from "saved but Alpaca rejected the pair" instead of appearing broken.
+router.post('/', async (req, res) => {
   const { mode, keyId, secretKey } = req.body || {};
   if (!['paper', 'live'].includes(mode)) {
     return res.status(400).json({ error: "mode must be 'paper' or 'live'" });
   }
-  if (!keyId || !secretKey) {
+
+  const cleanKeyId = String(keyId || '').trim();
+  const cleanSecretKey = String(secretKey || '').trim();
+  if (!cleanKeyId || !cleanSecretKey) {
     return res.status(400).json({ error: 'keyId and secretKey are required' });
   }
 
   try {
     const creds = store.getConfig('credentials', {});
     creds[mode] = {
-      keyIdEnc: encrypt(keyId),
-      secretKeyEnc: encrypt(secretKey),
-      keyIdMasked: maskSecret(keyId),
+      keyIdEnc: encrypt(cleanKeyId),
+      secretKeyEnc: encrypt(cleanSecretKey),
+      keyIdMasked: maskSecret(cleanKeyId),
       savedAt: new Date().toISOString(),
     };
     store.setConfig('credentials', creds);
-    res.json({ mode, configured: true, keyIdMasked: creds[mode].keyIdMasked });
+
+    try {
+      const account = await getAccountSummary(mode);
+      return res.json({
+        mode,
+        configured: true,
+        verified: account?.connected === true,
+        connected: account?.connected === true,
+        keyIdMasked: creds[mode].keyIdMasked,
+        savedAt: creds[mode].savedAt,
+        account: {
+          connected: account?.connected === true,
+          equity: account?.equity ?? null,
+          status: account?.status ?? null,
+        },
+      });
+    } catch (verifyErr) {
+      return res.json({
+        mode,
+        configured: true,
+        verified: false,
+        connected: false,
+        keyIdMasked: creds[mode].keyIdMasked,
+        savedAt: creds[mode].savedAt,
+        verificationError: verifyErr?.message || 'Alpaca rejected the saved credentials.',
+      });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
