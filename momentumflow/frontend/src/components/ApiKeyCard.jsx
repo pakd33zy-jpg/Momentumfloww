@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../lib/api.js';
 
-// API KEY CARD v14
+// API KEY CARD v15
 // Inputs are always rendered and editable unless a save/remove request is active.
 // Existing secret keys are never loaded back into the browser.
 
@@ -33,13 +33,30 @@ export default function ApiKeyCard({
 
     setBusy(true);
     setError('');
-    setStatus('Saving…');
+    setStatus('Saving and checking with Alpaca…');
 
     try {
-      await api.saveCredentials(mode, cleanKeyId, cleanSecret);
-      setKeyId('');
-      setSecretKey('');
-      setStatus('Saved ✓');
+      const result = await api.saveCredentials(mode, cleanKeyId, cleanSecret);
+
+      // The backend stores the pair before verification. Keep the fields only
+      // when Alpaca rejects it so the user can correct a typo without retyping
+      // everything; clear them after a verified connection.
+      if (result?.verified === true || result?.connected === true) {
+        setKeyId('');
+        setSecretKey('');
+        setStatus('Saved and connected ✓');
+      } else if (result?.configured === true) {
+        setStatus('Saved');
+        setError(
+          result?.verificationError
+            ? `Saved, but Alpaca did not accept the pair: ${result.verificationError}`
+            : 'Saved, but Alpaca connection could not be verified yet.'
+        );
+      } else {
+        setStatus('');
+        setError('The server did not confirm that the credentials were saved.');
+      }
+
       await onSaved?.();
     } catch (err) {
       setStatus('');
@@ -78,6 +95,8 @@ export default function ApiKeyCard({
     setError('');
     setStatus('');
   }
+
+  const statusIsGood = status === 'Saved and connected ✓';
 
   return (
     <div style={card}>
@@ -181,7 +200,7 @@ export default function ApiKeyCard({
             style={{
               fontSize: 12,
               fontWeight: 600,
-              color: status === 'Saved ✓' ? '#4ade80' : '#fbbf24',
+              color: statusIsGood ? '#4ade80' : '#fbbf24',
             }}
           >
             {status}
