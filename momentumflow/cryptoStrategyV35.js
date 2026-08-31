@@ -242,14 +242,17 @@ export function evaluateCryptoCandidateV35({
     `${trigger} volume x${vr.toFixed(2)} spread ${Number.isFinite(spread) ? spread.toFixed(3) : 'n/a'}%`,
   ];
 
-  if (score < threshold) {
+  if (trigger === 'NO_CLEAN_TRIGGER' || score < threshold) {
+    const reason = trigger === 'NO_CLEAN_TRIGGER'
+      ? 'V35: no clean 15m trigger'
+      : 'V35: combined crypto evidence below threshold';
     return {
       signal: null,
-      reason: 'V35: combined crypto evidence below threshold',
+      reason,
       diagnostics: {
         eligible: false,
         hardReject: false,
-        reason: 'V35: combined crypto evidence below threshold',
+        reason,
         score,
         threshold,
         metrics: { ret1hPct: ret1h, ret3hPct: ret3h, ret6hPct: ret6h, ret24hPct: ret24h, ret7dPct: ret7d, ret20dPct: ret20d, btc6hPct: btc6h, btc24hPct: btc24h, relative6hPct: relative6h, relative24hPct: relative24h, volumeRatio: vr, spreadPct: spread, atrPct: atr, trigger, evidence },
