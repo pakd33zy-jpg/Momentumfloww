@@ -203,12 +203,12 @@ function closePosition(symbol, exit, reason, now) {
 
 function checkExit(symbol, snapshot, now) {
   const p = positions.get(symbol);
-  if (!p) return;
+  if (!p) return false;
   const bar = snapshot?.minuteBar || {};
   const latest = n(snapshot?.latestTrade?.p ?? bar?.c);
   const high = n(bar?.h, latest);
   const low = n(bar?.l, latest);
-  if (!(latest > 0)) return;
+  if (!(latest > 0)) return false;
   lastPrices.set(symbol, latest);
 
   let exit = null;
@@ -228,7 +228,8 @@ function checkExit(symbol, snapshot, now) {
     exit = latest;
     reason = 'MAX_HOLD';
   }
-  if (exit) closePosition(symbol, exit, reason, now);
+  if (exit) return closePosition(symbol, exit, reason, now);
+  return false;
 }
 
 function enter(signal, now) {
@@ -312,12 +313,13 @@ async function scanOnce() {
   const snapshots = await getStockSnapshots('live', batchSymbols, { feed: 'iex' });
   scanCount += 1;
 
+  const exitedThisScan = new Set();
   for (const symbol of [...positions.keys()]) {
-    if (snapshots[symbol]) checkExit(symbol, snapshots[symbol], now);
+    if (snapshots[symbol] && checkExit(symbol, snapshots[symbol], now)) exitedThisScan.add(symbol);
   }
 
   const ranked = batchSymbols
-    .filter((symbol) => !positions.has(symbol) && snapshots[symbol])
+    .filter((symbol) => !positions.has(symbol) && !exitedThisScan.has(symbol) && snapshots[symbol])
     .map((symbol) => ({ symbol, score: snapshotScore(snapshots[symbol]) }))
     .filter((x) => Number.isFinite(x.score))
     .sort((a, b) => b.score - a.score);
