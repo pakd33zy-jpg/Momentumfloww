@@ -1,0 +1,39 @@
+name: V36 Research Validation
+
+on:
+  push:
+    branches: [v36-research]
+    paths:
+      - 'momentumflow/equityStrategyV36.js'
+      - 'momentumflow/equityStrategyV36.test.mjs'
+      - 'momentumflow/v36Backtest.mjs'
+      - '.github/workflows/v36-research.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-v36:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: momentumflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check
+        run: |
+          node --check equityStrategyV36.js
+          node --check v36Backtest.mjs
+      - name: V36 strategy tests
+        run: node --test equityStrategyV36.test.mjs
+      - name: Historical backtest gate
+        shell: bash
+        run: |
+          if [ -f research-data/v36/history.jsonl ]; then
+            node v36Backtest.mjs research-data/v36/history.jsonl
+          else
+            echo 'V36 historical dataset is not committed at momentumflow/research-data/v36/history.jsonl.'
+            echo 'Unit/syntax validation completed, but robust walk-forward/holdout/cost-stress validation remains BLOCKED.'
+            exit 2
+          fi
