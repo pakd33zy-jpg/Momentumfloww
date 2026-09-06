@@ -39,6 +39,46 @@ async function settle(orderId, timeoutMs = 15000) {
   }
   return getOrder(MODE, orderId);
 }
+
+export function filledEntryLeg(leg, order) {
+  const qty = Number(order?.filled_qty || 0);
+  const entryPrice = Number(order?.filled_avg_price || 0);
+  if (!(qty > 0) || !(entryPrice > 0)) return null;
+  return { ...leg, qty, entryPrice, entryOrderId: order.id, entryStatus: order.status };
+}
+
+export async function executeV50PairedEntry({ signal, budget, submit = placeOrder, settleOrder = settle, undo = rollback }) {
+  const opened = [];
+  try {
+    for (const leg of signal.legs) {
+      const order = await submit({
+        mode: MODE,
+        symbol: leg.symbol,
+        notional: leg.direction === 'LONG' ? Number(budget.toFixed(2)) : undefined,
+        qty: leg.direction === 'SHORT' ? String(Math.max(1, Math.floor(budget / leg.price))) : undefined,
+        side: leg.direction === 'LONG' ? 'buy' : 'sell',
+        type: 'market',
+        timeInForce: 'day',
+      });
+      const fill = await settleOrder(order.id);
+      const exposure = filledEntryLeg(leg, fill);
+      // Record partial exposure before rejecting the pair so rollback flattens it too.
+      if (exposure) opened.push(exposure);
+      if (fill.status !== 'filled' || !exposure) {
+        throw new Error(`${leg.symbol} entry ${fill.status || 'unknown'} (${Number(fill.filled_qty || 0)} filled)`);
+      }
+    }
+    if (opened.length !== 2) throw new Error(`V50 pair incomplete (${opened.length}/2 legs)`);
+    return opened;
+  } catch (error) {
+    const rollbackResults = await undo(opened, 'V50 paired-entry rollback');
+    const rollbackFailures = rollbackResults.filter((leg) => leg.rollbackError);
+    const wrapped = new Error(`V50 pair aborted; rollback ${rollbackFailures.length ? 'incomplete' : 'completed'}: ${error.message}`);
+    wrapped.rollbackResults = rollbackResults;
+    wrapped.cause = error;
+    throw wrapped;
+  }
+}
 async function latestPrices(symbols) {
   const snapshots = await getStockSnapshots(MODE, symbols, { feed: 'iex' });
   return Object.fromEntries(symbols.map((symbol) => {
@@ -67,22 +107,12 @@ async function enterPair(signal) {
   const gross = Math.min(equity * config().pairGrossFraction, Number(account.buying_power || 0) * 0.5);
   if (!(gross > 100)) throw new Error('V50 paper account has insufficient pair buying power');
   const budget = gross / 2;
-  const opened = [];
+  let opened;
   try {
-    for (const leg of signal.legs) {
-      const order = await placeOrder({
-        mode: MODE, symbol: leg.symbol, notional: leg.direction === 'LONG' ? Number(budget.toFixed(2)) : undefined,
-        qty: leg.direction === 'SHORT' ? String(Math.max(1, Math.floor(budget / leg.price))) : undefined,
-        side: leg.direction === 'LONG' ? 'buy' : 'sell', type: 'market', timeInForce: 'day',
-      });
-      const fill = await settle(order.id);
-      if (!(Number(fill.filled_qty) > 0) || !(Number(fill.filled_avg_price) > 0)) throw new Error(`${leg.symbol} entry ${fill.status}`);
-      opened.push({ ...leg, qty: Number(fill.filled_qty), entryPrice: Number(fill.filled_avg_price), entryOrderId: fill.id });
-    }
+    opened = await executeV50PairedEntry({ signal, budget });
   } catch (error) {
-    const rollbackResults = await rollback(opened, 'V50 paired-entry rollback');
-    save({ lastRollback: { at: new Date().toISOString(), error: error.message, legs: rollbackResults } });
-    throw new Error(`V50 pair aborted and rollback attempted: ${error.message}`);
+    save({ lastRollback: { at: new Date().toISOString(), error: error.message, legs: error.rollbackResults || [] } });
+    throw error;
   }
   const pair = { id: `v50-${Date.now()}`, playbook: signal.playbook, openedAt: new Date().toISOString(), closeAfter: new Date(Date.now() + config().holdMinutes * 60000).toISOString(), legs: opened, diagnostics: signal.diagnostics };
   save({ activePair: pair });
