@@ -33,8 +33,10 @@ const ALLOWED_STOCK_SYMBOLS = new Set([
 
 function authorized(req) {
   const expected = String(process.env.RESEARCH_EXPORT_TOKEN || '');
+  const temporary = String(process.env.V50_RESEARCH_EXPORT_TOKEN || '');
   const supplied = String(req.get('x-research-token') || '');
-  return expected.length >= 32 && supplied === expected;
+  return (expected.length >= 32 && supplied === expected)
+    || (temporary.length >= 32 && supplied === temporary);
 }
 
 router.get('/crypto-bars', async (req, res) => {
