@@ -24,6 +24,8 @@ const MAX_TOTAL_EXPOSURE = Math.max(0.10, Math.min(1.0, Number(process.env.V35_C
 const MAX_POSITION_FRACTION = Math.max(0.02, Math.min(0.50, Number(process.env.V35_CRYPTO_SHADOW_MAX_POSITION_FRACTION || 0.20)));
 const DATA_REFRESH_MS = Math.max(60000, Number(process.env.V35_CRYPTO_HISTORY_REFRESH_MS || 5 * 60000));
 const REENTRY_COOLDOWN_MS = Math.max(0, Number(process.env.V35_CRYPTO_SHADOW_REENTRY_COOLDOWN_MS || 15 * 60000));
+const V50_SYMBOLS = new Set(String(process.env.V50_CRYPTO_SYMBOLS || 'BTC/USD,ETH/USD,SOL/USD,LINK/USD')
+  .split(',').map((symbol) => symbol.trim().toUpperCase()).filter(Boolean));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const n = (v, fallback = NaN) => Number.isFinite(Number(v)) ? Number(v) : fallback;
@@ -81,11 +83,12 @@ function summary() {
 async function refreshUniverse() {
   if (symbols.length && Date.now() - lastUniverseRefresh < 30 * 60000) return;
   const assets = await getTradableAssets('live');
-  const rows = Array.isArray(assets?.crypto) ? assets.crypto : [];
+  const rows = (Array.isArray(assets?.crypto) ? assets.crypto : [])
+    .filter((asset) => V50_SYMBOLS.has(String(asset.symbol || '').toUpperCase()));
   assetMap = new Map(rows.map((asset) => [String(asset.symbol || '').toUpperCase(), asset]));
   symbols = [...assetMap.keys()];
   lastUniverseRefresh = Date.now();
-  console.log('[V35 crypto shadow] UNIVERSE', JSON.stringify({ symbols: symbols.length }));
+  console.log('[V50 crypto shadow] UNIVERSE', JSON.stringify({ symbols: symbols.length }));
 }
 
 function chunks(list, size = 4) {
@@ -124,7 +127,7 @@ async function backfillMissingBars(target, timeframe, start, end, minimumBars) {
         target[symbol] = part[symbol];
       }
     } catch (error) {
-      console.warn('[V35 crypto shadow] history backfill failed', symbol, timeframe, error.message);
+      console.warn('[V50 crypto shadow] history backfill failed', symbol, timeframe, error.message);
     }
   }
 }
@@ -137,17 +140,18 @@ async function refreshHistory(now) {
   const start1h = new Date(now.getTime() - 60 * 24 * 60 * 60000);
   const start1d = new Date(now.getTime() - 220 * 24 * 60 * 60000);
 
-  const [f15, f1h, f1d] = await Promise.all([
-    fetchGroupedBars('15Min', start15m, now, 4),
-    fetchGroupedBars('1Hour', start1h, now, 4),
-    getCryptoBars('live', symbols, {
+  // Stagger calls so concurrent runners do not burst through Alpaca's data limit.
+  const f15 = await fetchGroupedBars('15Min', start15m, now, 4);
+  await sleep(1200);
+  const f1h = await fetchGroupedBars('1Hour', start1h, now, 4);
+  await sleep(1200);
+  const f1d = await getCryptoBars('live', symbols, {
       timeframe: '1Day',
       start: start1d,
       end: now,
       limit: 10000,
       maxPages: 4,
-    }),
-  ]);
+    });
 
   await Promise.all([
     backfillMissingBars(f15, '15Min', start15m, now, 32),
@@ -165,7 +169,7 @@ async function refreshHistory(now) {
     with1h: symbols.filter((s) => (bars1h[s] || []).length >= 40).length,
     with1d: symbols.filter((s) => (bars1d[s] || []).length >= 28).length,
   };
-  console.log('[V35 crypto shadow] HISTORY_REFRESH', JSON.stringify(coverage));
+  console.log('[V50 crypto shadow] HISTORY_REFRESH', JSON.stringify(coverage));
 }
 
 async function refreshNews(now) {
@@ -183,7 +187,7 @@ async function refreshNews(now) {
     newsFetchedAt = Date.now();
   } catch (error) {
     newsFetchedAt = Date.now();
-    console.warn('[V35 crypto shadow] news unavailable:', error.message);
+    console.warn('[V50 crypto shadow] news unavailable:', error.message);
   }
 }
 
@@ -222,7 +226,7 @@ function closePosition(symbol, exit, reason, now) {
   if (String(reason).startsWith('STOP') && REENTRY_COOLDOWN_MS > 0) {
     reentryAfter.set(symbol, now.getTime() + REENTRY_COOLDOWN_MS);
   }
-  console.log('[V35 crypto shadow] EXIT', JSON.stringify(trade));
+  console.log('[V50 crypto shadow] EXIT', JSON.stringify(trade));
   return true;
 }
 
@@ -317,7 +321,7 @@ function enter(signal, now) {
     openedAt: now.getTime(),
   };
   positions.set(signal.symbol, p);
-  console.log('[V35 crypto shadow] ENTER', JSON.stringify({
+  console.log('[V50 crypto shadow] ENTER', JSON.stringify({
     ...p,
     openedAt: now.toISOString(),
     entryMinuteStart: new Date(p.entryMinuteStart).toISOString(),
@@ -331,7 +335,9 @@ async function scanOnce() {
   const now = new Date();
   await refreshUniverse();
   if (!symbols.length) return;
-  await Promise.all([refreshHistory(now), refreshNews(now)]);
+  await refreshHistory(now);
+  await sleep(1200);
+  await refreshNews(now);
 
   const snapshots = await getCryptoSnapshots('live', symbols);
   scanCount += 1;
@@ -349,7 +355,7 @@ async function scanOnce() {
     if (positions.has(symbol)) continue;
     const cooldownUntil = reentryAfter.get(symbol) || 0;
     if (cooldownUntil > now.getTime()) {
-      const reason = 'V35 shadow: waiting for fresh 15m setup after stop';
+      const reason = 'V50 shadow: waiting for fresh 15m setup after stop';
       rejectCounts.set(reason, (rejectCounts.get(reason) || 0) + 1);
       continue;
     }
@@ -390,7 +396,7 @@ async function scanOnce() {
     .slice(0, 8)
     .map(([reason, count]) => ({ reason, count }));
 
-  console.log('[V35 crypto shadow] SCAN', JSON.stringify({
+  console.log('[V50 crypto shadow] SCAN', JSON.stringify({
     at: now.toISOString(),
     qualified: candidates.length,
     top: candidates.slice(0, 8).map((x) => ({
@@ -407,7 +413,7 @@ async function scanOnce() {
   }));
 }
 
-console.log('[V35 crypto shadow] starting', JSON.stringify({
+console.log('[V50 crypto shadow] starting', JSON.stringify({
   startingEquity: STARTING_EQUITY,
   riskFraction: RISK_FRACTION,
   maxPortfolioRiskFraction: MAX_PORTFOLIO_RISK,
@@ -424,7 +430,7 @@ while (true) {
   try {
     await scanOnce();
   } catch (error) {
-    console.error('[V35 crypto shadow] scan error:', error?.stack || error?.message || error);
+    console.error('[V50 crypto shadow] scan error:', error?.stack || error?.message || error);
   }
   await sleep(POLL_MS);
 }
