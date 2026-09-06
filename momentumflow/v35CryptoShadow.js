@@ -1,4 +1,4 @@
-// V35 CRYPTO 24/7 SHADOW/PAPER TESTER
+// V50 CRYPTO 24/7 SHADOW/PAPER TESTER
 // Uses live market data and an internal paper ledger. No broker-order path imported.
 
 import {
@@ -8,10 +8,10 @@ import {
   getTradableAssets,
 } from './alpacaClient.js';
 import {
-  CRYPTO_V35_DEFAULTS,
-  evaluateCryptoCandidateV35,
-  buildCryptoV35Budget,
-} from './cryptoStrategyV35.js';
+  CRYPTO_V50_DEFAULTS,
+  evaluateCryptoCandidateV50,
+  buildCryptoV50Budget,
+} from './cryptoStrategyV50.js';
 import { buildNewsIntelligenceMapV34 } from './marketIntelligenceV34.js';
 
 const POLL_MS = Math.max(30000, Number(process.env.V35_CRYPTO_SHADOW_POLL_MS || 60000));
@@ -60,7 +60,7 @@ function summary() {
   const grossWin = closed.filter((x) => x.pnl > 0).reduce((a, x) => a + x.pnl, 0);
   const grossLoss = Math.abs(closed.filter((x) => x.pnl < 0).reduce((a, x) => a + x.pnl, 0));
   return {
-    strategy: 'CRYPTO_V35',
+    strategy: 'CRYPTO_V50',
     startingEquity: STARTING_EQUITY,
     paperEquity: Number(paperEquity.toFixed(2)),
     returnPct: Number(((paperEquity / STARTING_EQUITY - 1) * 100).toFixed(3)),
@@ -276,7 +276,7 @@ function enter(signal, now) {
   if (!(stopPct > 0) || !(targetPct > 0) || !(entry > 0)) return false;
 
   const config = {
-    ...CRYPTO_V35_DEFAULTS,
+    ...CRYPTO_V50_DEFAULTS,
     cryptoV35RiskFraction: RISK_FRACTION,
     cryptoV35MaxPortfolioRiskFraction: MAX_PORTFOLIO_RISK,
     cryptoV35MaxPositionFraction: MAX_POSITION_FRACTION,
@@ -285,7 +285,7 @@ function enter(signal, now) {
   const exposure = currentExposure();
   const openRisk = currentOpenRiskDollars();
   const cash = Math.max(0, paperEquity - exposure);
-  const notional = buildCryptoV35Budget({
+  const notional = buildCryptoV50Budget({
     equity: paperEquity,
     cash,
     currentCryptoExposure: exposure,
@@ -361,7 +361,7 @@ async function scanOnce() {
       continue;
     }
 
-    const result = evaluateCryptoCandidateV35({
+    const result = evaluateCryptoCandidateV50({
       asset,
       snapshot,
       bars15m: bars15m[symbol] || [],
@@ -428,4 +428,3 @@ while (true) {
   }
   await sleep(POLL_MS);
 }
-
