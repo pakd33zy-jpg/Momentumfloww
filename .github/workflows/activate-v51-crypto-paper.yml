@@ -1,0 +1,115 @@
+name: Activate V51 Crypto Paper Engine
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/activate-v51-crypto-paper.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch active crypto path to V51
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # Forward-learning observations can now consume an already-derived V51 state.
+          p = Path('momentumflow/cryptoForwardLearningV51.js')
+          s = p.read_text()
+          s = s.replace(
+            "export function buildCryptoV51Observation({ symbol, price, v35Result, observedAt = new Date().toISOString(), config = {} } = {}) {",
+            "export function buildCryptoV51Observation({ symbol, price, state: suppliedState, v35Result, observedAt = new Date().toISOString(), config = {} } = {}) {"
+          )
+          s = s.replace("  const state = deriveCryptoV51State(v35Result);\n", "  const state = suppliedState || deriveCryptoV51State(v35Result);\n", 1)
+          p.write_text(s)
+
+          # Shadow monitor now derives V51 state directly from raw market data, no V35 evaluator.
+          p = Path('momentumflow/cryptoV51ShadowMonitor.js')
+          s = p.read_text()
+          s = s.replace("import { evaluateCryptoCandidateV35 } from './cryptoStrategyV35.js';\n", "import { deriveCryptoV51StateFromMarket } from './cryptoPaperStrategyV51.js';\n")
+          s = s.replace("const strategyCfg = () => ({ ...store.getConfig('strategyConfig', {}) });\n", "")
+          old = """        const v35Result = evaluateCryptoCandidateV35({
+          asset,
+          snapshot,
+          bars15m: bars15m[asset.symbol] || [],
+          bars1h: bars1h[asset.symbol] || [],
+          bars1d: bars1d[asset.symbol] || [],
+          btcBars1h,
+          config: strategyCfg(),
+        });
+        const observation = buildCryptoV51Observation({ symbol: asset.symbol, price, v35Result, config: cfg() });
+"""
+          new = """        const state51 = deriveCryptoV51StateFromMarket({
+          snapshot,
+          bars15m: bars15m[asset.symbol] || [],
+          bars1h: bars1h[asset.symbol] || [],
+          bars1d: bars1d[asset.symbol] || [],
+          btcBars1h,
+        });
+        const observation = buildCryptoV51Observation({ symbol: asset.symbol, price, state: state51, config: cfg() });
+"""
+          if old not in s:
+            raise SystemExit('shadow monitor V35 block not found')
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          # Active bot: keep equity V35, replace crypto V35 with independent V51 paper engine.
+          p = Path('momentumflow/liveBotV35.js')
+          s = p.read_text()
+          old_import = """import {
+  CRYPTO_V35_DEFAULTS,
+  evaluateCryptoCandidateV35,
+  buildCryptoV35Budget,
+} from './cryptoStrategyV35.js';
+"""
+          new_import = """import {
+  CRYPTO_V51_PAPER_DEFAULTS,
+  evaluateCryptoCandidateV51,
+  buildCryptoV51Budget,
+} from './cryptoPaperStrategyV51.js';
+"""
+          if old_import not in s:
+            raise SystemExit('crypto V35 import block not found')
+          s = s.replace(old_import, new_import)
+          s = s.replace("  ...CRYPTO_V35_DEFAULTS,\n", "  ...CRYPTO_V51_PAPER_DEFAULTS,\n")
+          s = s.replace("String(t.strategy_name || '').includes('V35')", "(String(t.strategy_name || '').includes('V35') || String(t.strategy_name || '').includes('V51'))")
+          s = s.replace("const result = evaluateCryptoCandidateV35({", "const result = evaluateCryptoCandidateV51({")
+          s = s.replace("reason: 'V35: no snapshot'", "reason: 'V51: no snapshot'")
+          s = s.replace("reason: result.reason || result.diagnostics?.reason || 'V35: no signal'", "reason: result.reason || result.diagnostics?.reason || 'V51: no signal'")
+          s = s.replace("crypto: 'CRYPTO_V35_STANDALONE'", "crypto: 'CRYPTO_V51_PAPER_FORWARD'")
+          s = s.replace("V35 analyzed", "V51 analyzed")
+          s = s.replace("no V35 setup", "no V51 crypto setup / no equity V35 setup")
+          s = s.replace("cryptoV35MaxConcurrentPositions || 8", "maxConcurrentPositions || 8")
+          s = s.replace("Crypto V35 position limit", "Crypto V51 position limit")
+          s = s.replace("positionBudget = buildCryptoV35Budget({", "positionBudget = buildCryptoV51Budget({")
+          s = s.replace("riskFraction = Number(strategyCfg().cryptoV35RiskFraction || 0.01);", "riskFraction = Number(strategyCfg().riskFraction || 0.01);")
+          s = s.replace("skipped - V35 risk/exposure budget has no room", "skipped - V51 risk/exposure budget has no room")
+          s = s.replace("V35 runtime active: independent equity/crypto engines; crypto max concurrent positions=8.", "V51 crypto PAPER engine active; equity remains V35; live trading disabled.")
+          p.write_text(s)
+          PY
+
+      - name: Syntax checks
+        run: |
+          node --check momentumflow/cryptoForwardLearningV51.js
+          node --check momentumflow/cryptoPaperStrategyV51.js
+          node --check momentumflow/cryptoV51ShadowMonitor.js
+          node --check momentumflow/liveBotV35.js
+
+      - name: Commit active V51 crypto path
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add momentumflow/cryptoForwardLearningV51.js momentumflow/cryptoV51ShadowMonitor.js momentumflow/liveBotV35.js
+          if git diff --cached --quiet; then
+            echo "No changes needed"
+          else
+            git commit -m "Activate independent V51 crypto paper execution"
+            git push
+          fi
