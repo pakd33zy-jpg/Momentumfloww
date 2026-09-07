@@ -30,23 +30,22 @@ function resetToPaperModeOnBoot() {
   console.log(`[boot] LIVE_TRADING_ENABLED=${String(process.env.LIVE_TRADING_ENABLED).toLowerCase() === 'true'}`);
 }
 
-function migrateV35RuntimeConfigOnBoot() {
+function migrateActiveRuntimeConfigOnBoot() {
   const bot = store.getConfig('liveBotConfig', {});
-  if (bot.v35RuntimeMigrated !== true) {
-    store.setConfig('liveBotConfig', {
-      ...bot,
-      maxOpenPositions: 8,
-      maxEquityPositions: 8,
-      v35RuntimeMigrated: true,
-    });
-  }
+  store.setConfig('liveBotConfig', {
+    ...bot,
+    maxOpenPositions: 8,
+    maxEquityPositions: 8,
+    v51CryptoRuntimeMigrated: true,
+  });
 
   const strategy = store.getConfig('strategyConfig', {});
   store.setConfig('strategyConfig', {
     ...strategy,
-    cryptoV35Enabled: strategy.cryptoV35Enabled !== false,
+    cryptoV35Enabled: false,
+    cryptoV51Enabled: true,
     equityV35Enabled: strategy.equityV35Enabled !== false,
-    cryptoV35MaxConcurrentPositions: 8,
+    cryptoV51MaxConcurrentPositions: 8,
   });
 
   const trading = store.getConfig('tradingConfig', {});
@@ -57,11 +56,11 @@ function migrateV35RuntimeConfigOnBoot() {
     });
   }
 
-  console.log('[boot] V35 runtime active: independent equity/crypto engines; crypto max concurrent positions=8.');
+  console.log('[boot] V51 crypto PAPER runtime active; equity remains V35 while V51 equity is developed; crypto max concurrent positions=8.');
 }
 
 resetToPaperModeOnBoot();
-migrateV35RuntimeConfigOnBoot();
+migrateActiveRuntimeConfigOnBoot();
 startFastScalpMonitor();
 startEquityFastScalpMonitor();
 startCryptoV51ShadowMonitor();
