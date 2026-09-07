@@ -84,6 +84,8 @@ async function tick() {
     store.saveAll(COLLECTION, rows);
     state.lastSampled = sampled;
     state.lastSettled = settled;
+    const summary = summarizeCryptoV51(rows);
+    console.log(`[crypto-v51-shadow] tick ok universe=${crypto.length} sampled=${sampled} settled=${settled} total=${summary.totalObservations} pending=${summary.pending}`);
   } catch (error) {
     state.lastError = error.message;
     console.error('[crypto-v51-shadow]', error);
@@ -95,6 +97,7 @@ async function tick() {
 export function startCryptoV51ShadowMonitor() {
   if (state.running) return;
   state.running = true;
+  console.log('[crypto-v51-shadow] V51 forward-learning monitor active (research-only, no orders).');
   tick();
 }
 
