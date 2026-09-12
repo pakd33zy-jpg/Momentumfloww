@@ -7,11 +7,8 @@ import {
   getMarketNews,
   getTradableAssets,
 } from './alpacaClient.js';
-import {
-  CRYPTO_V50_DEFAULTS,
-  evaluateCryptoCandidateV50,
-  buildCryptoV50Budget,
-} from './cryptoStrategyV50.js';
+import { evaluateCryptoCandidateC62 } from './cryptoStrategyC62.js';
+import { CRYPTO_V50_DEFAULTS, buildCryptoV50Budget } from './cryptoStrategyV50.js';
 import { buildNewsIntelligenceMapV34 } from './marketIntelligenceV34.js';
 
 const POLL_MS = Math.max(30000, Number(process.env.V35_CRYPTO_SHADOW_POLL_MS || 60000));
@@ -62,7 +59,7 @@ function summary() {
   const grossWin = closed.filter((x) => x.pnl > 0).reduce((a, x) => a + x.pnl, 0);
   const grossLoss = Math.abs(closed.filter((x) => x.pnl < 0).reduce((a, x) => a + x.pnl, 0));
   return {
-    strategy: 'CRYPTO_V50',
+    strategy: 'CRYPTO_C62_SHADOW',
     startingEquity: STARTING_EQUITY,
     paperEquity: Number(paperEquity.toFixed(2)),
     returnPct: Number(((paperEquity / STARTING_EQUITY - 1) * 100).toFixed(3)),
@@ -202,9 +199,8 @@ function currentOpenRiskDollars() {
 function closePosition(symbol, exit, reason, now) {
   const p = positions.get(symbol);
   if (!p || !(exit > 0)) return false;
-  const grossPct = ((exit / p.entry) - 1) * 100;
-  const netPct = grossPct - p.costPct;
-  const pnl = p.notional * netPct / 100;
+  const pnl = p.legs.reduce((sum, leg) => sum + leg.notional * (((exit / leg.entry) - 1) * 100 - p.costPct) / 100, 0);
+  const netPct = p.notional > 0 ? pnl / p.notional * 100 : 0;
   paperEquity += pnl;
   updateDrawdown();
 
@@ -223,7 +219,7 @@ function closePosition(symbol, exit, reason, now) {
   };
   closed.push(trade);
   positions.delete(symbol);
-  if (String(reason).startsWith('STOP') && REENTRY_COOLDOWN_MS > 0) {
+  if (REENTRY_COOLDOWN_MS > 0) {
     reentryAfter.set(symbol, now.getTime() + REENTRY_COOLDOWN_MS);
   }
   console.log('[V50 crypto shadow] EXIT', JSON.stringify(trade));
@@ -237,10 +233,15 @@ function checkExit(symbol, snapshot, now) {
   const latest = n(snapshot?.latestTrade?.p ?? bar?.c);
   if (!(latest > 0)) return;
 
-  // For the entry minute only: use latest price, not bar high/low
-  const isEntryMinute = now.getTime() - p.entryMinuteStart < 60000;
-  const high = isEntryMinute ? latest : n(bar?.h, latest);
-  const low = isEntryMinute ? latest : n(bar?.l, latest);
+  // Never apply a stale minute bar whose range predates the entry.
+  const rawBarTime = bar?.t ?? bar?.timestamp ?? bar?.time;
+  const parsedBarTime = typeof rawBarTime === 'number' ? rawBarTime : Date.parse(rawBarTime || '');
+  const barTimeMs = Number.isFinite(parsedBarTime) ? (parsedBarTime < 1e12 ? parsedBarTime * 1000 : parsedBarTime) : NaN;
+  const entryMinuteBucket = Math.floor(p.entryMinuteStart / 60000) * 60000;
+  const barMinuteBucket = Number.isFinite(barTimeMs) ? Math.floor(barTimeMs / 60000) * 60000 : NaN;
+  const barIsPostEntryMinute = Number.isFinite(barMinuteBucket) && barMinuteBucket > entryMinuteBucket;
+  const high = barIsPostEntryMinute ? n(bar?.h, latest) : latest;
+  const low = barIsPostEntryMinute ? n(bar?.l, latest) : latest;
 
   // Calculate trailing stop from prior peak before updating peak
   let effectiveStop = p.stopPrice;
@@ -264,6 +265,17 @@ function checkExit(symbol, snapshot, now) {
   if (now.getTime() - p.openedAt >= p.maxHoldMinutes * 60000) {
     closePosition(symbol, latest, 'MAX_HOLD', now);
     return;
+  }
+
+  if (!p.added && high >= p.addPrice) {
+    const available = Math.max(0, paperEquity * MAX_TOTAL_EXPOSURE - currentExposure());
+    const addNotional = Math.min(p.plannedNotional * (1 - p.initialWeight), available);
+    if (addNotional > 0) {
+      p.legs.push({ entry: p.addPrice, notional: addNotional });
+      p.notional += addNotional;
+      p.added = true;
+      console.log('[C62 crypto shadow] SCALE_IN', JSON.stringify({ symbol, price: p.addPrice, notional: Number(addNotional.toFixed(2)) }));
+    }
   }
 
   // Update peak only after no exit
@@ -302,6 +314,8 @@ function enter(signal, now) {
   const stopPrice = entry * (1 - stopPct / 100);
   const targetPrice = entry * (1 + targetPct / 100);
   const riskDollars = notional * (stopPct + n(plan.estimatedRoundTripCostPct, 0.50)) / 100;
+  const initialWeight = Math.max(0.1, Math.min(1, n(plan.initialWeight, 0.5)));
+  const initialNotional = notional * initialWeight;
   const p = {
     symbol: signal.symbol,
     strategy: signal.strategy,
@@ -309,7 +323,12 @@ function enter(signal, now) {
     entry,
     stopPrice,
     targetPrice,
-    notional,
+    notional: initialNotional,
+    plannedNotional: notional,
+    initialWeight,
+    legs: [{ entry, notional: initialNotional }],
+    addPrice: entry * (1 + stopPct / 100 * n(plan.scaleInAtRiskMultiple, 1)),
+    added: initialWeight >= 1,
     riskDollars,
     costPct: n(plan.estimatedRoundTripCostPct, 0.50),
     maxHoldMinutes: Math.max(5, n(plan.maxHoldMinutes, 3 * 24 * 60)),
@@ -321,7 +340,7 @@ function enter(signal, now) {
     openedAt: now.getTime(),
   };
   positions.set(signal.symbol, p);
-  console.log('[V50 crypto shadow] ENTER', JSON.stringify({
+  console.log('[C62 crypto shadow] ENTER', JSON.stringify({
     ...p,
     openedAt: now.toISOString(),
     entryMinuteStart: new Date(p.entryMinuteStart).toISOString(),
@@ -347,7 +366,7 @@ async function scanOnce() {
     if (snapshot) checkExit(symbol, snapshot, now);
   }
 
-  const btc1h = bars1h['BTC/USD'] || [];
+  const btc15m = bars15m['BTC/USD'] || [];
   const candidates = [];
   const rejectCounts = new Map();
 
@@ -367,15 +386,11 @@ async function scanOnce() {
       continue;
     }
 
-    const result = evaluateCryptoCandidateV50({
+    const result = evaluateCryptoCandidateC62({
       asset,
-      snapshot,
       bars15m: bars15m[symbol] || [],
-      bars1h: bars1h[symbol] || [],
-      bars1d: bars1d[symbol] || [],
-      btcBars1h: btc1h,
-      intelligence: newsMap[compact(symbol)] || null,
-      config: { cryptoV35MinScore: MIN_SCORE },
+      btcBars15m: btc15m,
+      now: now.getTime(),
     });
 
     if (result.signal) {
@@ -413,7 +428,7 @@ async function scanOnce() {
   }));
 }
 
-console.log('[V50 crypto shadow] starting', JSON.stringify({
+console.log('[C62 crypto shadow] starting', JSON.stringify({
   startingEquity: STARTING_EQUITY,
   riskFraction: RISK_FRACTION,
   maxPortfolioRiskFraction: MAX_PORTFOLIO_RISK,
