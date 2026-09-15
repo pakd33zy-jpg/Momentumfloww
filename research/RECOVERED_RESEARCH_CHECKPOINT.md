@@ -1,0 +1,35 @@
+# MomentumFlow recovered research checkpoint
+
+Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents repetition of completed and rejected work. PAPER/shadow only; no winner or live authorization.
+
+## Execution corrections that must remain
+
+- Signals use completed candles only and enter at the next contiguous open.
+- Entry-bar stops are evaluated. Adverse gaps fill at the opening price. Stop wins same-bar stop/target ambiguity.
+- Crypto trailing floors use prior completed bars, never the current bar.
+- Exclusive test boundaries are enforced before indicator calculation.
+- Equity MACD crossover only arms a setup; EMA20 confirmation must occur on a strictly later completed candle.
+- Shared-capital accounting retains idle cash, actual entry/exit notional fees, deterministic same-time allocation, and explicit risk/exposure caps.
+
+## Crypto evidence
+
+- Corrected persistent breakout core: 55-day breakout, rising EMA200, next open, 3 ATR initial stop, prior-20-day low trail.
+- Corrected shared-capital replay on the original major-coin universe: 66 closed trades, approximately +12.95%, PF 1.83, 7.11% daily-close drawdown at 1% modeled round-trip cost.
+- Result is not a winner: removing SOL and XRP together changed return to approximately -1.78%, PF 0.88. Gains remain concentrated.
+- Breakout-strength gate (0.5–1.5 ATR) was rejected: on new eligible symbols it produced one losing trade; baseline produced five losses.
+- Causal top-half trailing liquidity rank improved the development headline to 50 trades and PF 2.20 at 1% cost, but removing the two best trades made net negative; 2025 PF was about 0.52. Keep liquidity ranking as a tradability control, not predictive edge.
+- Daily EMA200/EMA20 pullback and anti-chase branches failed broader historical validation. Do not retry unchanged.
+
+## Equity evidence
+
+- Strict EMA200 + confirmed structure + MACD arm + later EMA20 confirmation + pullback stop + exact 2R produced only seven stored-window trades after correcting the same-candle defect.
+- Corrected twelve-stock stored-window portfolio: approximately +0.43%, PF 1.52 at 0.05% cost.
+- Stored period checks: 2023 H2 had two losses; 2024 H2 had five trades and PF 1.61; 2025 results were session-treatment-sensitive; 2026 stored window had seven trades and PF 1.52.
+- Twelve new symbols in 2025 produced only four trades across the full year. Positive, but operationally and statistically inadequate. Preserve sequencing/risk lessons; reject this exact entry stack as deployable.
+
+## Next research direction
+
+1. Rebuild invariant-tested causal engines.
+2. Crypto: retain trend persistence and liquidity eligibility; replace the non-generalizing breakout-strength filter with a predeclared regime/relative-strength hypothesis, then validate on untouched symbols/time.
+3. Equity: retain later-candle confirmation and structured risk, but reduce gate stacking using scoring; validate chronologically with realistic costs and a materially larger trade count.
+4. Push every completed code/result checkpoint to this remote branch immediately.
