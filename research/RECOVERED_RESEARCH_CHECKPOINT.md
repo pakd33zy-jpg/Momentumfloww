@@ -21,6 +21,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Daily EMA200/EMA20 pullback and anti-chase branches failed broader historical validation. Do not retry unchanged.
 - BTC-regime plus altcoin relative-strength breakout was rejected. The predeclared 55-day breakout / 90-day relative-strength / top-three version had 30 training trades and PF 2.09, but untouched 2025-2026 produced 11 trades, -83.40 return-points and PF 0.43.
 - Adding a predeclared expanding-market-breadth gate (at least 60% of the eleven-coin universe above EMA100 and breadth higher than 20 days earlier) improved untouched results to six trades, +8.94 return-points and PF 1.16. This is not validated: removing the two best trades eliminates all profit. Preserve as a candidate component, not a winner.
+- Daily breadth plus 4-hour trend breakout was rejected across 27 nearby settings and nine coins with usable 4-hour histories. The predeclared 40-bar breakout / 2 ATR stop / 10-bar trail produced 129 training trades at PF 0.55 and 57 untouched trades at PF 0.59 (-87.00 return-points). Long trails created attractive training headlines but every such setting failed untouched data, confirming regime/parameter instability.
+- Strong-regime 4-hour statistical pullback/recovery was also rejected across 27 settings. The predeclared two-standard-deviation pullback / 2 ATR stop / 12-bar maximum hold produced 210 training trades at PF 0.54 and 93 untouched trades at PF 0.31 (-204.49 return-points). All tested neighboring settings lost in both periods. Do not retry either 4-hour entry family unchanged.
 
 ## Equity evidence
 
