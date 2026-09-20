@@ -9,6 +9,9 @@ on:
       - 'momentumflow/cryptoV51ShadowMonitor.js'
       - 'momentumflow/cryptoV51ShadowRouter.js'
       - 'momentumflow/server.js'
+      - 'momentumflow/liveBotV35.js'
+      - 'momentumflow/cryptoPaperStrategyV51.js'
+      - 'momentumflow/liveBotV51Lifecycle.test.js'
       - '.github/workflows/crypto-v51-shadow-validation.yml'
   workflow_dispatch:
 
@@ -26,6 +29,6 @@ jobs:
           cache: npm
           cache-dependency-path: momentumflow/package-lock.json
       - run: npm ci
-      - run: node --test cryptoForwardLearningV51.test.js
+      - run: node --test cryptoForwardLearningV51.test.js liveBotV51Lifecycle.test.js
       - name: Import smoke test
         run: node -e "Promise.all([import('./cryptoV51ShadowMonitor.js'),import('./cryptoV51ShadowRouter.js')]).then(()=>console.log('V51 imports OK'))"
