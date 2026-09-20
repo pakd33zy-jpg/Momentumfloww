@@ -70,6 +70,11 @@ const strategyCfg = () => ({
 });
 const tradingCfg = () => ({ riskPerTrade: 0.01, ...store.getConfig('tradingConfig', {}) });
 
+export function isManagedExecutionStrategy(strategyName = '') {
+  const name = String(strategyName);
+  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD';
+}
+
 function selectedMode() {
   return store.getConfig('tradingMode', { mode: 'paper' }).mode === 'live' ? 'live' : 'paper';
 }
@@ -118,7 +123,7 @@ function sessionTrades() {
 
 function syncOpenTradeIds() {
   state.openTradeIds = sessionTrades()
-    .filter((t) => t.result === null && t.voided !== true && String(t.strategy_name || '').includes('V35'))
+    .filter((t) => t.result === null && t.voided !== true && isManagedExecutionStrategy(t.strategy_name))
     .map((t) => t.id);
   return state.openTradeIds;
 }
@@ -166,7 +171,7 @@ function blockedSymbols(positions = []) {
 
 function openRiskDollars() {
   return sessionTrades()
-    .filter((t) => t.result === null && t.voided !== true && String(t.strategy_name || '').includes('V35'))
+    .filter((t) => t.result === null && t.voided !== true && isManagedExecutionStrategy(t.strategy_name))
     .reduce((sum, t) => sum + Math.max(0, Number(t.planned_risk_dollars || 0)), 0);
 }
 
@@ -574,7 +579,7 @@ async function manageOpenTrades(mode) {
 
 function strategyPerformance() {
   const groups = new Map();
-  for (const t of store.getAll('trades').filter((x) => x.result !== null && String(x.strategy_name || '').includes('V35'))) {
+  for (const t of store.getAll('trades').filter((x) => x.result !== null && isManagedExecutionStrategy(x.strategy_name))) {
     const key = t.strategy_name;
     if (!groups.has(key)) groups.set(key, { strategy: key, trades: 0, wins: 0, losses: 0, pnl: 0, grossWin: 0, grossLoss: 0 });
     const g = groups.get(key);
