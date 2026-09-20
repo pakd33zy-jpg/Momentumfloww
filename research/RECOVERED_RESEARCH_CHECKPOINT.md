@@ -19,6 +19,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Breakout-strength gate (0.5–1.5 ATR) was rejected: on new eligible symbols it produced one losing trade; baseline produced five losses.
 - Causal top-half trailing liquidity rank improved the development headline to 50 trades and PF 2.20 at 1% cost, but removing the two best trades made net negative; 2025 PF was about 0.52. Keep liquidity ranking as a tradability control, not predictive edge.
 - Daily EMA200/EMA20 pullback and anti-chase branches failed broader historical validation. Do not retry unchanged.
+- BTC-regime plus altcoin relative-strength breakout was rejected. The predeclared 55-day breakout / 90-day relative-strength / top-three version had 30 training trades and PF 2.09, but untouched 2025-2026 produced 11 trades, -83.40 return-points and PF 0.43.
+- Adding a predeclared expanding-market-breadth gate (at least 60% of the eleven-coin universe above EMA100 and breadth higher than 20 days earlier) improved untouched results to six trades, +8.94 return-points and PF 1.16. This is not validated: removing the two best trades eliminates all profit. Preserve as a candidate component, not a winner.
 
 ## Equity evidence
 
@@ -28,6 +30,7 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Twelve new symbols in 2025 produced only four trades across the full year. Positive, but operationally and statistically inadequate. Preserve sequencing/risk lessons; reject this exact entry stack as deployable.
 - Rebuilt score-based daily equity engine tested 243 predeclared combinations across SPY, QQQ, IWM, DIA, XLK, XLF, XLE, GLD, TLT, AAPL, MSFT, and NVDA using Alpaca IEX bars. Parameters were ranked only on 2021-2024, then checked on untouched 2025-2026 data.
 - The strongest training selection (score 5, 55-day structure, 2 ATR stop, 3R target, 40-bar timeout) had 154 training trades, +147.45 return-points and PF 1.40, but its untouched test produced 90 trades, -64.82 points and PF 0.75. Other top training selections also failed out of sample (PF approximately 0.66-0.87). Reject this simple trend/breakout score family unchanged.
+- Regime-aware ETF rotation was also unstable. The predeclared 63-day momentum / five-day rebalance / top-two version lost 10.28% in training (PF 0.95) and 14.06% in untouched data (PF 0.92). Nearby settings ranged from large gains to large losses, so isolated positive settings were rejected as parameter sensitivity.
 
 ## Next research direction
 
