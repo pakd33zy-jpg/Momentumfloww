@@ -26,6 +26,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Corrected twelve-stock stored-window portfolio: approximately +0.43%, PF 1.52 at 0.05% cost.
 - Stored period checks: 2023 H2 had two losses; 2024 H2 had five trades and PF 1.61; 2025 results were session-treatment-sensitive; 2026 stored window had seven trades and PF 1.52.
 - Twelve new symbols in 2025 produced only four trades across the full year. Positive, but operationally and statistically inadequate. Preserve sequencing/risk lessons; reject this exact entry stack as deployable.
+- Rebuilt score-based daily equity engine tested 243 predeclared combinations across SPY, QQQ, IWM, DIA, XLK, XLF, XLE, GLD, TLT, AAPL, MSFT, and NVDA using Alpaca IEX bars. Parameters were ranked only on 2021-2024, then checked on untouched 2025-2026 data.
+- The strongest training selection (score 5, 55-day structure, 2 ATR stop, 3R target, 40-bar timeout) had 154 training trades, +147.45 return-points and PF 1.40, but its untouched test produced 90 trades, -64.82 points and PF 0.75. Other top training selections also failed out of sample (PF approximately 0.66-0.87). Reject this simple trend/breakout score family unchanged.
 
 ## Next research direction
 
