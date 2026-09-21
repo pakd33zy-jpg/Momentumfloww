@@ -13,6 +13,7 @@ const ENCRYPTED_DATABASE_URL =
 let pool = null;
 let initialized = false;
 let loadedSavedCredentials = false;
+let writeTested = false;
 
 function persistenceSeed() {
   const seed =
@@ -79,6 +80,23 @@ export async function initPersistentCredentials({ retries = 20, delayMs = 2500 }
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
       await ensureTable();
+      await getPool().query(
+        `INSERT INTO momentumflow_secure_config (config_key, config_value, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (config_key)
+         DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = NOW()`,
+        ['__persistence_selftest__', JSON.stringify({ ok: true, at: new Date().toISOString() })]
+      );
+      const selfTest = await getPool().query(
+        'SELECT config_value FROM momentumflow_secure_config WHERE config_key = $1',
+        ['__persistence_selftest__']
+      );
+      writeTested = selfTest.rows?.[0]?.config_value?.ok === true;
+      await getPool().query(
+        'DELETE FROM momentumflow_secure_config WHERE config_key = $1',
+        ['__persistence_selftest__']
+      );
+
       const result = await getPool().query(
         'SELECT config_value FROM momentumflow_secure_config WHERE config_key = $1',
         ['credentials']
@@ -106,6 +124,7 @@ export async function initPersistentCredentials({ retries = 20, delayMs = 2500 }
 
   initialized = false;
   loadedSavedCredentials = false;
+  writeTested = false;
   console.error('[credentials] Persistent store initialization failed:', lastError?.message);
   return { ready: false, loaded: false, error: lastError?.message || 'Unknown persistence error' };
 }
@@ -121,6 +140,10 @@ export function persistentCredentialStoreConfigured() {
     process.env.ALPACA_SECRET_KEY ||
     process.env.ALPACA_LIVE_SECRET_KEY
   );
+}
+
+export function persistentCredentialWriteTested() {
+  return initialized && writeTested;
 }
 
 export function hasPersistedCredentials() {
