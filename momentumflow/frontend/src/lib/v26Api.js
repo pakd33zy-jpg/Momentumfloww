@@ -1,13 +1,4 @@
-const storedBase =
-  typeof localStorage !== 'undefined'
-    ? localStorage.getItem('momentumflow_api_url')
-    : null;
-
-const BASE = (
-  import.meta.env.VITE_API_URL ||
-  storedBase ||
-  '/api'
-).replace(/\/$/, '');
+const BASE = 'https://momentumfloww.onrender.com/api';
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
