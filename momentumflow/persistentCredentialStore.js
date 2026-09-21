@@ -114,6 +114,15 @@ export function persistentCredentialStoreReady() {
   return initialized;
 }
 
+export function persistentCredentialStoreConfigured() {
+  return Boolean(
+    process.env.CREDENTIAL_PERSISTENCE_SEED ||
+    process.env.ALPACA_PAPER_SECRET_KEY ||
+    process.env.ALPACA_SECRET_KEY ||
+    process.env.ALPACA_LIVE_SECRET_KEY
+  );
+}
+
 export function hasPersistedCredentials() {
   return initialized && loadedSavedCredentials;
 }
