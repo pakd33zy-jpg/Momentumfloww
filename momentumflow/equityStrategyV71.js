@@ -97,8 +97,9 @@ export function nextBarOpen(rows = [], signalTimestamp) {
   return bar ? { timestamp: timestamp(bar), price: open(bar) } : null;
 }
 
-export function timedExitClose(rows = [], signalTimestamp) {
+export function timedExitClose(rows = [], signalTimestamp, now = Date.now()) {
   const target = Number(signalTimestamp) + 4 * 30 * 60 * 1000;
+  if (target + 30 * 60_000 > Number(now) - 5_000) return null;
   const bar = normalizeV71Bars(rows).find((row) => timestamp(row) === target);
   return bar ? { timestamp: target, price: close(bar) } : null;
 }
