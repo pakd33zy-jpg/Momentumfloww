@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { decrypt } from './crypto.js';
 import { store } from './store.js';
+import { persistentCredentialStoreConfigured } from './persistentCredentialStore.js';
 
 // ALPACA CLIENT v16
 
@@ -36,6 +37,14 @@ export function getCredentials(mode) {
         err.message
       );
     }
+  }
+
+  // Once persistent credential storage is configured, never fall back to the
+  // legacy Render Alpaca environment pair. That pair is kept only as a
+  // server-side encryption/persistence seed so a restart cannot silently switch
+  // the bot to an older paper account.
+  if (persistentCredentialStoreConfigured()) {
+    return null;
   }
 
   const keyId =
