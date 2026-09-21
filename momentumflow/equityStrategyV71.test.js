@@ -34,7 +34,9 @@ test('V71 requires synchronized SPY confirmation and ranks alignment', () => {
 test('V71 uses next-bar open and the fourth later bar close', () => {
   const signalTimestamp = start + 4 * 30 * 60_000;
   assert.equal(nextBarOpen(bars, signalTimestamp).timestamp, start + 5 * 30 * 60_000);
-  assert.equal(timedExitClose(bars, signalTimestamp).timestamp, start + 8 * 30 * 60_000);
+  const completedAt = start + 9 * 30 * 60_000 + 5_001;
+  assert.equal(timedExitClose(bars, signalTimestamp, completedAt).timestamp, start + 8 * 30 * 60_000);
+  assert.equal(timedExitClose(bars, signalTimestamp, start + 8 * 30 * 60_000), null);
 });
 
 test('V71 settlement subtracts modeled round-trip cost', () => {
