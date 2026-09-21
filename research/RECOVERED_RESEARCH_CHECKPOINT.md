@@ -43,6 +43,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 
 - Intraday cross-sectional relative-strength continuation and reversal were each tested across 108 synchronized market-neutral configurations; neither reached break-even in both training and 2025. VWAP-deviation mean reversion was then tested across 192 late-session and 384 corrected early-session configurations with closed-candle signals, next-bar execution, stops, same-day exits, and costs. No configuration passed; even the strongest training PF remained below 0.80. Reject these intraday relative-strength and VWAP families unchanged.
 
+- A labeled 30-minute event study replaced blind grids: 7,813 training and 7,762 untouched observations across eight liquid ETFs were labeled for clean two-hour continuation moves (at least 0.75% favorable with no more than 0.50% adverse excursion). High current-bar range produced stable event-rate lift of 2.23x training / 2.21x untouched; high two-bar momentum produced 1.96x / 2.12x; acceleration and same-direction VWAP displacement each retained about 1.5x lift. This is a genuine predictive pattern, but fixed-threshold next-bar trades still had PF below 1 after 0.06% cost because numerous smaller failures outweighed the large moves. Training-only symbol selection found no instrument with PF >=1.10 and adequate sample. Preserve these features for payoff/execution research; do not call them a tradable edge yet.
+
 ## Next research direction
 
 1. Rebuild invariant-tested causal engines.
