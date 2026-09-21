@@ -2,7 +2,7 @@ import express from 'express';
 import { encrypt, maskSecret } from './crypto.js';
 import { store } from './store.js';
 import { getAccountSummary, getCredentials } from './alpacaClient.js';
-import { persistCredentialsConfig, hasPersistedCredentials } from './persistentCredentialStore.js';
+import { persistCredentialsConfig, hasPersistedCredentials, persistentCredentialWriteTested } from './persistentCredentialStore.js';
 
 const router = express.Router();
 
@@ -31,7 +31,7 @@ router.get('/', (req, res) => {
         }
       : { configured: false };
   }
-  res.json({ ...result, persistence: { ready: true, hasSavedCredentials: hasPersistedCredentials() } });
+  res.json({ ...result, persistence: { ready: true, writeTested: persistentCredentialWriteTested(), hasSavedCredentials: hasPersistedCredentials() } });
 });
 
 // GET /api/credentials/accounts — verifies Alpaca and returns current account values.
