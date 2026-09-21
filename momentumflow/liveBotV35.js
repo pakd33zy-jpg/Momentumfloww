@@ -392,7 +392,7 @@ async function enter(mode) {
 
   const { best, positions } = await scan(mode);
   if (!best) {
-    state.lastDecision = `${mode.toUpperCase()} V35 analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityDetailed || 0} equities; no V35 setup`;
+    state.lastDecision = `${mode.toUpperCase()} V51 analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityDetailed || 0} equities; no V51 crypto setup / no equity V35 setup`;
     return false;
   }
 
@@ -643,7 +643,7 @@ function pub() {
         maxPositions: Number(cfg().maxEquityPositions || 8),
       },
       crypto: {
-        strategy: 'CRYPTO_V35_STANDALONE',
+        strategy: 'CRYPTO_V51_PAPER_FORWARD',
         enabled: sc.cryptoV35Enabled !== false,
         maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoV35MaxConcurrentPositions || 8))),
       },
