@@ -1,0 +1,35 @@
+name: Equity V71 shadow validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'momentumflow/equityStrategyV71.js'
+      - 'momentumflow/equityStrategyV71.test.js'
+      - 'momentumflow/equityV71ShadowRouter.js'
+      - 'momentumflow/server.js'
+      - '.github/workflows/equity-v71-shadow-validation.yml'
+  pull_request:
+    paths:
+      - 'momentumflow/equityStrategyV71.js'
+      - 'momentumflow/equityStrategyV71.test.js'
+      - 'momentumflow/equityV71ShadowRouter.js'
+      - 'momentumflow/server.js'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: momentumflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: momentumflow/package-lock.json
+      - run: npm ci
+      - run: node --test equityStrategyV71.test.js
+      - run: node --check equityV71ShadowRouter.js
+      - run: node --check server.js
