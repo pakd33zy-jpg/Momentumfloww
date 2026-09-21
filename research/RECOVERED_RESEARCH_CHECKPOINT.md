@@ -41,6 +41,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 
 - Fifteen-minute opening-range breakout and rejected-breakout reversal were each tested across 144 configurations on the same twelve-symbol training/2025 split. Both produced thousands of trades but remained below break-even before and after the split (best training PF 0.96 for breakout and 0.74 for rejection reversal). Reject both opening-range families unchanged.
 
+- Intraday cross-sectional relative-strength continuation and reversal were each tested across 108 synchronized market-neutral configurations; neither reached break-even in both training and 2025. VWAP-deviation mean reversion was then tested across 192 late-session and 384 corrected early-session configurations with closed-candle signals, next-bar execution, stops, same-day exits, and costs. No configuration passed; even the strongest training PF remained below 0.80. Reject these intraday relative-strength and VWAP families unchanged.
+
 ## Next research direction
 
 1. Rebuild invariant-tested causal engines.
