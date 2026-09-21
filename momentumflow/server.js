@@ -13,6 +13,7 @@ import v50PaperRouter from './liveBotV50.js';
 import v26Router from './v26.js';
 import researchRouter from './research.js';
 import cryptoV51ShadowRouter from './cryptoV51ShadowRouter.js';
+import equityV71ShadowRouter, { startEquityV71Shadow } from './equityV71ShadowRouter.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { startCryptoV51ShadowMonitor } from './cryptoV51ShadowMonitor.js';
@@ -64,6 +65,7 @@ migrateActiveRuntimeConfigOnBoot();
 startFastScalpMonitor();
 startEquityFastScalpMonitor();
 startCryptoV51ShadowMonitor();
+startEquityV71Shadow();
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 app.use('/api/credentials', credentialsRouter);
@@ -78,6 +80,7 @@ app.use('/api/v50-paper', v50PaperRouter);
 app.use('/api/v26', v26Router);
 app.use('/api/research', researchRouter);
 app.use('/api/crypto-v51-shadow', cryptoV51ShadowRouter);
+app.use('/api/equity-v71-shadow', equityV71ShadowRouter);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
 
 const PORT = process.env.PORT || 4000;
