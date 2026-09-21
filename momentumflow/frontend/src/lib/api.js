@@ -1,12 +1,4 @@
-﻿const DEFAULT_API_URL =
-  'https://momentumfloww.onrender.com';
-
-const rawBase = DEFAULT_API_URL
-  .trim()
-  .replace(/\/+$/, '')
-  .replace(/\/api$/i, '');
-
-const BASE = `${rawBase}/api`;
+const BASE = '/api';
 const CONFIG_DRAFT_KEY = 'momentumflow_trading_config_draft';
 
 async function request(path, options = {}) {
