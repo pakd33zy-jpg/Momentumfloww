@@ -5,19 +5,34 @@ const IV_LENGTH = 12; // recommended for GCM
 const AUTH_TAG_LENGTH = 16;
 
 function getKey() {
-  const keyHex = process.env.CREDENTIAL_ENCRYPTION_KEY;
-  if (!keyHex) {
+  const explicitKeyHex = String(process.env.CREDENTIAL_ENCRYPTION_KEY || '').trim();
+
+  if (explicitKeyHex) {
+    const key = Buffer.from(explicitKeyHex, 'hex');
+    if (key.length !== 32) {
+      throw new Error('CREDENTIAL_ENCRYPTION_KEY must be a 64-character hex string (32 bytes).');
+    }
+    return key;
+  }
+
+  // Render migration fallback:
+  // keep in-app credential saving available without requiring a separate encryption
+  // variable. The seed remains server-side only and is never returned to the browser.
+  const fallbackSeed =
+    process.env.ALPACA_PAPER_SECRET_KEY ||
+    process.env.ALPACA_SECRET_KEY ||
+    process.env.ALPACA_LIVE_SECRET_KEY;
+
+  if (!fallbackSeed) {
     throw new Error(
-      'CREDENTIAL_ENCRYPTION_KEY is not set. Generate one with: ' +
-      'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))" ' +
-      'and put it in your .env file before storing any credentials.'
+      'Credential encryption is unavailable because no server-side encryption seed is configured.'
     );
   }
-  const key = Buffer.from(keyHex, 'hex');
-  if (key.length !== 32) {
-    throw new Error('CREDENTIAL_ENCRYPTION_KEY must be a 64-character hex string (32 bytes).');
-  }
-  return key;
+
+  return crypto
+    .createHash('sha256')
+    .update(`momentumflow-credential-store:v1:${fallbackSeed}`, 'utf8')
+    .digest();
 }
 
 /**
