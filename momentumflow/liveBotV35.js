@@ -232,7 +232,7 @@ async function scanCrypto(mode, positions) {
     const compact = String(asset.symbol || '').replace('/', '');
     const snapshot = snapshots[asset.symbol] || snapshots[compact];
     if (!snapshot) {
-      nearMisses.push({ symbol: asset.symbol, assetClass: 'crypto', reason: 'V35: no snapshot', score: 0 });
+      nearMisses.push({ symbol: asset.symbol, assetClass: 'crypto', reason: 'V51: no snapshot', score: 0 });
       continue;
     }
     const result = evaluateCryptoCandidateV35({
@@ -248,7 +248,7 @@ async function scanCrypto(mode, positions) {
     else nearMisses.push({
       symbol: asset.symbol,
       assetClass: 'crypto',
-      reason: result.reason || result.diagnostics?.reason || 'V35: no signal',
+      reason: result.reason || result.diagnostics?.reason || 'V51: no signal',
       score: Number(result.diagnostics?.score ?? result.score ?? 0),
     });
   }
@@ -310,7 +310,7 @@ async function scanEquities(mode, positions) {
     else nearMisses.push({
       symbol: item.asset.symbol,
       assetClass: 'us_equity',
-      reason: result.reason || result.diagnostics?.reason || 'V35: no signal',
+      reason: result.reason || result.diagnostics?.reason || 'V51: no signal',
       score: Number(result.diagnostics?.score ?? result.score ?? 0),
     });
   }
@@ -352,7 +352,7 @@ async function scan(mode) {
     },
     marketOpen: equity.marketOpen === true,
     engines: {
-      crypto: 'CRYPTO_V35_STANDALONE',
+      crypto: 'CRYPTO_V51_PAPER_FORWARD',
       equities: 'EQUITY_V35_STANDALONE',
     },
   };
@@ -400,10 +400,10 @@ async function enter(mode) {
   const equity = Number(account.equity || account.portfolio_value || account.cash || 0);
   const cash = Number(account.cash || 0);
   const currentCryptoPositions = positions.filter((p) => String(p.asset_class || '').toLowerCase() === 'crypto' && Math.abs(Number(p.qty || 0)) > 0).length;
-  const maxCrypto = Math.max(1, Math.min(8, Number(strategyCfg().cryptoV35MaxConcurrentPositions || 8)));
+  const maxCrypto = Math.max(1, Math.min(8, Number(strategyCfg().cryptoV51MaxConcurrentPositions || strategyCfg().maxConcurrentPositions || 8)));
 
   if (best.assetClass === 'crypto' && currentCryptoPositions >= maxCrypto) {
-    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - ${currentCryptoPositions}/${maxCrypto} Crypto V35 position limit`;
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - ${currentCryptoPositions}/${maxCrypto} Crypto V51 position limit`;
     return false;
   }
 
@@ -423,7 +423,7 @@ async function enter(mode) {
       signal: best,
       config: strategyCfg(),
     });
-    riskFraction = Number(strategyCfg().cryptoV35RiskFraction || 0.01);
+    riskFraction = Number(strategyCfg().riskFraction || 0.01);
     plannedRiskDollars = equity * riskFraction;
   } else {
     const sized = equityBudget(account, best);
@@ -433,7 +433,7 @@ async function enter(mode) {
   }
 
   if (!(positionBudget > 1)) {
-    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - V35 risk/exposure budget has no room`;
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - V51 risk/exposure budget has no room`;
     return false;
   }
 
@@ -635,7 +635,7 @@ function pub() {
       total: state.universe.equities.length + state.universe.crypto.length,
       refreshedAt: state.universe.refreshedAt,
     },
-    strategyVersion: 'v35-standalone-equity+crypto',
+    strategyVersion: 'v51-crypto+v35-equity',
     engines: {
       equities: {
         strategy: 'EQUITY_V35_STANDALONE',
@@ -644,8 +644,8 @@ function pub() {
       },
       crypto: {
         strategy: 'CRYPTO_V51_PAPER_FORWARD',
-        enabled: sc.cryptoV35Enabled !== false,
-        maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoV35MaxConcurrentPositions || 8))),
+        enabled: sc.cryptoV51Enabled !== false,
+        maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoV51MaxConcurrentPositions || sc.maxConcurrentPositions || 8))),
       },
     },
     config: {
