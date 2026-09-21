@@ -654,6 +654,7 @@ function pub() {
       equityDirections: 'LONG_AND_SHORT',
       cryptoDirections: 'LONG_ONLY',
       execution: state.mode === 'paper' ? 'ALPACA_PAPER' : state.mode === 'live' ? 'ALPACA_LIVE' : null,
+      effectiveCryptoEntryWaitMs: Math.max(60000, Number(cfg().entryWaitMs || 15000)),
     },
     strategyConfig: sc,
   };
