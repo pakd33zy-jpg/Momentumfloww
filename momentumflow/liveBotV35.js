@@ -448,7 +448,11 @@ async function enter(mode) {
     timeInForce: best.assetClass === 'crypto' ? 'gtc' : 'day',
   });
 
-  const fill = await settleOrder(mode, order.id, Number(cfg().entryWaitMs || 15000));
+  const entryTimeoutMs =
+    best.assetClass === 'crypto'
+      ? Math.max(60000, Number(cfg().entryWaitMs || 15000))
+      : Number(cfg().entryWaitMs || 15000);
+  const fill = await settleOrder(mode, order.id, entryTimeoutMs);
   const filledQty = Number(fill.filled_qty || 0);
   const entryPrice = Number(fill.filled_avg_price || 0);
   if (!(filledQty > 0) || !(entryPrice > 0)) {
@@ -681,6 +685,103 @@ async function tick() {
   }
 }
 
+async function adoptExistingPaperCryptoPositions(session) {
+  const positions = await getPositions('paper');
+  const existing = positions
+    .filter((p) => String(p.asset_class || '').toLowerCase() === 'crypto')
+    .filter((p) => Math.abs(Number(p.qty || 0)) > 0)
+    .slice(0, maxOpenPositions());
+
+  for (const p of existing) {
+    const symbol = normalizeSymbol(p.symbol);
+    const qty = Math.abs(Number(p.qty || 0));
+    const entryPrice = Number(
+      p.avg_entry_price ||
+      p.current_price ||
+      (Number(p.market_value || 0) && qty > 0 ? Math.abs(Number(p.market_value)) / qty : 0)
+    );
+    if (!symbol || !(qty > 0) || !(entryPrice > 0)) continue;
+
+    const trade = createTrade({
+      sessionId: session.id,
+      market: symbol,
+      marketName: symbol,
+      direction: Number(p.qty || 0) < 0 ? 'SHORT' : 'LONG',
+      conviction: 'standard',
+      entryPrice,
+    });
+
+    Object.assign(trade, {
+      asset_class: 'crypto',
+      execution_mode: 'paper',
+      qty: String(qty),
+      filled_qty: String(qty),
+      strategy_name: 'CRYPTO_V51_PAPER_FORWARD',
+      quality_score: null,
+      recovered_from_broker: true,
+      planned_position_budget: Math.abs(Number(p.market_value || 0)),
+      planned_risk_dollars: 0,
+      requested_risk_fraction: Number(strategyCfg().riskFraction || 0.01),
+      effective_risk_fraction: Number(strategyCfg().riskFraction || 0.01),
+      stop_loss_pct: 1.25,
+      take_profit_pct: 2.25,
+      trail_trigger_pct: 1.25,
+      trail_distance_pct: 0.8125,
+      trail_floor_pct: 0.3125,
+      max_hold_minutes: Math.max(15, Number(strategyCfg().maxHoldMinutes || 60)),
+      best_favorable_move_pct: 0,
+      entry_signal: {
+        trigger: 'BROKER_POSITION_RECOVERY',
+        exitPlan: {
+          stopLossPct: 1.25,
+          takeProfitPct: 2.25,
+          trailTriggerPct: 1.25,
+          trailDistancePct: 0.8125,
+          trailFloorPct: 0.3125,
+          maxHoldMinutes: Math.max(15, Number(strategyCfg().maxHoldMinutes || 60)),
+          estimatedRoundTripCostPct: Math.max(0, Number(strategyCfg().estimatedRoundTripCostPct || 0.10)),
+        },
+      },
+    });
+
+    store.insert('trades', trade);
+    state.openTradeIds.push(trade.id);
+  }
+
+  if (existing.length) {
+    state.lastDecision = `PAPER recovered ${existing.length} existing Alpaca crypto position(s) after restart`;
+  }
+}
+
+export async function startLiveBotV35() {
+  if (state.running) return pub();
+  const mode = selectedMode();
+  const access = accessCheck(mode);
+  if (!access.allowed) throw new Error(access.reason);
+  const account = await getAccount(mode);
+  const startingCapital = Number(account.equity || account.portfolio_value || account.cash || 0);
+  if (!(startingCapital > 0)) throw new Error(`Alpaca ${mode} account has no valid equity.`);
+
+  const session = createSession({ mode, startingCapital });
+  store.insert('sessions', session);
+  state.running = true;
+  state.mode = mode;
+  state.sessionId = session.id;
+  state.startedAt = new Date().toISOString();
+  state.lastTickAt = null;
+  state.lastError = null;
+  state.lastDecision = `V51 ${mode.toUpperCase()} starting`;
+  state.openTradeIds = [];
+
+  if (mode === 'paper') {
+    await adoptExistingPaperCryptoPositions(session);
+  }
+
+  await refreshUniverse(mode, true);
+  schedule();
+  return pub();
+}
+
 router.get('/status', (req, res) => res.json(pub()));
 router.get('/rejection-log', (req, res) => {
   const rows = state.nearMisses.map((x, index) => ({
@@ -699,28 +800,9 @@ router.delete('/rejection-log', (req, res) => { state.nearMisses = []; res.json(
 
 router.post('/start', async (req, res) => {
   try {
-    if (state.running) return res.json(pub());
-    const mode = selectedMode();
-    const access = accessCheck(mode);
-    if (!access.allowed) return res.status(409).json({ error: access.reason });
-    const account = await getAccount(mode);
-    const startingCapital = Number(account.equity || account.portfolio_value || account.cash || 0);
-    if (!(startingCapital > 0)) return res.status(409).json({ error: `Alpaca ${mode} account has no valid equity.` });
-    const session = createSession({ mode, startingCapital });
-    store.insert('sessions', session);
-    state.running = true;
-    state.mode = mode;
-    state.sessionId = session.id;
-    state.startedAt = new Date().toISOString();
-    state.lastTickAt = null;
-    state.lastError = null;
-    state.lastDecision = `V35 ${mode.toUpperCase()} starting — Equity V35 + Crypto V35 independent engines`;
-    state.openTradeIds = [];
-    await refreshUniverse(mode, true);
-    schedule();
-    return res.json(pub());
+    return res.json(await startLiveBotV35());
   } catch (error) {
-    return res.status(500).json({ error: `V35 start failed: ${error.message}` });
+    return res.status(500).json({ error: `V51 start failed: ${error.message}` });
   }
 });
 
