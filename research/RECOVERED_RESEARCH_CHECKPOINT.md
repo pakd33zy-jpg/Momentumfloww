@@ -45,6 +45,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 
 - A labeled 30-minute event study replaced blind grids: 7,813 training and 7,762 untouched observations across eight liquid ETFs were labeled for clean two-hour continuation moves (at least 0.75% favorable with no more than 0.50% adverse excursion). High current-bar range produced stable event-rate lift of 2.23x training / 2.21x untouched; high two-bar momentum produced 1.96x / 2.12x; acceleration and same-direction VWAP displacement each retained about 1.5x lift. This is a genuine predictive pattern, but fixed-threshold next-bar trades still had PF below 1 after 0.06% cost because numerous smaller failures outweighed the large moves. Training-only symbol selection found no instrument with PF >=1.10 and adequate sample. Preserve these features for payoff/execution research; do not call them a tradable edge yet.
 
+- A deliberately simple 30-minute multi-indicator state was discovered on the 2024 development / 2025 untouched split: bearish MACD histogram cross, price below and within 0.6% of EMA20, negative two-bar momentum, and simultaneous SPY bearish-cross confirmation. With next-bar entry, 1 ATR stop, 2.5R target, eight-bar maximum hold, and 0.06% cost, it produced 34 trades / PF 1.67 in 2024 and 34 trades / PF 1.42 in 2025; removing the best two trades left PF 1.13 / 1.09. Truly independent years rejected it unchanged: 2022 PF 0.89, 2023 PF 0.74, and 2026 YTD PF 0.06. Preserve the interaction as regime-dependent evidence; do not deploy or retune the entry against those failed years.
+
 ## Next research direction
 
 1. Rebuild invariant-tested causal engines.
