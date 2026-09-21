@@ -1,5 +1,5 @@
 ﻿const DEFAULT_API_URL =
-  'https://momentumfloww-production.up.railway.app';
+  'https://momentumfloww.onrender.com';
 
 const rawBase = (
   import.meta.env.VITE_API_URL ||
