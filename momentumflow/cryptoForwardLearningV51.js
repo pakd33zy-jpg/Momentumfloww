@@ -12,6 +12,10 @@ export const CRYPTO_V51_SHADOW_DEFAULTS = Object.freeze({
 });
 
 function metric(v35Result, key, fallback = 0) {
+  const fromV51Signal = v35Result?.signal?.signal?.v51State?.context?.[key];
+  if (Number.isFinite(Number(fromV51Signal))) return Number(fromV51Signal);
+  const fromV51Diagnostics = v35Result?.diagnostics?.state?.context?.[key];
+  if (Number.isFinite(Number(fromV51Diagnostics))) return Number(fromV51Diagnostics);
   const fromSignal = v35Result?.signal?.signal?.[key];
   if (Number.isFinite(Number(fromSignal))) return Number(fromSignal);
   const fromDiag = v35Result?.diagnostics?.metrics?.[key];
@@ -20,7 +24,10 @@ function metric(v35Result, key, fallback = 0) {
 }
 
 function triggerOf(v35Result) {
-  return v35Result?.signal?.signal?.trigger || v35Result?.diagnostics?.metrics?.trigger || 'UNKNOWN';
+  return v35Result?.signal?.signal?.trigger ||
+    v35Result?.diagnostics?.state?.context?.trigger ||
+    v35Result?.diagnostics?.metrics?.trigger ||
+    'UNKNOWN';
 }
 
 // Compress correlated evidence into a few forward-looking state variables.
