@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      selfDestroying: true,
       manifest: {
         name: 'MomentumFlow',
         short_name: 'MomentumFlow',
