@@ -6,6 +6,7 @@ import {
   getStockBars,
   getCryptoBars,
   placeOrder,
+  getPositions,
 } from './alpacaClient.js';
 import { MARKETS } from './models.js';
 
@@ -38,6 +39,26 @@ function snapshotPrice(snapshot) {
     ? price
     : null;
 }
+
+router.get('/positions', async (req, res) => {
+  try {
+    const mode = selectedMode();
+    const positions = await getPositions(mode);
+    res.json((positions || []).map((p) => ({
+      symbol: p.symbol,
+      assetClass: p.asset_class,
+      qty: Number(p.qty || 0),
+      side: p.side || null,
+      marketValue: Number(p.market_value || 0),
+      avgEntryPrice: Number(p.avg_entry_price || 0),
+      currentPrice: Number(p.current_price || 0),
+      unrealizedPl: Number(p.unrealized_pl || 0),
+      unrealizedPlpc: Number(p.unrealized_plpc || 0),
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get(
   '/grid',
