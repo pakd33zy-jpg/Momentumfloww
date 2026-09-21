@@ -25,6 +25,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Strong-regime 4-hour statistical pullback/recovery was also rejected across 27 settings. The predeclared two-standard-deviation pullback / 2 ATR stop / 12-bar maximum hold produced 210 training trades at PF 0.54 and 93 untouched trades at PF 0.31 (-204.49 return-points). All tested neighboring settings lost in both periods. Do not retry either 4-hour entry family unchanged.
 - Breadth-gated cross-sectional crypto rotation was tested across 48 expanding-breadth settings and 81 persistent-breadth settings. The expanding-breadth 90-day / seven-day hold / top-two core was positive in both periods (training PF 1.96, untouched PF 1.63), but untouched data contained only eight trades and removing the best two reduced PF to 0.17. Replacing expansion with a persistent breadth threshold increased the predeclared sample to 71 training and 26 untouched trades, but untouched PF fell to 0.82 with -28.54% compounded return. No persistent-breadth neighbor passed both periods plus best-two removal. Reject the rotation family as unvalidated and winner-dependent.
 
+- Loosened crypto strategy gates were exhaustively tested without weakening causal/accounting integrity. Across 900 broader regime/rotation combinations and 432 structured-stop variants, none passed training, untouched data, drawdown, and best-two-trade removal together. The most attractive loosened branch remained winner-concentrated and suffered excessive training drawdown. Do not loosen execution integrity to manufacture a pass.
+
 ## Equity evidence
 
 - Strict EMA200 + confirmed structure + MACD arm + later EMA20 confirmation + pullback stop + exact 2R produced only seven stored-window trades after correcting the same-candle defect.
@@ -34,6 +36,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 - Rebuilt score-based daily equity engine tested 243 predeclared combinations across SPY, QQQ, IWM, DIA, XLK, XLF, XLE, GLD, TLT, AAPL, MSFT, and NVDA using Alpaca IEX bars. Parameters were ranked only on 2021-2024, then checked on untouched 2025-2026 data.
 - The strongest training selection (score 5, 55-day structure, 2 ATR stop, 3R target, 40-bar timeout) had 154 training trades, +147.45 return-points and PF 1.40, but its untouched test produced 90 trades, -64.82 points and PF 0.75. Other top training selections also failed out of sample (PF approximately 0.66-0.87). Reject this simple trend/breakout score family unchanged.
 - Regime-aware ETF rotation was also unstable. The predeclared 63-day momentum / five-day rebalance / top-two version lost 10.28% in training (PF 0.95) and 14.06% in untouched data (PF 0.92). Nearby settings ranged from large gains to large losses, so isolated positive settings were rejected as parameter sensitivity.
+
+- Fifteen-minute opening-gap fade and opening-gap continuation were each tested across 144 configurations on twelve liquid equities/ETFs, using next-bar entry, same-day exit, 0.06% modeled cost, and a separate 2025 download. Both families were negative in training and 2025; best training PF was below 1.0. Reject both gap-direction families unchanged.
 
 ## Next research direction
 
