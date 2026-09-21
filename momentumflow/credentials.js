@@ -2,6 +2,7 @@ import express from 'express';
 import { encrypt, maskSecret } from './crypto.js';
 import { store } from './store.js';
 import { getAccountSummary, getCredentials } from './alpacaClient.js';
+import { persistCredentialsConfig, hasPersistedCredentials } from './persistentCredentialStore.js';
 
 const router = express.Router();
 
@@ -30,7 +31,7 @@ router.get('/', (req, res) => {
         }
       : { configured: false };
   }
-  res.json(result);
+  res.json({ ...result, persistence: { ready: true, hasSavedCredentials: hasPersistedCredentials() } });
 });
 
 // GET /api/credentials/accounts — verifies Alpaca and returns current account values.
@@ -74,7 +75,7 @@ router.post('/', async (req, res) => {
       keyIdMasked: maskSecret(cleanKeyId),
       savedAt: new Date().toISOString(),
     };
-    store.setConfig('credentials', creds);
+    await persistCredentialsConfig(creds);
 
     try {
       const account = await getAccountSummary(mode);
@@ -108,12 +109,16 @@ router.post('/', async (req, res) => {
 });
 
 // DELETE /api/credentials/:mode
-router.delete('/:mode', (req, res) => {
-  const { mode } = req.params;
-  const creds = store.getConfig('credentials', {});
-  delete creds[mode];
-  store.setConfig('credentials', creds);
-  res.json({ mode, configured: false });
+router.delete('/:mode', async (req, res) => {
+  try {
+    const { mode } = req.params;
+    const creds = store.getConfig('credentials', {});
+    delete creds[mode];
+    await persistCredentialsConfig(creds);
+    res.json({ mode, configured: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
