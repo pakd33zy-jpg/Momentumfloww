@@ -1,10 +1,7 @@
 ﻿const DEFAULT_API_URL =
   'https://momentumfloww.onrender.com';
 
-const rawBase = (
-  import.meta.env.VITE_API_URL ||
-  DEFAULT_API_URL
-)
+const rawBase = DEFAULT_API_URL
   .trim()
   .replace(/\/+$/, '')
   .replace(/\/api$/i, '');
