@@ -18,6 +18,7 @@ import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { startCryptoV51ShadowMonitor } from './cryptoV51ShadowMonitor.js';
 import { store } from './store.js';
+import { initPersistentCredentials } from './persistentCredentialStore.js';
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
@@ -60,6 +61,8 @@ function migrateActiveRuntimeConfigOnBoot() {
   console.log('[boot] V51 crypto PAPER runtime active; equity remains V35 while V51 equity is developed; crypto max concurrent positions=8.');
 }
 
+const credentialPersistence = await initPersistentCredentials();
+
 resetToPaperModeOnBoot();
 migrateActiveRuntimeConfigOnBoot();
 startFastScalpMonitor();
@@ -67,11 +70,15 @@ startEquityFastScalpMonitor();
 startCryptoV51ShadowMonitor();
 startEquityV71Shadow();
 
-setTimeout(() => {
-  startLiveBotV35()
-    .then(() => console.log('[boot] V51 paper execution bot auto-started.'))
-    .catch((error) => console.warn(`[boot] V51 paper execution auto-start skipped: ${error.message}`));
-}, 2500).unref?.();
+if (credentialPersistence.ready && credentialPersistence.loaded) {
+  setTimeout(() => {
+    startLiveBotV35()
+      .then(() => console.log('[boot] V51 paper execution bot auto-started.'))
+      .catch((error) => console.warn(`[boot] V51 paper execution auto-start skipped: ${error.message}`));
+  }, 2500).unref?.();
+} else {
+  console.warn('[boot] V51 execution not auto-started: waiting for persisted PAPER credentials.');
+}
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 app.use('/api/credentials', credentialsRouter);
