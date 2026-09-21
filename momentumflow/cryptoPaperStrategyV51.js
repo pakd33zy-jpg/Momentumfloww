@@ -7,6 +7,7 @@ export const CRYPTO_V51_PAPER_DEFAULTS = Object.freeze({
   maxOpenRiskFraction: 0.08,
   estimatedRoundTripCostPct: 0.10,
   maxHoldMinutes: 60,
+  maxLatestTradeAgeMinutes: 45,
 });
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, Number(x) || 0));
@@ -102,6 +103,30 @@ export function evaluateCryptoCandidateV51({ asset, snapshot, bars15m = [], bars
   const symbol = String(asset?.symbol || '').toUpperCase();
   const price = Number(snapshot?.latestTrade?.p ?? snapshot?.minuteBar?.c ?? 0);
   if (!symbol || !(price > 0)) return { signal: null, reason: 'V51: no tradable price', diagnostics: { score: 0 } };
+
+  const latestTradeTimeRaw =
+    snapshot?.latestTrade?.t ??
+    snapshot?.latestTrade?.timestamp ??
+    null;
+  const latestTradeTime = latestTradeTimeRaw ? new Date(latestTradeTimeRaw).getTime() : NaN;
+  const latestTradeAgeMinutes = Number.isFinite(latestTradeTime)
+    ? Math.max(0, (Date.now() - latestTradeTime) / 60000)
+    : Infinity;
+  const maxLatestTradeAgeMinutes = Math.max(
+    1,
+    Number(cfg.maxLatestTradeAgeMinutes || 45)
+  );
+
+  if (latestTradeAgeMinutes > maxLatestTradeAgeMinutes) {
+    const ageText = Number.isFinite(latestTradeAgeMinutes)
+      ? latestTradeAgeMinutes.toFixed(1)
+      : 'unknown';
+    return {
+      signal: null,
+      reason: `V51: stale latest trade ${ageText}m > ${maxLatestTradeAgeMinutes}m`,
+      diagnostics: { score: 0, latestTradeAgeMinutes },
+    };
+  }
 
   const state = deriveCryptoV51StateFromMarket({ snapshot, bars15m, bars1h, bars1d, btcBars1h });
   const threshold = Number(cfg.minimumOpportunityScore || 0.56);
