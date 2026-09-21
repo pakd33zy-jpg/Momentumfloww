@@ -39,6 +39,8 @@ Recovered after automatic workspace pruning on 2026-09-15. This ledger prevents 
 
 - Fifteen-minute opening-gap fade and opening-gap continuation were each tested across 144 configurations on twelve liquid equities/ETFs, using next-bar entry, same-day exit, 0.06% modeled cost, and a separate 2025 download. Both families were negative in training and 2025; best training PF was below 1.0. Reject both gap-direction families unchanged.
 
+- Fifteen-minute opening-range breakout and rejected-breakout reversal were each tested across 144 configurations on the same twelve-symbol training/2025 split. Both produced thousands of trades but remained below break-even before and after the split (best training PF 0.96 for breakout and 0.74 for rejection reversal). Reject both opening-range families unchanged.
+
 ## Next research direction
 
 1. Rebuild invariant-tested causal engines.
