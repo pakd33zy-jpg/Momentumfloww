@@ -26,6 +26,7 @@ import {
   CRYPTO_V35_DEFAULTS,
   evaluateCryptoCandidateV35,
   buildCryptoV35Budget,
+  evaluateCryptoExitV35,
 } from './cryptoStrategyV35.js';
 
 const router = express.Router();
@@ -72,7 +73,7 @@ const tradingCfg = () => ({ riskPerTrade: 0.01, ...store.getConfig('tradingConfi
 
 export function isManagedExecutionStrategy(strategyName = '') {
   const name = String(strategyName);
-  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD';
+  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER';
 }
 
 function selectedMode() {
@@ -185,6 +186,7 @@ function topActivity(snapshot) {
 
 async function scanCrypto(mode, positions) {
   const sc = strategyCfg();
+  if (mode !== 'paper') return { candidates: [], nearMisses: [{ symbol: 'CRYPTO', assetClass: 'crypto', reason: 'MACD crypto engine is paper-only', score: 0 }], detailed: 0 };
   const assets = state.universe.crypto || [];
   const symbols = assets.map((a) => a.symbol).filter(Boolean);
   if (!symbols.length) return { candidates: [], nearMisses: [], detailed: 0 };
@@ -232,7 +234,7 @@ async function scanCrypto(mode, positions) {
     const compact = String(asset.symbol || '').replace('/', '');
     const snapshot = snapshots[asset.symbol] || snapshots[compact];
     if (!snapshot) {
-      nearMisses.push({ symbol: asset.symbol, assetClass: 'crypto', reason: 'V51: no snapshot', score: 0 });
+      nearMisses.push({ symbol: asset.symbol, assetClass: 'crypto', reason: 'MACD: no snapshot', score: 0 });
       continue;
     }
     const result = evaluateCryptoCandidateV35({
@@ -248,7 +250,7 @@ async function scanCrypto(mode, positions) {
     else nearMisses.push({
       symbol: asset.symbol,
       assetClass: 'crypto',
-      reason: result.reason || result.diagnostics?.reason || 'V51: no signal',
+      reason: result.reason || result.diagnostics?.reason || 'MACD: no signal',
       score: Number(result.diagnostics?.score ?? result.score ?? 0),
     });
   }
@@ -310,7 +312,7 @@ async function scanEquities(mode, positions) {
     else nearMisses.push({
       symbol: item.asset.symbol,
       assetClass: 'us_equity',
-      reason: result.reason || result.diagnostics?.reason || 'V51: no signal',
+      reason: result.reason || result.diagnostics?.reason || 'MACD: no signal',
       score: Number(result.diagnostics?.score ?? result.score ?? 0),
     });
   }
@@ -352,7 +354,7 @@ async function scan(mode) {
     },
     marketOpen: equity.marketOpen === true,
     engines: {
-      crypto: 'CRYPTO_V51_PAPER_FORWARD',
+      crypto: 'CRYPTO_MACD_PEAK_PAPER',
       equities: 'EQUITY_V35_STANDALONE',
     },
   };
@@ -392,7 +394,7 @@ async function enter(mode) {
 
   const { best, positions } = await scan(mode);
   if (!best) {
-    state.lastDecision = `${mode.toUpperCase()} V51 analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityDetailed || 0} equities; no V51 crypto setup / no equity V35 setup`;
+    state.lastDecision = `${mode.toUpperCase()} MACD analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityDetailed || 0} equities; no MACD crypto setup / no equity V35 setup`;
     return false;
   }
 
@@ -400,10 +402,10 @@ async function enter(mode) {
   const equity = Number(account.equity || account.portfolio_value || account.cash || 0);
   const cash = Number(account.cash || 0);
   const currentCryptoPositions = positions.filter((p) => String(p.asset_class || '').toLowerCase() === 'crypto' && Math.abs(Number(p.qty || 0)) > 0).length;
-  const maxCrypto = Math.max(1, Math.min(8, Number(strategyCfg().cryptoV51MaxConcurrentPositions || strategyCfg().maxConcurrentPositions || 8)));
+  const maxCrypto = Math.max(1, Math.min(8, Number(strategyCfg().cryptoMacdPeakMaxConcurrentPositions || strategyCfg().maxConcurrentPositions || 8)));
 
   if (best.assetClass === 'crypto' && currentCryptoPositions >= maxCrypto) {
-    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - ${currentCryptoPositions}/${maxCrypto} Crypto V51 position limit`;
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - ${currentCryptoPositions}/${maxCrypto} MACD crypto position limit`;
     return false;
   }
 
@@ -433,7 +435,7 @@ async function enter(mode) {
   }
 
   if (!(positionBudget > 1)) {
-    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - V51 risk/exposure budget has no room`;
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - MACD risk/exposure budget has no room`;
     return false;
   }
 
@@ -562,6 +564,22 @@ async function manageOne(mode, trade) {
   const ageMin = (Date.now() - new Date(trade.timestamp || 0).getTime()) / 60000;
   const maxHold = Math.max(5, Number(trade.max_hold_minutes || 35));
 
+  if (trade.strategy_name === 'CRYPTO_MACD_PEAK_PAPER' && trade.asset_class === 'crypto') {
+    let bars1h = state.cryptoBarsCache.bars1h?.[trade.market] || [];
+    if (!bars1h.length || Date.now() - state.cryptoBarsCache.fetchedAt >= 5 * 60000) {
+      const fetched = await getCryptoBars(mode, [trade.market], {
+        timeframe: '1Hour',
+        start: new Date(Date.now() - 60 * 24 * 60 * 60000),
+        end: new Date(),
+        limit: 2000,
+        maxPages: 2,
+      });
+      bars1h = fetched[trade.market] || [];
+    }
+    const macdExit = evaluateCryptoExitV35({ bars1h, config: strategyCfg() });
+    if (macdExit.exit) return closeTrade(mode, trade, price, macdExit.reason);
+  }
+
   if (target > 0 && favorable >= target) return closeTrade(mode, trade, price, `V35 take profit +${favorable.toFixed(3)}%`);
   if (stop > 0 && favorable <= -stop) return closeTrade(mode, trade, price, `V35 stop ${favorable.toFixed(3)}%`);
   if (trailTrigger > 0 && best >= trailTrigger && favorable <= Math.max(trailFloor, best - trailDistance)) {
@@ -635,7 +653,7 @@ function pub() {
       total: state.universe.equities.length + state.universe.crypto.length,
       refreshedAt: state.universe.refreshedAt,
     },
-    strategyVersion: 'v51-crypto+v35-equity',
+    strategyVersion: 'macd-peak-crypto+v35-equity',
     engines: {
       equities: {
         strategy: 'EQUITY_V35_STANDALONE',
@@ -643,9 +661,9 @@ function pub() {
         maxPositions: Number(cfg().maxEquityPositions || 8),
       },
       crypto: {
-        strategy: 'CRYPTO_V51_PAPER_FORWARD',
-        enabled: sc.cryptoV51Enabled !== false,
-        maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoV51MaxConcurrentPositions || sc.maxConcurrentPositions || 8))),
+        strategy: 'CRYPTO_MACD_PEAK_PAPER',
+        enabled: sc.cryptoMacdPeakEnabled !== false,
+        maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoMacdPeakMaxConcurrentPositions || sc.maxConcurrentPositions || 8))),
       },
     },
     config: {
@@ -771,7 +789,7 @@ export async function startLiveBotV35() {
   state.startedAt = new Date().toISOString();
   state.lastTickAt = null;
   state.lastError = null;
-  state.lastDecision = `V51 ${mode.toUpperCase()} starting`;
+  state.lastDecision = `MACD PEAK ${mode.toUpperCase()} starting`;
   state.openTradeIds = [];
 
   if (mode === 'paper') {
@@ -803,7 +821,7 @@ router.post('/start', async (req, res) => {
   try {
     return res.json(await startLiveBotV35());
   } catch (error) {
-    return res.status(500).json({ error: `V51 start failed: ${error.message}` });
+    return res.status(500).json({ error: `MACD Peak start failed: ${error.message}` });
   }
 });
 
@@ -815,7 +833,7 @@ router.post('/stop', (req, res) => {
       store.update('sessions', session.id, { status: 'halted', halt_reason: 'Stopped by user', completed_at: new Date().toISOString() });
     }
   }
-  state.lastDecision = 'V35 stopped';
+  state.lastDecision = 'MomentumFlow stopped';
   res.json(pub());
 });
 
