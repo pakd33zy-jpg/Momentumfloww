@@ -9,6 +9,12 @@ export const CRYPTO_MACD_PEAK_DEFAULTS = Object.freeze({
   emergencyStopLossPct: 3.0,
   maxHoldMinutes: 10080,
   minTroughHistogramPct: 0.02,
+  scaleInEnabled: true,
+  maxEntriesPerSetup: 3,
+  scaleInTriggerPct1: 0.35,
+  scaleInTriggerPct2: 0.75,
+  scaleInSizeMultiplier1: 0.60,
+  scaleInSizeMultiplier2: 0.40,
 });
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, Number(x) || 0));
@@ -128,6 +134,15 @@ export function evaluateCryptoMacdPeakCandidate({ asset, snapshot, bars1h = [], 
         trigger: 'MACD_BELOW_ZERO_TROUGH_2_CLOSED_CANDLE_CONFIRMATION',
         timeframe: '1Hour',
         macd: { fast: 12, slow: 26, signal: 9 },
+        scaleInPlan: {
+          enabled: cfg.scaleInEnabled !== false,
+          maxEntriesPerSetup: Math.max(1, Math.min(3, Number(cfg.maxEntriesPerSetup || 3))),
+          addOnlyIfProfitable: true,
+          triggerPct1: Number(cfg.scaleInTriggerPct1 || 0.35),
+          triggerPct2: Number(cfg.scaleInTriggerPct2 || 0.75),
+          sizeMultiplier1: Number(cfg.scaleInSizeMultiplier1 || 0.60),
+          sizeMultiplier2: Number(cfg.scaleInSizeMultiplier2 || 0.40),
+        },
         histogramPctAtTrough: Number(p.histPct.toFixed(6)),
         emaContext: {
           ema9: Number(p.ema9.toFixed(8)),
