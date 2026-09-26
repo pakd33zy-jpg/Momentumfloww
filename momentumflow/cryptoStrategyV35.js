@@ -1,25 +1,29 @@
-// Compatibility shim only.
-// V35 crypto logic is retired from active execution. The existing bot imports
-// these legacy symbol names, but every crypto decision and sizing call delegates
-// to the independent V51 paper engine.
-
+// Compatibility exports for the execution bot.
+// Crypto V51 execution is retired. These legacy export names now delegate only
+// to the independent MACD peak/trough paper strategy.
 import {
-  CRYPTO_V51_PAPER_DEFAULTS,
-  evaluateCryptoCandidateV51,
-  buildCryptoV51Budget,
-} from './cryptoPaperStrategyV51.js';
+  CRYPTO_MACD_PEAK_DEFAULTS,
+  evaluateCryptoMacdPeakCandidate,
+  evaluateCryptoMacdPeakExit,
+  buildCryptoMacdPeakBudget,
+} from './cryptoMacdPeakStrategy.js';
 
 export const CRYPTO_V35_DEFAULTS = Object.freeze({
-  ...CRYPTO_V51_PAPER_DEFAULTS,
+  ...CRYPTO_MACD_PEAK_DEFAULTS,
   cryptoV35Enabled: false,
-  cryptoV35MaxConcurrentPositions: CRYPTO_V51_PAPER_DEFAULTS.maxConcurrentPositions,
-  cryptoV35RiskFraction: CRYPTO_V51_PAPER_DEFAULTS.riskFraction,
+  cryptoV51Enabled: false,
+  cryptoMacdPeakEnabled: true,
+  cryptoV35MaxConcurrentPositions: CRYPTO_MACD_PEAK_DEFAULTS.cryptoMacdPeakMaxConcurrentPositions,
 });
 
 export function evaluateCryptoCandidateV35(args = {}) {
-  return evaluateCryptoCandidateV51(args);
+  return evaluateCryptoMacdPeakCandidate(args);
+}
+
+export function evaluateCryptoExitV35(args = {}) {
+  return evaluateCryptoMacdPeakExit(args);
 }
 
 export function buildCryptoV35Budget(args = {}) {
-  return buildCryptoV51Budget(args);
+  return buildCryptoMacdPeakBudget(args);
 }
