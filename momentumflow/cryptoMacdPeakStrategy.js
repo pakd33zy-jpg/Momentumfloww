@@ -9,7 +9,7 @@ export const CRYPTO_MACD_PEAK_DEFAULTS = Object.freeze({
   emergencyStopLossPct: 3.0,
   maxHoldMinutes: 10080,
   minTroughHistogramPct: 0.02,
-  scaleInEnabled: true,
+  scaleInEnabled: false,
   maxEntriesPerSetup: 3,
   scaleInTriggerPct1: 0.35,
   scaleInTriggerPct2: 0.75,
