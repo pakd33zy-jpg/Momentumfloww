@@ -39,15 +39,18 @@ function migrateActiveRuntimeConfigOnBoot() {
     maxOpenPositions: 8,
     maxEquityPositions: 8,
     v51CryptoRuntimeMigrated: true,
+    macdPeakCryptoRuntimeMigrated: true,
   });
 
   const strategy = store.getConfig('strategyConfig', {});
   store.setConfig('strategyConfig', {
     ...strategy,
     cryptoV35Enabled: false,
-    cryptoV51Enabled: true,
+    cryptoV51Enabled: false,
+    cryptoMacdPeakEnabled: true,
     equityV35Enabled: strategy.equityV35Enabled !== false,
     cryptoV51MaxConcurrentPositions: 8,
+    cryptoMacdPeakMaxConcurrentPositions: 8,
   });
 
   const trading = store.getConfig('tradingConfig', {});
@@ -58,7 +61,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     });
   }
 
-  console.log('[boot] V51 crypto PAPER runtime active; equity remains V35 while V51 equity is developed; crypto max concurrent positions=8.');
+  console.log('[boot] MACD peak/trough crypto PAPER runtime active; equity remains V35; crypto max concurrent positions=8.');
 }
 
 const credentialPersistence = await initPersistentCredentials();
@@ -67,17 +70,17 @@ resetToPaperModeOnBoot();
 migrateActiveRuntimeConfigOnBoot();
 startFastScalpMonitor();
 startEquityFastScalpMonitor();
-startCryptoV51ShadowMonitor();
+// V51 shadow monitor retired from automatic startup.
 startEquityV71Shadow();
 
 if (credentialPersistence.ready && credentialPersistence.loaded) {
   setTimeout(() => {
     startLiveBotV35()
-      .then(() => console.log('[boot] V51 paper execution bot auto-started.'))
-      .catch((error) => console.warn(`[boot] V51 paper execution auto-start skipped: ${error.message}`));
+      .then(() => console.log('[boot] MACD peak/trough paper execution bot auto-started.'))
+      .catch((error) => console.warn(`[boot] MACD peak/trough paper execution auto-start skipped: ${error.message}`));
   }, 2500).unref?.();
 } else {
-  console.warn('[boot] V51 execution not auto-started: waiting for persisted PAPER credentials.');
+  console.warn('[boot] MACD peak/trough execution not auto-started: waiting for persisted PAPER credentials.');
 }
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
