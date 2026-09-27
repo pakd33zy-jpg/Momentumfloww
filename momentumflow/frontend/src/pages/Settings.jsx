@@ -47,7 +47,7 @@ export default function Settings() {
 
   return (
     <div style={page}>
-      <div style={versionLabel}>MOMENTUMFLOW — V51 CRYPTO / V35 EQUITIES</div>
+      <div style={versionLabel}>MOMENTUMFLOW — MACD VALLEY/CROSS CRYPTO PAPER / V35 EQUITIES</div>
 
       {errors.length > 0 && (
         <div style={warningCard}>
@@ -92,7 +92,7 @@ export default function Settings() {
         <StrategyPerformancePanel />
         <div style={{ height: 10 }} />
         <PaperForwardSessionPanel />
-        <div style={legacyNotice}>Historical V35/V34/V33 data remains available only for comparison and learning. The active crypto paper engine is V51.</div>
+        <div style={legacyNotice}>Historical V35/V34/V33 data remains available only for comparison and learning. The active crypto paper engine is MACD Valley/Cross.</div>
       </section>
 
       <section>
