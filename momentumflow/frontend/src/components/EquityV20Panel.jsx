@@ -41,12 +41,12 @@ export default function EquityV20Panel() {
     <div style={stack}>
       <div style={engineGrid}>
         <EngineCard title="EQUITY V35" detail="Independent equity engine. Turning equities on does not disable crypto." />
-        <EngineCard title="CRYPTO V51 PAPER" detail="Active 24/7 crypto paper-trading engine with live forward-learning data collection." />
+        <EngineCard title="CRYPTO MACD VALLEY/CROSS PAPER" detail="Active 24/7 paper engine: 1h MACD valley entry with adaptive depth filter and bearish MACD/signal cross exit." />
       </div>
-      <div style={notice}>Crypto paper trading is V51. V35 crypto is retired from active decision-making and kept only as historical reference.</div>
+      <div style={notice}>Crypto paper trading uses the MACD Valley/Cross engine. V51 and V35 crypto are retired from active decision-making and kept only as historical reference.</div>
       <ToggleCard
         title="1-MIN EQUITY FAST SCALP"
-        note="PAPER only. Experimental early-momentum entry with reversal/fade exits. It is separate from the active V51 crypto engine."
+        note="PAPER only. Experimental early-momentum entry with reversal/fade exits. It is separate from the active MACD Valley/Cross crypto engine."
         enabled={fastScalpEnabled}
         loading={loading}
         saving={saving}
