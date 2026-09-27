@@ -73,7 +73,7 @@ const tradingCfg = () => ({ riskPerTrade: 0.01, ...store.getConfig('tradingConfi
 
 export function isManagedExecutionStrategy(strategyName = '') {
   const name = String(strategyName);
-  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER';
+  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER' || name === 'CRYPTO_MACD_VALLEY_CROSS_PAPER';
 }
 
 function selectedMode() {
@@ -490,7 +490,7 @@ async function enter(mode) {
     trail_trigger_pct: Number(exitPlan.trailTriggerPct || 0),
     trail_distance_pct: Number(exitPlan.trailDistancePct || 0),
     trail_floor_pct: Number(exitPlan.trailFloorPct || 0),
-    max_hold_minutes: Number(exitPlan.maxHoldMinutes || 35),
+    max_hold_minutes: exitPlan.maxHoldMinutes === 0 ? 0 : Number(exitPlan.maxHoldMinutes || 35),
     best_favorable_move_pct: 0,
     entry_signal: best.signal || {},
   });
@@ -562,9 +562,9 @@ async function manageOne(mode, trade) {
   const trailDistance = Math.max(0, Number(trade.trail_distance_pct || 0));
   const trailFloor = Math.max(0, Number(trade.trail_floor_pct || 0));
   const ageMin = (Date.now() - new Date(trade.timestamp || 0).getTime()) / 60000;
-  const maxHold = Math.max(5, Number(trade.max_hold_minutes || 35));
+  const configuredMaxHold = Number(trade.max_hold_minutes);\n  const maxHold = configuredMaxHold === 0 ? 0 : Math.max(5, Number.isFinite(configuredMaxHold) && configuredMaxHold > 0 ? configuredMaxHold : 35);
 
-  if (trade.strategy_name === 'CRYPTO_MACD_PEAK_PAPER' && trade.asset_class === 'crypto') {
+  if (['CRYPTO_MACD_PEAK_PAPER', 'CRYPTO_MACD_VALLEY_CROSS_PAPER'].includes(trade.strategy_name) && trade.asset_class === 'crypto') {
     let bars1h = state.cryptoBarsCache.bars1h?.[trade.market] || [];
     if (!bars1h.length || Date.now() - state.cryptoBarsCache.fetchedAt >= 5 * 60000) {
       const fetched = await getCryptoBars(mode, [trade.market], {
@@ -585,7 +585,7 @@ async function manageOne(mode, trade) {
   if (trailTrigger > 0 && best >= trailTrigger && favorable <= Math.max(trailFloor, best - trailDistance)) {
     return closeTrade(mode, trade, price, `V35 trailing exit; best +${best.toFixed(3)}%, now ${favorable.toFixed(3)}%`);
   }
-  if (ageMin >= maxHold) return closeTrade(mode, trade, price, `V35 max hold ${ageMin.toFixed(1)}m`);
+  if (maxHold > 0 && ageMin >= maxHold) return closeTrade(mode, trade, price, `V35 max hold ${ageMin.toFixed(1)}m`);
 }
 
 async function manageOpenTrades(mode) {
@@ -653,7 +653,7 @@ function pub() {
       total: state.universe.equities.length + state.universe.crypto.length,
       refreshedAt: state.universe.refreshedAt,
     },
-    strategyVersion: 'macd-peak-crypto+v35-equity',
+    strategyVersion: 'macd-valley-cross-crypto+v35-equity',
     engines: {
       equities: {
         strategy: 'EQUITY_V35_STANDALONE',
@@ -661,7 +661,7 @@ function pub() {
         maxPositions: Number(cfg().maxEquityPositions || 8),
       },
       crypto: {
-        strategy: 'CRYPTO_MACD_PEAK_PAPER',
+        strategy: 'CRYPTO_MACD_VALLEY_CROSS_PAPER',
         enabled: sc.cryptoMacdPeakEnabled !== false,
         maxPositions: Math.max(1, Math.min(8, Number(sc.cryptoMacdPeakMaxConcurrentPositions || sc.maxConcurrentPositions || 8))),
       },
