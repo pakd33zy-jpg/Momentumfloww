@@ -61,7 +61,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     });
   }
 
-  console.log('[boot] MACD peak/trough crypto PAPER runtime active; equity remains V35; crypto max concurrent positions=8.');
+  console.log('[boot] MACD valley/cross crypto PAPER runtime active; equity remains V35; crypto max concurrent positions=8.');
 }
 
 const credentialPersistence = await initPersistentCredentials();
@@ -76,7 +76,7 @@ startEquityV71Shadow();
 if (credentialPersistence.ready && credentialPersistence.loaded) {
   setTimeout(() => {
     startLiveBotV35()
-      .then(() => console.log('[boot] MACD peak/trough paper execution bot auto-started.'))
+      .then(() => console.log('[boot] MACD valley/cross paper execution bot auto-started.'))
       .catch((error) => console.warn(`[boot] MACD peak/trough paper execution auto-start skipped: ${error.message}`));
   }, 2500).unref?.();
 } else {
