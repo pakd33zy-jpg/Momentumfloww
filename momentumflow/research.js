@@ -356,9 +356,15 @@ router.get('/equity-monday-backtest', async (req, res) => {
 
     const barsByTf = {};
     for (const timeframe of timeframes) {
-      barsByTf[timeframe] = await getStockBars('paper', MONDAY_EQUITY_SYMBOLS, {
-        timeframe, start, end, limit: 10000, feed: 'iex', sort: 'asc', maxPages: 5,
-      });
+      const parts = await Promise.all(
+        MONDAY_EQUITY_SYMBOLS.map(async (symbol) => {
+          const one = await getStockBars('paper', [symbol], {
+            timeframe, start, end, limit: 10000, feed: 'iex', sort: 'asc', maxPages: 2,
+          });
+          return [symbol, one[symbol] || []];
+        })
+      );
+      barsByTf[timeframe] = Object.fromEntries(parts);
     }
 
     const results = [];
