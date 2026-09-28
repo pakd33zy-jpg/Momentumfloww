@@ -291,5 +291,9 @@ export function buildCryptoMacdPeakBudget({ equity, cash, currentCryptoExposure 
 
   const riskSized = desiredRisk / ((sizingRiskPct + costPct) / 100);
   const exposureRoom = Math.max(0, e * maxExposureFraction - Math.max(0, Number(currentCryptoExposure || 0)));
-  return Math.max(0, Math.min(riskSized, e * maxPositionFraction, exposureRoom, c * 0.90));
+  const minCryptoOrderNotional = 10;
+  const cashCap = c >= minCryptoOrderNotional
+    ? Math.max(minCryptoOrderNotional, c * 0.90)
+    : c * 0.90;
+  return Math.max(0, Math.min(riskSized, e * maxPositionFraction, exposureRoom, cashCap));
 }
