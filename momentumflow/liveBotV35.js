@@ -562,7 +562,8 @@ async function manageOne(mode, trade) {
   const trailDistance = Math.max(0, Number(trade.trail_distance_pct || 0));
   const trailFloor = Math.max(0, Number(trade.trail_floor_pct || 0));
   const ageMin = (Date.now() - new Date(trade.timestamp || 0).getTime()) / 60000;
-  const configuredMaxHold = Number(trade.max_hold_minutes);\n  const maxHold = configuredMaxHold === 0 ? 0 : Math.max(5, Number.isFinite(configuredMaxHold) && configuredMaxHold > 0 ? configuredMaxHold : 35);
+  const configuredMaxHold = Number(trade.max_hold_minutes);
+  const maxHold = configuredMaxHold === 0 ? 0 : Math.max(5, Number.isFinite(configuredMaxHold) && configuredMaxHold > 0 ? configuredMaxHold : 35);
 
   if (['CRYPTO_MACD_PEAK_PAPER', 'CRYPTO_MACD_VALLEY_CROSS_PAPER'].includes(trade.strategy_name) && trade.asset_class === 'crypto') {
     let bars1h = state.cryptoBarsCache.bars1h?.[trade.market] || [];
