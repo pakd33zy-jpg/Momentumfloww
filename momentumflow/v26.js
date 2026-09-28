@@ -1,6 +1,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import { getCredentials, getAccount, getPositions } from './alpacaClient.js';
+import { store } from './store.js';
 
 const router = express.Router();
 
@@ -12,6 +13,8 @@ const WEIGHTS = [0.70, 0.30];
 const DEFAULT_BUDGET = 100000;
 const PAPER_BASE = 'https://paper-api.alpaca.markets';
 const DATA_BASE = 'https://data.alpaca.markets';
+
+const v26Paused = () => store.getConfig('v26Control', { paused: true }).paused !== false;
 
 function headers() {
   const creds = getCredentials('paper');
@@ -263,6 +266,7 @@ async function snapshot(requestedBudget = DEFAULT_BUDGET) {
     strategy: 'V26_FROZEN_ROTATION',
     mode: 'paper',
     frozen: true,
+    paused: v26Paused(),
     rule: {
       universe: UNIVERSE,
       momentumDays: MOMENTUM_DAYS,
@@ -323,8 +327,23 @@ router.get('/status', async (req, res) => {
   }
 });
 
+router.post('/pause', (req, res) => {
+  const control = { paused: true, updatedAt: new Date().toISOString() };
+  store.setConfig('v26Control', control);
+  res.json({ ok: true, ...control });
+});
+
+router.post('/resume', (req, res) => {
+  const control = { paused: false, updatedAt: new Date().toISOString() };
+  store.setConfig('v26Control', control);
+  res.json({ ok: true, ...control });
+});
+
 router.post('/execute', async (req, res) => {
   try {
+    if (v26Paused()) {
+      return res.status(409).json({ error: 'V26 is paused. No new V26 orders can be submitted.' });
+    }
     if (req.body?.confirm !== 'PAPER_V26') {
       return res.status(400).json({ error: 'Paper confirmation token is required.' });
     }
