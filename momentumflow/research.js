@@ -244,7 +244,7 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
       const hist = s.macd.slice(ti - lookback, ti).map((x) => Math.abs(Number(x)));
       const deep = Math.abs(trough) >= btQuantile(hist, q);
       if (valley && twoRising && deep) {
-        pos = { entry: s.opens[i + 1] * (1 + sideCost / 100), entryIndex: i + 1 };
+        pos = { entry: s.opens[i + 1] * (1 + sideCost), entryIndex: i + 1 };
       }
       continue;
     }
@@ -255,7 +255,7 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
       s.macd[i] > 0;
 
     if (bearishCrossAboveZero) {
-      const exitPrice = s.opens[i + 1] * (1 - sideCost / 100);
+      const exitPrice = s.opens[i + 1] * (1 - sideCost);
       trades.push({ netReturn: exitPrice / pos.entry - 1, reason: 'MACD_CROSS' });
       pos = null;
     }
@@ -299,12 +299,12 @@ function backtestTrendCross(bars = [], { atrStop = 1.0, rewardRisk = 2.0, roundT
     if (!(atr > 0)) continue;
 
     if (bullCross && px > s.ema20[i] && px > s.ema200[i]) {
-      const entry = s.opens[i + 1] * (1 + sideCost / 100);
+      const entry = s.opens[i + 1] * (1 + sideCost);
       const stop = entry - atr * atrStop;
       const risk = entry - stop;
       pos = { side: 'LONG', entry, stop, target: entry + risk * rewardRisk };
     } else if (bearCross && px < s.ema20[i] && px < s.ema200[i]) {
-      const entry = s.opens[i + 1] * (1 - sideCost / 100);
+      const entry = s.opens[i + 1] * (1 - sideCost);
       const stop = entry + atr * atrStop;
       const risk = stop - entry;
       pos = { side: 'SHORT', entry, stop, target: entry - risk * rewardRisk };
@@ -315,9 +315,28 @@ function backtestTrendCross(bars = [], { atrStop = 1.0, rewardRisk = 2.0, roundT
 
 function aggregateSymbolSummaries(perSymbol = {}) {
   const all = Object.values(perSymbol).flatMap((x) => x.trades || []);
-  const summary = btSummary(all);
-  const positives = Object.entries(perSymbol).filter(([, x]) => x.summary.returnPct > 0).map(([s]) => s);
-  return { ...summary, positiveSymbols: positives.length, totalSymbols: Object.keys(perSymbol).length, positives };
+  const tradeStats = btSummary(all);
+  const rows = Object.entries(perSymbol);
+  const returns = rows.map(([, x]) => Number(x.summary.returnPct || 0));
+  const positives = rows.filter(([, x]) => x.summary.returnPct > 0).map(([s]) => s);
+  const sorted = [...returns].sort((a, b) => a - b);
+  const mean = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+  const median = sorted.length
+    ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+    : 0;
+  return {
+    trades: tradeStats.trades,
+    winRatePct: tradeStats.winRatePct,
+    profitFactor: tradeStats.profitFactor,
+    avgTradePct: tradeStats.avgTradePct,
+    equalWeightSleevesReturnPct: Number(mean.toFixed(3)),
+    medianSymbolReturnPct: Number(median.toFixed(3)),
+    positiveSymbols: positives.length,
+    totalSymbols: rows.length,
+    positives,
+    worstSymbolReturnPct: returns.length ? Number(Math.min(...returns).toFixed(3)) : 0,
+    bestSymbolReturnPct: returns.length ? Number(Math.max(...returns).toFixed(3)) : 0,
+  };
 }
 
 router.get('/equity-monday-backtest', async (req, res) => {
@@ -345,26 +364,37 @@ router.get('/equity-monday-backtest', async (req, res) => {
     const results = [];
     for (const variant of variants) {
       const perSymbol = {};
+      const recentCutoff = end.getTime() - 20 * 24 * 60 * 60 * 1000;
+      const olderPerSymbol = {};
+      const recentPerSymbol = {};
       for (const symbol of MONDAY_EQUITY_SYMBOLS) {
         const bars = barsByTf[variant.timeframe]?.[symbol] || [];
-        const trades = variant.kind === 'valley'
-          ? backtestValleyCross(bars, variant)
-          : backtestTrendCross(bars, variant);
+        const olderBars = bars.filter((b) => new Date(b?.t || b?.timestamp || 0).getTime() < recentCutoff);
+        const recentBars = bars.filter((b) => new Date(b?.t || b?.timestamp || 0).getTime() >= recentCutoff);
+        const runner = variant.kind === 'valley' ? backtestValleyCross : backtestTrendCross;
+        const trades = runner(bars, variant);
+        const olderTrades = runner(olderBars, variant);
+        const recentTrades = runner(recentBars, variant);
         perSymbol[symbol] = { bars: bars.length, summary: btSummary(trades), trades };
+        olderPerSymbol[symbol] = { summary: btSummary(olderTrades), trades: olderTrades };
+        recentPerSymbol[symbol] = { summary: btSummary(recentTrades), trades: recentTrades };
       }
       results.push({
         id: variant.id,
         timeframe: variant.timeframe,
         aggregate: aggregateSymbolSummaries(perSymbol),
+        olderWindow: aggregateSymbolSummaries(olderPerSymbol),
+        recent20d: aggregateSymbolSummaries(recentPerSymbol),
         bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, { bars: row.bars, ...row.summary }])),
       });
     }
 
     results.sort((a, b) => {
-      const ap = a.aggregate.profitFactor;
-      const bp = b.aggregate.profitFactor;
-      if (bp !== ap) return bp - ap;
-      return b.aggregate.returnPct - a.aggregate.returnPct;
+      const robustA = Math.min(a.olderWindow.profitFactor || 0, a.recent20d.profitFactor || 0);
+      const robustB = Math.min(b.olderWindow.profitFactor || 0, b.recent20d.profitFactor || 0);
+      if (robustB !== robustA) return robustB - robustA;
+      if (b.aggregate.positiveSymbols !== a.aggregate.positiveSymbols) return b.aggregate.positiveSymbols - a.aggregate.positiveSymbols;
+      return b.aggregate.equalWeightSleevesReturnPct - a.aggregate.equalWeightSleevesReturnPct;
     });
 
     res.set('Cache-Control', 'no-store');
