@@ -5,7 +5,7 @@ export const EQUITY_V35_DEFAULTS = Object.freeze({
   equityV35Enabled: true,
   equityMacdTimeframe: '5Min',
   equityMacdLookbackBars: 200,
-  equityMacdDepthQuantile: 0.50,
+  equityMacdDepthQuantile: 0.60,
   equityMacdEstimatedRoundTripCostPct: 0.04,
   equityMacdMaxPositionFraction: 0.15,
   equityMacdSizingRiskPct: 2.0,
