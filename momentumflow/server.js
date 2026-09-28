@@ -18,7 +18,7 @@ import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { startCryptoV51ShadowMonitor } from './cryptoV51ShadowMonitor.js';
 import { store } from './store.js';
-import { initPersistentCredentials } from './persistentCredentialStore.js';
+import { initPersistentCredentials, loadPersistentConfig, persistConfig } from './persistentCredentialStore.js';
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
@@ -66,8 +66,25 @@ function migrateActiveRuntimeConfigOnBoot() {
 
 const credentialPersistence = await initPersistentCredentials();
 
+if (credentialPersistence.ready) {
+  await Promise.all([
+    loadPersistentConfig('tradingConfig', {}),
+    loadPersistentConfig('strategyConfig', {}),
+    loadPersistentConfig('liveBotConfig', {}),
+  ]);
+}
+
 resetToPaperModeOnBoot();
 migrateActiveRuntimeConfigOnBoot();
+
+if (credentialPersistence.ready) {
+  await Promise.all([
+    persistConfig('tradingConfig', store.getConfig('tradingConfig', {})),
+    persistConfig('strategyConfig', store.getConfig('strategyConfig', {})),
+    persistConfig('liveBotConfig', store.getConfig('liveBotConfig', {})),
+  ]);
+  console.log('[boot] Persistent trading settings restored and synced.');
+}
 startFastScalpMonitor();
 startEquityFastScalpMonitor();
 // V51 shadow monitor retired from automatic startup.
