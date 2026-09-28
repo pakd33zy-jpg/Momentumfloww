@@ -342,6 +342,11 @@ function aggregateSymbolSummaries(perSymbol = {}) {
 router.get('/equity-monday-backtest', async (req, res) => {
   try {
     const days = Math.max(20, Math.min(90, Math.floor(Number(req.query.days || 60))));
+    const requestedSymbols = String(req.query.symbols || '')
+      .split(',')
+      .map((x) => x.trim().toUpperCase())
+      .filter((x) => MONDAY_EQUITY_SYMBOLS.includes(x));
+    const symbols = requestedSymbols.length ? [...new Set(requestedSymbols)] : MONDAY_EQUITY_SYMBOLS;
     const end = new Date();
     const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
     const timeframes = ['5Min', '15Min'];
@@ -357,7 +362,7 @@ router.get('/equity-monday-backtest', async (req, res) => {
     const barsByTf = {};
     for (const timeframe of timeframes) {
       const parts = await Promise.all(
-        MONDAY_EQUITY_SYMBOLS.map(async (symbol) => {
+        symbols.map(async (symbol) => {
           const one = await getStockBars('paper', [symbol], {
             timeframe, start, end, limit: 10000, feed: 'iex', sort: 'asc', maxPages: 2,
           });
@@ -373,7 +378,7 @@ router.get('/equity-monday-backtest', async (req, res) => {
       const recentCutoff = end.getTime() - 20 * 24 * 60 * 60 * 1000;
       const olderPerSymbol = {};
       const recentPerSymbol = {};
-      for (const symbol of MONDAY_EQUITY_SYMBOLS) {
+      for (const symbol of symbols) {
         const bars = barsByTf[variant.timeframe]?.[symbol] || [];
         const olderBars = bars.filter((b) => new Date(b?.t || b?.timestamp || 0).getTime() < recentCutoff);
         const recentBars = bars.filter((b) => new Date(b?.t || b?.timestamp || 0).getTime() >= recentCutoff);
@@ -407,7 +412,7 @@ router.get('/equity-monday-backtest', async (req, res) => {
     return res.json({
       generatedAt: new Date().toISOString(),
       days,
-      symbols: MONDAY_EQUITY_SYMBOLS,
+      symbols,
       roundTripCostPct: 0.04,
       note: 'Research only. Uses next-bar entries and includes modeled round-trip cost.',
       results,
