@@ -356,7 +356,7 @@ async function scan(mode) {
     },
     marketOpen: equity.marketOpen === true,
     engines: {
-      crypto: 'CRYPTO_MACD_PEAK_PAPER',
+      crypto: 'CRYPTO_MACD_VALLEY_CROSS_PAPER',
       equities: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
     },
   };
@@ -673,10 +673,10 @@ function pub() {
       total: state.universe.equities.length + state.universe.crypto.length,
       refreshedAt: state.universe.refreshedAt,
     },
-    strategyVersion: 'macd-valley-cross-crypto+v35-equity',
+    strategyVersion: 'macd-valley-cross-crypto+macd-valley-cross-equity',
     engines: {
       equities: {
-        strategy: 'EQUITY_V35_STANDALONE',
+        strategy: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
         enabled: sc.equityV35Enabled !== false,
         maxPositions: Number(cfg().maxEquityPositions || 8),
       },
