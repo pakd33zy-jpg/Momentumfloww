@@ -455,6 +455,12 @@ async function enter(mode) {
     return false;
   }
 
+  const minCryptoOrderNotional = 10;
+  if (best.assetClass === 'crypto' && best.direction !== 'SHORT' && positionBudget < minCryptoOrderNotional) {
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - crypto order budget ${positionBudget.toFixed(2)} is below Alpaca's $10 minimum`;
+    return false;
+  }
+
   state.lastDecision = `entering ${mode.toUpperCase()} ${best.direction} ${best.symbol} — ${best.strategy} score ${best.score}`;
   const order = await placeOrder({
     mode,
