@@ -1,5 +1,6 @@
 import express from 'express';
 import { store } from './store.js';
+import { persistConfig } from './persistentCredentialStore.js';
 
 const router = express.Router();
 
@@ -71,10 +72,10 @@ function validate(c) {
 
 router.get('/', (req, res) => {
   const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
-  res.json({ ...current, source: 'railway-store' });
+  res.json({ ...current, source: 'persistent-postgres' });
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const current = normalize(store.getConfig('tradingConfig', TRADING_DEFAULTS));
   const incoming = req.body || {};
   const merged = normalize({ ...current, ...incoming });
@@ -101,7 +102,7 @@ router.post('/', (req, res) => {
   // cooldown while scalping. Turning Fast Scalp off restores v19's
   // normal 30-minute crypto cooldown.
   const strategyCurrent = store.getConfig('strategyConfig', {});
-  store.setConfig('strategyConfig', {
+  const strategyMerged = {
     ...strategyCurrent,
     fastScalpEnabled: merged.fastScalpEnabled,
     equityFocusMode: merged.equityFocusMode,
@@ -109,9 +110,15 @@ router.post('/', (req, res) => {
     equityFastScalpEnabled: merged.equityFastScalpEnabled,
     cryptoCooldownMinutes: merged.fastScalpEnabled ? 1 : 30,
     equityCooldownMinutes: merged.equityFastScalpEnabled ? 1 : 8,
-  });
+  };
+  store.setConfig('strategyConfig', strategyMerged);
 
-  res.json({ ...merged, source: 'railway-store' });
+  await Promise.all([
+    persistConfig('tradingConfig', merged),
+    persistConfig('strategyConfig', strategyMerged),
+  ]);
+
+  res.json({ ...merged, source: 'persistent-postgres' });
 });
 
 export default router;
