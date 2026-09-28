@@ -150,6 +150,39 @@ export function hasPersistedCredentials() {
   return initialized && loadedSavedCredentials;
 }
 
+export async function loadPersistentConfig(configKey, fallback = {}) {
+  if (!initialized) {
+    const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
+    if (!result.ready) return { found: false, value: fallback };
+  }
+
+  const result = await getPool().query(
+    'SELECT config_value FROM momentumflow_secure_config WHERE config_key = $1',
+    [String(configKey)]
+  );
+  const value = result.rows?.[0]?.config_value;
+  if (value == null) return { found: false, value: fallback };
+  store.setConfig(String(configKey), value);
+  return { found: true, value };
+}
+
+export async function persistConfig(configKey, value) {
+  if (!initialized) {
+    const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
+    if (!result.ready) throw new Error('Persistent config store is unavailable.');
+  }
+
+  await getPool().query(
+    `INSERT INTO momentumflow_secure_config (config_key, config_value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (config_key)
+     DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = NOW()`,
+    [String(configKey), JSON.stringify(value ?? {})]
+  );
+  store.setConfig(String(configKey), value ?? {});
+  return true;
+}
+
 export async function persistCredentialsConfig(credentials) {
   if (!initialized) {
     const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
