@@ -21,6 +21,7 @@ import {
 import {
   EQUITY_V35_DEFAULTS,
   evaluateEquityCandidateV35,
+  evaluateEquityExitV35,
 } from './equityStrategyV35.js';
 import {
   CRYPTO_V35_DEFAULTS,
@@ -47,6 +48,7 @@ const state = {
   topCandidates: [],
   nearMisses: [],
   cryptoBarsCache: { fetchedAt: 0, symbolsKey: '', bars15m: {}, bars1h: {}, bars1d: {} },
+  equityBarsCache: { fetchedAt: 0, symbolsKey: '', bars5m: {} },
 };
 
 const DEFAULTS = {
@@ -73,7 +75,7 @@ const tradingCfg = () => ({ riskPerTrade: 0.01, ...store.getConfig('tradingConfi
 
 export function isManagedExecutionStrategy(strategyName = '') {
   const name = String(strategyName);
-  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER' || name === 'CRYPTO_MACD_VALLEY_CROSS_PAPER';
+  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER' || name === 'CRYPTO_MACD_VALLEY_CROSS_PAPER' || name === 'EQUITY_MACD_VALLEY_CROSS_PAPER';
 }
 
 function selectedMode() {
@@ -277,25 +279,25 @@ async function scanEquities(mode, positions) {
 
   if (!ranked.length) return { candidates: [], nearMisses: [], detailed: 0, marketOpen: true };
 
-  const detailSymbols = [...new Set([...ranked.map((x) => x.asset.symbol), 'SPY', 'QQQ'])];
-  const barsBySymbol = await getStockBars(mode, detailSymbols, {
-    timeframe: '1Min',
-    start: new Date(Date.now() - 12 * 60 * 60000),
-    end: new Date(),
-    limit: 10000,
-    feed: cfg().stockFeed || 'iex',
-  });
+  const detailSymbols = [...new Set(ranked.map((x) => x.asset.symbol))];
+  const symbolsKey = detailSymbols.slice().sort().join(',');
+  const fresh =
+    state.equityBarsCache.symbolsKey === symbolsKey &&
+    Date.now() - state.equityBarsCache.fetchedAt < 5 * 60000;
 
-  const spy = barsBySymbol.SPY || [];
-  const qqq = barsBySymbol.QQQ || [];
-  const ret = (bars, n = 15) => {
-    if (!Array.isArray(bars) || bars.length <= n) return 0;
-    const a = Number(bars.at(-(n + 1))?.c || 0);
-    const b = Number(bars.at(-1)?.c || 0);
-    return a > 0 && b > 0 ? (b / a - 1) * 100 : 0;
-  };
-  const marketMove = (ret(spy, 15) + ret(qqq, 15)) / 2;
-  const marketRegime = { direction: marketMove > 0.12 ? 'LONG' : marketMove < -0.12 ? 'SHORT' : 'NEUTRAL', move15Pct: marketMove };
+  if (!fresh) {
+    const bars5m = await getStockBars(mode, detailSymbols, {
+      timeframe: '5Min',
+      start: new Date(Date.now() - 5 * 24 * 60 * 60000),
+      end: new Date(),
+      limit: 10000,
+      feed: cfg().stockFeed || 'iex',
+    });
+    state.equityBarsCache = { fetchedAt: Date.now(), symbolsKey, bars5m };
+  }
+
+  const barsBySymbol = state.equityBarsCache.bars5m || {};
+  const marketRegime = { direction: 'NEUTRAL', move15Pct: 0 };
 
   const candidates = [];
   const nearMisses = [];
@@ -355,7 +357,7 @@ async function scan(mode) {
     marketOpen: equity.marketOpen === true,
     engines: {
       crypto: 'CRYPTO_MACD_PEAK_PAPER',
-      equities: 'EQUITY_V35_STANDALONE',
+      equities: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
     },
   };
 
@@ -373,15 +375,16 @@ async function settleOrder(mode, orderId, timeoutMs) {
 function equityBudget(account, best) {
   const equity = Number(account.equity || account.portfolio_value || account.cash || 0);
   const buyingPower = Number(account.buying_power || account.cash || 0);
-  const stopPct = Number(best.signal?.exitPlan?.stopLossPct || 0);
-  if (!(equity > 0) || !(buyingPower > 0) || !(stopPct > 0)) return { positionBudget: 0, riskDollars: 0, riskFraction: 0 };
+  if (!(equity > 0) || !(buyingPower > 0)) return { positionBudget: 0, riskDollars: 0, riskFraction: 0 };
   const requested = Number(tradingCfg().riskPerTrade ?? 0.01);
   const cap = Math.max(0.001, Math.min(0.01, Number(cfg().equityRiskFractionCap || 0.01)));
   const riskFraction = Math.max(0.001, Math.min(cap, Number.isFinite(requested) ? requested : 0.01));
+  const sizingRiskPct = Math.max(0.5, Number(best.signal?.exitPlan?.sizingRiskPct || 2));
+  const maxFraction = Math.max(0.01, Math.min(0.20, Number(best.signal?.exitPlan?.maxPositionFraction || 0.15)));
   const costPct = Math.max(0, Number(best.signal?.exitPlan?.estimatedRoundTripCostPct || 0));
   const riskDollars = equity * riskFraction;
-  const riskSized = riskDollars / ((stopPct + costPct) / 100);
-  const positionBudget = Math.min(riskSized, equity * Math.max(0.01, Math.min(0.20, Number(cfg().maxPositionFractionOfEquity || 0.20))), buyingPower * 0.90);
+  const riskSized = riskDollars / ((sizingRiskPct + costPct) / 100);
+  const positionBudget = Math.min(riskSized, equity * maxFraction, buyingPower * 0.90);
   return { positionBudget, riskDollars, riskFraction };
 }
 
@@ -564,6 +567,22 @@ async function manageOne(mode, trade) {
   const ageMin = (Date.now() - new Date(trade.timestamp || 0).getTime()) / 60000;
   const configuredMaxHold = Number(trade.max_hold_minutes);
   const maxHold = configuredMaxHold === 0 ? 0 : Math.max(5, Number.isFinite(configuredMaxHold) && configuredMaxHold > 0 ? configuredMaxHold : 35);
+
+  if (trade.strategy_name === 'EQUITY_MACD_VALLEY_CROSS_PAPER' && trade.asset_class === 'us_equity') {
+    let bars5m = state.equityBarsCache.bars5m?.[trade.market] || [];
+    if (!bars5m.length || Date.now() - state.equityBarsCache.fetchedAt >= 5 * 60000) {
+      const fetched = await getStockBars(mode, [trade.market], {
+        timeframe: '5Min',
+        start: new Date(Date.now() - 5 * 24 * 60 * 60000),
+        end: new Date(),
+        limit: 10000,
+        feed: cfg().stockFeed || 'iex',
+      });
+      bars5m = fetched[trade.market] || [];
+    }
+    const equityMacdExit = evaluateEquityExitV35({ bars: bars5m, config: strategyCfg() });
+    if (equityMacdExit.exit) return closeTrade(mode, trade, price, equityMacdExit.reason);
+  }
 
   if (['CRYPTO_MACD_PEAK_PAPER', 'CRYPTO_MACD_VALLEY_CROSS_PAPER'].includes(trade.strategy_name) && trade.asset_class === 'crypto') {
     let bars1h = state.cryptoBarsCache.bars1h?.[trade.market] || [];
