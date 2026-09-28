@@ -97,9 +97,9 @@ export function evaluateEquityCandidateV35(args = {}) {
       direction: 'LONG',
       score,
       price,
-      strategy: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
+      strategy: 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER',
       signal: {
-        version: 'MACD_5M_PAPER',
+        version: 'MACD_5M_Q60_PAPER',
         trigger: 'MACD_BELOW_ZERO_VALLEY_2_RISING_ADAPTIVE_DEPTH',
         timeframe: cfg.equityMacdTimeframe || '5Min',
         macd: { fast: 12, slow: 26, signal: 9 },
