@@ -32,10 +32,6 @@ import {
 
 const router = express.Router();
 
-const EQUITY_MACD_PAPER_SYMBOLS = new Set([
-  'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA', 'AMD',
-]);
-
 const state = {
   running: false,
   mode: null,
@@ -160,7 +156,7 @@ async function refreshUniverse(mode, force = false) {
 
 function stockBatch() {
   const rows = (state.universe.equities || [])
-    .filter((asset) => EQUITY_MACD_PAPER_SYMBOLS.has(String(asset?.symbol || '').toUpperCase()));
+    .filter((asset) => String(asset?.symbol || '').trim().length > 0);
   if (!rows.length) return [];
   const count = Math.min(rows.length, Math.max(1, Number(cfg().equityBatchSize || 500)));
   const out = [];
@@ -275,10 +271,10 @@ async function scanEquities(mode, positions) {
     };
   }
   const clock = await getMarketClock(mode);
-  if (!clock?.is_open) return { candidates: [], nearMisses: [], detailed: 0, marketOpen: false };
+  if (!clock?.is_open) return { candidates: [], nearMisses: [], scanned: 0, detailed: 0, marketOpen: false };
 
   const batch = stockBatch();
-  if (!batch.length) return { candidates: [], nearMisses: [], detailed: 0, marketOpen: true };
+  if (!batch.length) return { candidates: [], nearMisses: [], scanned: 0, detailed: 0, marketOpen: true };
 
   const symbols = batch.map((a) => a.symbol);
   const snapshots = await getStockSnapshots(mode, symbols, { feed: cfg().stockFeed || 'iex' });
@@ -290,7 +286,7 @@ async function scanEquities(mode, positions) {
     .sort((a, b) => b.activity - a.activity)
     .slice(0, Math.max(1, Number(cfg().equityDetailLimit || 80)));
 
-  if (!ranked.length) return { candidates: [], nearMisses: [], detailed: 0, marketOpen: true };
+  if (!ranked.length) return { candidates: [], nearMisses: [], scanned: batch.length, detailed: 0, marketOpen: true };
 
   const detailSymbols = [...new Set(ranked.map((x) => x.asset.symbol))];
   const symbolsKey = detailSymbols.slice().sort().join(',');
@@ -331,7 +327,7 @@ async function scanEquities(mode, positions) {
       score: Number(result.diagnostics?.score ?? result.score ?? 0),
     });
   }
-  return { candidates, nearMisses, detailed: ranked.length, marketOpen: true };
+  return { candidates, nearMisses, scanned: batch.length, detailed: ranked.length, marketOpen: true };
 }
 
 async function scan(mode) {
@@ -361,7 +357,8 @@ async function scan(mode) {
     scannedAt: new Date().toISOString(),
     counts: {
       cryptoUniverse: state.universe.crypto.length,
-      equityUniverse: EQUITY_MACD_PAPER_SYMBOLS.size,
+      equityUniverse: state.universe.equities.length,
+      equityPrefilterScanned: Number(equity.scanned || 0),
       cryptoDetailed: crypto.detailed,
       equityDetailed: equity.detailed,
       cryptoQualified: crypto.candidates.length,
@@ -410,7 +407,7 @@ async function enter(mode) {
 
   const { best, positions } = await scan(mode);
   if (!best) {
-    state.lastDecision = `${mode.toUpperCase()} MACD analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityDetailed || 0} equities; no MACD crypto setup / no equity V35 setup`;
+    state.lastDecision = `${mode.toUpperCase()} MACD analyzed ${state.scanDiagnostics?.counts?.cryptoDetailed || 0} crypto / ${state.scanDiagnostics?.counts?.equityPrefilterScanned || 0} equity snapshots (${state.scanDiagnostics?.counts?.equityDetailed || 0} detailed); no MACD crypto setup / no equity setup`;
     return false;
   }
 
@@ -682,7 +679,7 @@ function pub() {
     nearMisses: state.nearMisses,
     strategyPerformance: strategyPerformance(),
     activeScanCounts: {
-      equities: Number(state.scanDiagnostics?.counts?.equityDetailed || 0),
+      equities: Number(state.scanDiagnostics?.counts?.equityPrefilterScanned || state.scanDiagnostics?.counts?.equityDetailed || 0),
       crypto: Number(state.scanDiagnostics?.counts?.cryptoDetailed || 0),
     },
     universe: {
