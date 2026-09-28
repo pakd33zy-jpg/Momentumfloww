@@ -32,6 +32,10 @@ import {
 
 const router = express.Router();
 
+const EQUITY_MACD_PAPER_SYMBOLS = new Set([
+  'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA', 'AMD',
+]);
+
 const state = {
   running: false,
   mode: null,
@@ -75,7 +79,7 @@ const tradingCfg = () => ({ riskPerTrade: 0.01, ...store.getConfig('tradingConfi
 
 export function isManagedExecutionStrategy(strategyName = '') {
   const name = String(strategyName);
-  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER' || name === 'CRYPTO_MACD_VALLEY_CROSS_PAPER' || name === 'EQUITY_MACD_VALLEY_CROSS_PAPER';
+  return name.includes('V35') || name === 'CRYPTO_V51_PAPER_FORWARD' || name === 'CRYPTO_MACD_PEAK_PAPER' || name === 'CRYPTO_MACD_VALLEY_CROSS_PAPER' || name === 'EQUITY_MACD_VALLEY_CROSS_PAPER' || name === 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER';
 }
 
 function selectedMode() {
@@ -155,7 +159,8 @@ async function refreshUniverse(mode, force = false) {
 }
 
 function stockBatch() {
-  const rows = state.universe.equities || [];
+  const rows = (state.universe.equities || [])
+    .filter((asset) => EQUITY_MACD_PAPER_SYMBOLS.has(String(asset?.symbol || '').toUpperCase()));
   if (!rows.length) return [];
   const count = Math.min(rows.length, Math.max(1, Number(cfg().equityBatchSize || 500)));
   const out = [];
@@ -261,6 +266,14 @@ async function scanCrypto(mode, positions) {
 }
 
 async function scanEquities(mode, positions) {
+  if (mode !== 'paper') {
+    return {
+      candidates: [],
+      nearMisses: [{ symbol: 'EQUITY', assetClass: 'us_equity', reason: 'Equity MACD q60 engine is paper-only', score: 0 }],
+      detailed: 0,
+      marketOpen: false,
+    };
+  }
   const clock = await getMarketClock(mode);
   if (!clock?.is_open) return { candidates: [], nearMisses: [], detailed: 0, marketOpen: false };
 
@@ -348,7 +361,7 @@ async function scan(mode) {
     scannedAt: new Date().toISOString(),
     counts: {
       cryptoUniverse: state.universe.crypto.length,
-      equityUniverse: state.universe.equities.length,
+      equityUniverse: EQUITY_MACD_PAPER_SYMBOLS.size,
       cryptoDetailed: crypto.detailed,
       equityDetailed: equity.detailed,
       cryptoQualified: crypto.candidates.length,
@@ -357,7 +370,7 @@ async function scan(mode) {
     marketOpen: equity.marketOpen === true,
     engines: {
       crypto: 'CRYPTO_MACD_VALLEY_CROSS_PAPER',
-      equities: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
+      equities: 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER',
     },
   };
 
@@ -568,7 +581,7 @@ async function manageOne(mode, trade) {
   const configuredMaxHold = Number(trade.max_hold_minutes);
   const maxHold = configuredMaxHold === 0 ? 0 : Math.max(5, Number.isFinite(configuredMaxHold) && configuredMaxHold > 0 ? configuredMaxHold : 35);
 
-  if (trade.strategy_name === 'EQUITY_MACD_VALLEY_CROSS_PAPER' && trade.asset_class === 'us_equity') {
+  if (['EQUITY_MACD_VALLEY_CROSS_PAPER', 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER'].includes(trade.strategy_name) && trade.asset_class === 'us_equity') {
     let bars5m = state.equityBarsCache.bars5m?.[trade.market] || [];
     if (!bars5m.length || Date.now() - state.equityBarsCache.fetchedAt >= 5 * 60000) {
       const fetched = await getStockBars(mode, [trade.market], {
@@ -676,7 +689,7 @@ function pub() {
     strategyVersion: 'macd-valley-cross-crypto+macd-valley-cross-equity',
     engines: {
       equities: {
-        strategy: 'EQUITY_MACD_VALLEY_CROSS_PAPER',
+        strategy: 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER',
         enabled: sc.equityV35Enabled !== false,
         maxPositions: Number(cfg().maxEquityPositions || 8),
       },
