@@ -32,6 +32,10 @@ import {
 
 const router = express.Router();
 
+const EQUITY_MACD_PAPER_SYMBOLS = new Set([
+  'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA', 'AMD',
+]);
+
 const state = {
   running: false,
   mode: null,
