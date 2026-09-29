@@ -740,16 +740,30 @@ async function tick() {
   }
 }
 
-async function adoptExistingPaperCryptoPositions(session) {
+async function adoptExistingPaperPositions(session) {
   const positions = await getPositions('paper');
   const existing = positions
-    .filter((p) => String(p.asset_class || '').toLowerCase() === 'crypto')
     .filter((p) => Math.abs(Number(p.qty || 0)) > 0)
+    .filter((p) => {
+      const assetClass = String(p.asset_class || '').toLowerCase();
+      if (assetClass === 'crypto') return true;
+      if (assetClass === 'us_equity') {
+        return EQUITY_MACD_PAPER_SYMBOLS.has(String(p.symbol || '').toUpperCase());
+      }
+      return false;
+    })
     .slice(0, maxOpenPositions());
 
+  let cryptoRecovered = 0;
+  let equityRecovered = 0;
+
   for (const p of existing) {
-    const symbol = normalizeSymbol(p.symbol);
-    const qty = Math.abs(Number(p.qty || 0));
+    const assetClass = String(p.asset_class || '').toLowerCase();
+    const symbol = assetClass === 'crypto'
+      ? normalizeSymbol(p.symbol)
+      : String(p.symbol || '').toUpperCase();
+    const qtySigned = Number(p.qty || 0);
+    const qty = Math.abs(qtySigned);
     const entryPrice = Number(
       p.avg_entry_price ||
       p.current_price ||
@@ -757,54 +771,74 @@ async function adoptExistingPaperCryptoPositions(session) {
     );
     if (!symbol || !(qty > 0) || !(entryPrice > 0)) continue;
 
+    const isCrypto = assetClass === 'crypto';
+    const strategyName = isCrypto
+      ? 'CRYPTO_MACD_VALLEY_CROSS_PAPER'
+      : 'EQUITY_MACD_VALLEY_CROSS_Q60_PAPER';
+    const exitPlan = isCrypto
+      ? {
+          stopLossPct: 0,
+          takeProfitPct: 0,
+          trailTriggerPct: 0,
+          trailDistancePct: 0,
+          trailFloorPct: 0,
+          maxHoldMinutes: 0,
+          estimatedRoundTripCostPct: Math.max(0, Number(strategyCfg().estimatedRoundTripCostPct || 0.10)),
+        }
+      : {
+          stopLossPct: 0,
+          takeProfitPct: 0,
+          trailTriggerPct: 0,
+          trailDistancePct: 0,
+          trailFloorPct: 0,
+          maxHoldMinutes: 0,
+          estimatedRoundTripCostPct: Math.max(0, Number(strategyCfg().equityMacdEstimatedRoundTripCostPct || 0.04)),
+        };
+
     const trade = createTrade({
       sessionId: session.id,
       market: symbol,
       marketName: symbol,
-      direction: Number(p.qty || 0) < 0 ? 'SHORT' : 'LONG',
+      direction: qtySigned < 0 ? 'SHORT' : 'LONG',
       conviction: 'standard',
       entryPrice,
     });
 
     Object.assign(trade, {
-      asset_class: 'crypto',
+      asset_class: isCrypto ? 'crypto' : 'us_equity',
       execution_mode: 'paper',
       qty: String(qty),
       filled_qty: String(qty),
-      strategy_name: 'CRYPTO_V51_PAPER_FORWARD',
+      strategy_name: strategyName,
       quality_score: null,
       recovered_from_broker: true,
       planned_position_budget: Math.abs(Number(p.market_value || 0)),
       planned_risk_dollars: 0,
       requested_risk_fraction: Number(strategyCfg().riskFraction || 0.01),
       effective_risk_fraction: Number(strategyCfg().riskFraction || 0.01),
-      stop_loss_pct: 1.25,
-      take_profit_pct: 2.25,
-      trail_trigger_pct: 1.25,
-      trail_distance_pct: 0.8125,
-      trail_floor_pct: 0.3125,
-      max_hold_minutes: Math.max(15, Number(strategyCfg().maxHoldMinutes || 60)),
+      stop_loss_pct: 0,
+      take_profit_pct: 0,
+      trail_trigger_pct: 0,
+      trail_distance_pct: 0,
+      trail_floor_pct: 0,
+      max_hold_minutes: 0,
       best_favorable_move_pct: 0,
       entry_signal: {
         trigger: 'BROKER_POSITION_RECOVERY',
-        exitPlan: {
-          stopLossPct: 1.25,
-          takeProfitPct: 2.25,
-          trailTriggerPct: 1.25,
-          trailDistancePct: 0.8125,
-          trailFloorPct: 0.3125,
-          maxHoldMinutes: Math.max(15, Number(strategyCfg().maxHoldMinutes || 60)),
-          estimatedRoundTripCostPct: Math.max(0, Number(strategyCfg().estimatedRoundTripCostPct || 0.10)),
-        },
+        recoveredStrategy: strategyName,
+        exitPlan,
       },
     });
 
     store.insert('trades', trade);
     state.openTradeIds.push(trade.id);
+    if (isCrypto) cryptoRecovered += 1;
+    else equityRecovered += 1;
   }
 
   if (existing.length) {
-    state.lastDecision = `PAPER recovered ${existing.length} existing Alpaca crypto position(s) after restart`;
+    state.lastDecision =
+      `PAPER recovered ${cryptoRecovered} crypto + ${equityRecovered} q60 equity Alpaca position(s) after restart`;
   }
 }
 
@@ -829,7 +863,7 @@ export async function startLiveBotV35() {
   state.openTradeIds = [];
 
   if (mode === 'paper') {
-    await adoptExistingPaperCryptoPositions(session);
+    await adoptExistingPaperPositions(session);
   }
 
   await refreshUniverse(mode, true);
