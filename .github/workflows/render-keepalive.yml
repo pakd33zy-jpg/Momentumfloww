@@ -1,0 +1,21 @@
+name: Keep Render Paper Bot Awake
+
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Wake or keep MomentumFlow Render service active
+        run: |
+          curl --fail --silent --show-error \
+            --retry 2 --retry-delay 5 --retry-all-errors \
+            --max-time 90 \
+            https://momentumfloww.onrender.com/api/health
