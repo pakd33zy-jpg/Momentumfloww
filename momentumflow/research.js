@@ -219,7 +219,7 @@ function btDateKey(bar) {
   }).format(t);
 }
 
-function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose = false, roundTripCostPct = 0.04 } = {}) {
+function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose = false, emergencyStopPct = 0, roundTripCostPct = 0.04 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < lookback + 10) return [];
   const s = btSeries(rows);
@@ -228,6 +228,19 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
   const sideCost = roundTripCostPct / 200;
 
   for (let i = lookback + 3; i < rows.length - 1; i += 1) {
+    if (pos && emergencyStopPct > 0) {
+      const stop = pos.entry * (1 - emergencyStopPct / 100);
+      const open = s.opens[i];
+      const low = s.lows[i];
+      if (open <= stop || low <= stop) {
+        const rawExit = open <= stop ? open : stop;
+        const exitPrice = rawExit * (1 - sideCost);
+        trades.push({ netReturn: exitPrice / pos.entry - 1, reason: 'EMERGENCY_STOP' });
+        pos = null;
+        continue;
+      }
+    }
+
     if (pos && flatAtClose && btDateKey(rows[i]) !== btDateKey(rows[i + 1])) {
       const exitPrice = s.closes[i];
       const gross = exitPrice / pos.entry - 1;
@@ -353,6 +366,11 @@ router.get('/equity-monday-backtest', async (req, res) => {
     const variants = [
       { id: 'VALLEY_5M_Q50', timeframe: '5Min', kind: 'valley', q: 0.50, flatAtClose: false },
       { id: 'VALLEY_5M_Q60', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false },
+      { id: 'VALLEY_5M_Q60_STOP_2', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false, emergencyStopPct: 2 },
+      { id: 'VALLEY_5M_Q60_STOP_3', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false, emergencyStopPct: 3 },
+      { id: 'VALLEY_5M_Q60_STOP_5', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false, emergencyStopPct: 5 },
+      { id: 'VALLEY_5M_Q60_STOP_7_5', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false, emergencyStopPct: 7.5 },
+      { id: 'VALLEY_5M_Q60_STOP_10', timeframe: '5Min', kind: 'valley', q: 0.60, flatAtClose: false, emergencyStopPct: 10 },
       { id: 'VALLEY_5M_Q50_EOD', timeframe: '5Min', kind: 'valley', q: 0.50, flatAtClose: true },
       { id: 'VALLEY_15M_Q50', timeframe: '15Min', kind: 'valley', q: 0.50, flatAtClose: false },
       { id: 'TREND_MACD_5M_1ATR_2R', timeframe: '5Min', kind: 'trend', atrStop: 1.0, rewardRisk: 2.0 },
