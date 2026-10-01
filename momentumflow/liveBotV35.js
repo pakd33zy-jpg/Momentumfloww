@@ -1,5 +1,6 @@
 import express from 'express';
 import { store } from './store.js';
+import { persistConfig } from './persistentCredentialStore.js';
 import { createSession, createTrade, recomputeSessionStats } from './models.js';
 import { evaluateLiveGate } from './safetyEngine.js';
 import {
@@ -52,6 +53,7 @@ const state = {
   scanDiagnostics: null,
   topCandidates: [],
   nearMisses: [],
+  lastPersistedAt: 0,
   cryptoBarsCache: { fetchedAt: 0, symbolsKey: '', bars15m: {}, bars1h: {}, bars1d: {} },
   equityBarsCache: { fetchedAt: 0, symbolsKey: '', bars5m: {} },
 };
@@ -143,6 +145,20 @@ function saveTradePatch(tradeId, patch) {
   trades[index] = { ...trades[index], ...patch };
   store.saveAll('trades', trades);
   return trades[index];
+}
+
+async function persistExecutionState(force = false) {
+  const now = Date.now();
+  if (!force && now - Number(state.lastPersistedAt || 0) < 60000) return;
+  try {
+    await Promise.all([
+      persistConfig('sessions', store.getAll('sessions')),
+      persistConfig('trades', store.getAll('trades')),
+    ]);
+    state.lastPersistedAt = now;
+  } catch (error) {
+    console.warn(`[persistence] Bot session snapshot failed: ${error.message}`);
+  }
 }
 
 async function refreshUniverse(mode, force = false) {
@@ -520,6 +536,7 @@ async function enter(mode) {
   });
   store.insert('trades', trade);
   state.openTradeIds.push(trade.id);
+  await persistExecutionState(true);
   state.lastDecision = `entered ${mode.toUpperCase()} ${best.direction} ${best.symbol} — ${best.strategy} score ${best.score} — ${state.openTradeIds.length}/${maxOpenPositions()} V35 positions`;
   return true;
 }
@@ -567,6 +584,7 @@ async function closeTrade(mode, trade, price, reason) {
   }
   state.openTradeIds = state.openTradeIds.filter((id) => id !== trade.id);
   state.lastDecision = `closed ${mode.toUpperCase()} ${trade.direction} ${trade.market} — ${reason}`;
+  await persistExecutionState(true);
   return closed;
 }
 
@@ -741,14 +759,21 @@ async function tick() {
     state.lastError = error.message;
     state.lastDecision = `V35 error: ${error.message}`;
   } finally {
+    await persistExecutionState(false);
     schedule();
   }
 }
 
 async function adoptExistingPaperPositions(session) {
   const positions = await getPositions('paper');
+  const trackedSymbols = new Set(
+    sessionTrades()
+      .filter((t) => t.result === null && t.voided !== true)
+      .map((t) => normalizeSymbol(t.market))
+  );
   const existing = positions
     .filter((p) => Math.abs(Number(p.qty || 0)) > 0)
+    .filter((p) => !trackedSymbols.has(normalizeSymbol(p.symbol)))
     .filter((p) => {
       const assetClass = String(p.asset_class || '').toLowerCase();
       if (assetClass === 'crypto') return true;
@@ -844,6 +869,7 @@ async function adoptExistingPaperPositions(session) {
   if (existing.length) {
     state.lastDecision =
       `PAPER recovered ${cryptoRecovered} crypto + ${equityRecovered} q60 equity Alpaca position(s) after restart`;
+    await persistExecutionState(true);
   }
 }
 
@@ -856,21 +882,29 @@ export async function startLiveBotV35() {
   const startingCapital = Number(account.equity || account.portfolio_value || account.cash || 0);
   if (!(startingCapital > 0)) throw new Error(`Alpaca ${mode} account has no valid equity.`);
 
-  const session = createSession({ mode, startingCapital });
-  store.insert('sessions', session);
+  const runningSessions = store.getAll('sessions')
+    .filter((row) => row?.mode === mode && row?.status === 'running')
+    .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+  const session = runningSessions[0] || createSession({ mode, startingCapital });
+  if (!runningSessions.length) store.insert('sessions', session);
+
   state.running = true;
   state.mode = mode;
   state.sessionId = session.id;
-  state.startedAt = new Date().toISOString();
+  state.startedAt = session.created_at || new Date().toISOString();
   state.lastTickAt = null;
   state.lastError = null;
-  state.lastDecision = `MACD PEAK ${mode.toUpperCase()} starting`;
+  state.lastDecision = runningSessions.length
+    ? `Resumed persisted ${mode.toUpperCase()} MACD session`
+    : `MACD PEAK ${mode.toUpperCase()} starting`;
   state.openTradeIds = [];
+  syncOpenTradeIds();
 
   if (mode === 'paper') {
     await adoptExistingPaperPositions(session);
   }
 
+  await persistExecutionState(true);
   await refreshUniverse(mode, true);
   schedule();
   return pub();
@@ -950,15 +984,16 @@ router.post('/start', async (req, res) => {
   }
 });
 
-router.post('/stop', (req, res) => {
+router.post('/stop', async (req, res) => {
   stop();
   if (state.sessionId) {
     const session = store.getOne('sessions', state.sessionId);
     if (session && session.status === 'running') {
-      store.update('sessions', session.id, { status: 'halted', halt_reason: 'Stopped by user', completed_at: new Date().toISOString() });
+      store.update('sessions', session.id, { status: 'halted', halt_reason: 'Stopped by user', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() });
     }
   }
   state.lastDecision = 'MomentumFlow stopped';
+  await persistExecutionState(true);
   res.json(pub());
 });
 
