@@ -110,7 +110,7 @@ export default function ApiKeyCard({
             }}
           >
             {configured
-              ? `Currently saved: ${keyIdMasked || 'configured'}`
+              ? `Saved securely on server: ${keyIdMasked || 'configured'} — secret stays hidden after save`
               : 'No credentials saved'}
           </div>
         </div>
@@ -189,9 +189,10 @@ export default function ApiKeyCard({
         </label>
 
         <div style={subtle}>
-          Paste the Key ID and Secret Key directly from Alpaca. Spaces at the
-          beginning or end are removed when saved. Existing secret keys are not
-          returned to the browser.
+          Paste the Key ID and Secret Key directly from Alpaca. After a successful
+          save, these boxes intentionally clear and stay blank; the saved secret is
+          never sent back to the browser. Use the green SAVED/CONNECTED status above
+          to confirm persistence.
         </div>
 
         {error && <div style={errorStyle}>{error}</div>}
