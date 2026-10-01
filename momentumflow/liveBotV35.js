@@ -5,6 +5,7 @@ import { evaluateLiveGate } from './safetyEngine.js';
 import {
   getAccount,
   getPositions,
+  getOpenOrders,
   getTradableAssets,
   getMarketClock,
   getStockSnapshots,
@@ -876,6 +877,56 @@ export async function startLiveBotV35() {
 }
 
 router.get('/status', (req, res) => res.json(pub()));
+router.get('/broker-diagnostics', async (req, res) => {
+  try {
+    const mode = selectedMode();
+    const [account, positions, orders] = await Promise.all([
+      getAccount(mode),
+      getPositions(mode),
+      getOpenOrders(mode),
+    ]);
+    const safePositions = (Array.isArray(positions) ? positions : []).map((p) => ({
+      symbol: p.symbol,
+      asset_class: p.asset_class,
+      qty: p.qty,
+      market_value: p.market_value,
+      avg_entry_price: p.avg_entry_price,
+      current_price: p.current_price,
+      side: p.side,
+    }));
+    const safeOrders = (Array.isArray(orders) ? orders : []).map((o) => ({
+      id: o.id,
+      symbol: o.symbol,
+      asset_class: o.asset_class,
+      side: o.side,
+      type: o.type,
+      status: o.status,
+      qty: o.qty,
+      notional: o.notional,
+      filled_qty: o.filled_qty,
+      time_in_force: o.time_in_force,
+      submitted_at: o.submitted_at,
+    }));
+    return res.json({
+      mode,
+      account: {
+        equity: account.equity,
+        portfolio_value: account.portfolio_value,
+        cash: account.cash,
+        buying_power: account.buying_power,
+        regt_buying_power: account.regt_buying_power,
+        daytrading_buying_power: account.daytrading_buying_power,
+        non_marginable_buying_power: account.non_marginable_buying_power,
+        pending_transfer_in: account.pending_transfer_in,
+        pending_transfer_out: account.pending_transfer_out,
+      },
+      positions: safePositions,
+      openOrders: safeOrders,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 router.get('/rejection-log', (req, res) => {
   const rows = state.nearMisses.map((x, index) => ({
     id: `v35-${Date.now()}-${index}`,
