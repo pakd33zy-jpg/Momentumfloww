@@ -363,6 +363,15 @@ export async function getPositions(
   );
 }
 
+export async function getOpenOrders(
+  mode
+) {
+  return alpacaRequest(
+    mode,
+    '/v2/orders?status=open&direction=asc&limit=500'
+  );
+}
+
 export async function waitForFill(
   mode,
   orderId,

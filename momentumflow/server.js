@@ -71,6 +71,8 @@ if (credentialPersistence.ready) {
     loadPersistentConfig('tradingConfig', {}),
     loadPersistentConfig('strategyConfig', {}),
     loadPersistentConfig('liveBotConfig', {}),
+    loadPersistentConfig('sessions', []),
+    loadPersistentConfig('trades', []),
   ]);
 }
 
