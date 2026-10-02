@@ -372,6 +372,17 @@ export async function getOpenOrders(
   );
 }
 
+export async function closePosition(
+  mode,
+  symbol
+) {
+  return alpacaRequest(
+    mode,
+    `/v2/positions/${encodeURIComponent(symbol)}`,
+    { method: 'DELETE' }
+  );
+}
+
 export async function waitForFill(
   mode,
   orderId,
