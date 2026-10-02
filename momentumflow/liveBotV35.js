@@ -177,14 +177,10 @@ async function refreshUniverse(mode, force = false) {
 }
 
 function stockBatch() {
-  const rows = (state.universe.equities || [])
-    .filter((asset) => String(asset?.symbol || '').trim().length > 0);
-  if (!rows.length) return [];
-  const count = Math.min(rows.length, Math.max(1, Number(cfg().equityBatchSize || 500)));
-  const out = [];
-  for (let i = 0; i < count; i += 1) out.push(rows[(state.equityCursor + i) % rows.length]);
-  state.equityCursor = (state.equityCursor + count) % rows.length;
-  return out;
+  // q60 was validated only on these nine liquid symbols. Do not silently widen
+  // the live paper universe beyond the tested set.
+  return (state.universe.equities || [])
+    .filter((asset) => EQUITY_MACD_PAPER_SYMBOLS.has(String(asset?.symbol || '').toUpperCase()));
 }
 
 function blockedSymbols(positions = []) {
@@ -476,8 +472,30 @@ async function enter(mode) {
 
   const minCryptoOrderNotional = 10;
   if (best.assetClass === 'crypto' && best.direction !== 'SHORT' && positionBudget < minCryptoOrderNotional) {
-    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - crypto order budget ${positionBudget.toFixed(2)} is below Alpaca's $10 minimum`;
-    return false;
+    const sc = strategyCfg();
+    const maxExposureDollars = equity * Math.max(0.10, Math.min(0.95, Number(sc.maxTotalCryptoExposureFraction || 0.7)));
+    const exposureRoom = Math.max(0, maxExposureDollars - currentCryptoExposure);
+    const maxPositionDollars = equity * Math.max(0.01, Math.min(0.25, Number(sc.maxPositionFractionOfEquity || 0.12)));
+    const sizingRiskPct = Math.max(1, Number(best.signal?.signal?.exitPlan?.riskSizingPct || sc.riskSizingPct || 10));
+    const costPct = Math.max(0, Number(best.signal?.signal?.exitPlan?.estimatedRoundTripCostPct || sc.estimatedRoundTripCostPct || 0.10));
+    const minimumOrderRisk = minCryptoOrderNotional * ((sizingRiskPct + costPct) / 100);
+    const riskRoom = Math.max(
+      0,
+      equity * Math.max(0.01, Math.min(0.15, Number(sc.maxOpenRiskFraction || 0.08))) - openRiskDollars()
+    );
+
+    if (
+      positionBudget > 0 &&
+      cash >= minCryptoOrderNotional &&
+      exposureRoom >= minCryptoOrderNotional &&
+      maxPositionDollars >= minCryptoOrderNotional &&
+      riskRoom >= minimumOrderRisk
+    ) {
+      positionBudget = minCryptoOrderNotional;
+    } else {
+      state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - crypto order budget ${positionBudget.toFixed(2)} is below Alpaca's $10 minimum`;
+      return false;
+    }
   }
 
   state.lastDecision = `entering ${mode.toUpperCase()} ${best.direction} ${best.symbol} — ${best.strategy} score ${best.score}`;
