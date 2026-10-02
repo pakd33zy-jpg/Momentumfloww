@@ -7,6 +7,7 @@ import {
   getAccount,
   getPositions,
   getOpenOrders,
+  closePosition,
   getTradableAssets,
   getMarketClock,
   getStockSnapshots,
@@ -911,6 +912,77 @@ export async function startLiveBotV35() {
 }
 
 router.get('/status', (req, res) => res.json(pub()));
+router.post('/cleanup-legacy-paper', async (req, res) => {
+  try {
+    if (selectedMode() !== 'paper') {
+      return res.status(409).json({ error: 'Legacy cleanup is PAPER-only.' });
+    }
+
+    const positions = await getPositions('paper');
+    const orders = await getOpenOrders('paper');
+    const legacyEquities = (Array.isArray(positions) ? positions : [])
+      .filter((p) => String(p.asset_class || '').toLowerCase() === 'us_equity')
+      .filter((p) => !EQUITY_MACD_PAPER_SYMBOLS.has(String(p.symbol || '').toUpperCase()))
+      .filter((p) => Math.abs(Number(p.qty || 0)) > 0);
+
+    const staleOrders = (Array.isArray(orders) ? orders : [])
+      .filter((o) => String(o.symbol || '').toUpperCase() === 'POL/USD');
+
+    const canceledOrders = [];
+    for (const order of staleOrders) {
+      try {
+        await cancelOrder('paper', order.id);
+        canceledOrders.push(order.id);
+      } catch (error) {
+        canceledOrders.push({ id: order.id, error: error.message });
+      }
+    }
+
+    const closedPositions = [];
+    for (const p of legacyEquities) {
+      try {
+        const result = await closePosition('paper', p.symbol);
+        closedPositions.push({ symbol: p.symbol, orderId: result?.id || null, status: result?.status || null });
+      } catch (error) {
+        closedPositions.push({ symbol: p.symbol, error: error.message });
+      }
+    }
+
+    const legacySymbols = new Set(legacyEquities.map((p) => normalizeSymbol(p.symbol)));
+    if (legacySymbols.size) {
+      const trades = store.getAll('trades').map((t) => {
+        if (
+          t.result === null &&
+          t.voided !== true &&
+          legacySymbols.has(normalizeSymbol(t.market))
+        ) {
+          return {
+            ...t,
+            voided: true,
+            exit_reason: 'LEGACY_PAPER_POSITION_CLEANUP',
+            closed_at: new Date().toISOString(),
+          };
+        }
+        return t;
+      });
+      store.saveAll('trades', trades);
+      syncOpenTradeIds();
+      await persistExecutionState(true);
+    }
+
+    return res.json({
+      paper: true,
+      canceledOrders,
+      closedPositions,
+      preservedCryptoPositions: (Array.isArray(positions) ? positions : [])
+        .filter((p) => String(p.asset_class || '').toLowerCase() === 'crypto')
+        .map((p) => p.symbol),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/broker-diagnostics', async (req, res) => {
   try {
     const mode = selectedMode();
