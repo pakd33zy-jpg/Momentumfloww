@@ -1,10 +1,40 @@
 import express from 'express';
-import { getStockBars } from './alpacaClient.js';
+import fetch from 'node-fetch';
+import { getCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 
 const CORE_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA', 'AMD'];
 const ROUND_TRIP_COST_PCT = 0.04;
+const DATA_BASE = 'https://data.alpaca.markets';
+
+function alpacaHeaders() {
+  const creds = getCredentials('paper');
+  if (!creds) throw new Error('No Alpaca paper credentials configured.');
+  return {
+    'APCA-API-KEY-ID': creds.keyId,
+    'APCA-API-SECRET-KEY': creds.secretKey,
+  };
+}
+
+async function getAdjustedDailyBars(symbol, start, end) {
+  const qs = new URLSearchParams({
+    timeframe: '1Day',
+    start: start.toISOString(),
+    end: end.toISOString(),
+    feed: 'iex',
+    adjustment: 'all',
+    sort: 'asc',
+    limit: '10000',
+  });
+  const response = await fetch(
+    `${DATA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars?${qs.toString()}`,
+    { headers: alpacaHeaders() }
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.message || `Adjusted bars request failed for ${symbol} (${response.status})`);
+  return Array.isArray(payload?.bars) ? payload.bars : [];
+}
 
 function ema(values = [], period = 20) {
   if (!values.length) return [];
@@ -52,6 +82,26 @@ function summarize(trades = []) {
       : 0,
     avgHoldBars: trades.length ? Number((holdBars / trades.length).toFixed(2)) : 0,
   };
+}
+
+function pooledTradeStats(trades = []) {
+  const s = summarize(trades);
+  return {
+    trades: s.trades,
+    wins: s.wins,
+    losses: s.losses,
+    winRatePct: s.winRatePct,
+    profitFactor: s.profitFactor,
+    avgTradePct: s.avgTradePct,
+    avgHoldBars: s.avgHoldBars,
+  };
+}
+
+function median(values = []) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return Number((sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2).toFixed(3));
 }
 
 function backtestTrendPullback(bars = []) {
@@ -147,6 +197,7 @@ function aggregate(perSymbol = {}, recentCutoffMs = 0) {
   const recentTrades = allTrades.filter((t) => new Date(t.entryTime || 0).getTime() >= recentCutoffMs);
   const symbolRows = Object.entries(perSymbol);
   const symbolReturns = symbolRows.map(([, row]) => Number(row.summary.returnPct || 0));
+  const recentSymbolReturns = symbolRows.map(([, row]) => Number(row.recentSummary.returnPct || 0));
   const positiveSymbols = symbolRows.filter(([, row]) => Number(row.summary.returnPct || 0) > 0).map(([symbol]) => symbol);
   const recentPositiveSymbols = symbolRows
     .filter(([, row]) => Number(row.recentSummary.returnPct || 0) > 0)
@@ -154,10 +205,11 @@ function aggregate(perSymbol = {}, recentCutoffMs = 0) {
 
   return {
     all: {
-      ...summarize(allTrades),
+      ...pooledTradeStats(allTrades),
       equalWeightSymbolReturnPct: symbolReturns.length
         ? Number((symbolReturns.reduce((a, b) => a + b, 0) / symbolReturns.length).toFixed(3))
         : 0,
+      medianSymbolReturnPct: median(symbolReturns),
       positiveSymbols: positiveSymbols.length,
       totalSymbols: symbolRows.length,
       positiveSymbolNames: positiveSymbols,
@@ -165,10 +217,16 @@ function aggregate(perSymbol = {}, recentCutoffMs = 0) {
       bestSymbolReturnPct: symbolReturns.length ? Number(Math.max(...symbolReturns).toFixed(3)) : 0,
     },
     recent365d: {
-      ...summarize(recentTrades),
+      ...pooledTradeStats(recentTrades),
+      equalWeightSymbolReturnPct: recentSymbolReturns.length
+        ? Number((recentSymbolReturns.reduce((a, b) => a + b, 0) / recentSymbolReturns.length).toFixed(3))
+        : 0,
+      medianSymbolReturnPct: median(recentSymbolReturns),
       positiveSymbols: recentPositiveSymbols.length,
       totalSymbols: symbolRows.length,
       positiveSymbolNames: recentPositiveSymbols,
+      worstSymbolReturnPct: recentSymbolReturns.length ? Number(Math.min(...recentSymbolReturns).toFixed(3)) : 0,
+      bestSymbolReturnPct: recentSymbolReturns.length ? Number(Math.max(...recentSymbolReturns).toFixed(3)) : 0,
     },
   };
 }
@@ -185,18 +243,10 @@ router.get('/daily', async (req, res) => {
     const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
     const recentCutoffMs = end.getTime() - 365 * 24 * 60 * 60 * 1000;
 
-    const fetched = await Promise.all(symbols.map(async (symbol) => {
-      const data = await getStockBars('paper', [symbol], {
-        timeframe: '1Day',
-        start,
-        end,
-        limit: 10000,
-        feed: 'iex',
-        sort: 'asc',
-        maxPages: 2,
-      });
-      return [symbol, data[symbol] || []];
-    }));
+    const fetched = await Promise.all(symbols.map(async (symbol) => [
+      symbol,
+      await getAdjustedDailyBars(symbol, start, end),
+    ]));
 
     const perSymbol = {};
     for (const [symbol, bars] of fetched) {
@@ -217,6 +267,7 @@ router.get('/daily', async (req, res) => {
       researchOnly: true,
       liveBotChanged: false,
       timeframe: '1Day',
+      adjustment: 'all',
       days,
       symbols,
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
