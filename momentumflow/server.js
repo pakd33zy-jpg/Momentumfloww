@@ -15,6 +15,7 @@ import researchRouter from './research.js';
 import trendPullbackResearchRouter from './trendPullbackResearch.js';
 import breakoutResearchRouter from './breakoutResearch.js';
 import breakoutDailyLiquidResearchRouter from './breakoutDailyLiquidResearch.js';
+import breakout5520ShadowRouter, { startBreakout5520Shadow } from './breakout5520ShadowRouter.js';
 import cryptoV51ShadowRouter from './cryptoV51ShadowRouter.js';
 import equityV71ShadowRouter, { startEquityV71Shadow } from './equityV71ShadowRouter.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
@@ -76,6 +77,7 @@ if (credentialPersistence.ready) {
     loadPersistentConfig('liveBotConfig', {}),
     loadPersistentConfig('sessions', []),
     loadPersistentConfig('trades', []),
+    loadPersistentConfig('breakout5520ShadowState', {}),
   ]);
 }
 
@@ -94,6 +96,7 @@ startFastScalpMonitor();
 startEquityFastScalpMonitor();
 // V51 shadow monitor retired from automatic startup.
 startEquityV71Shadow();
+startBreakout5520Shadow();
 
 if (credentialPersistence.ready && credentialPersistence.loaded) {
   setTimeout(() => {
@@ -120,6 +123,7 @@ app.use('/api/research', researchRouter);
 app.use('/api/research/trend-pullback', trendPullbackResearchRouter);
 app.use('/api/research/breakout', breakoutResearchRouter);
 app.use('/api/research/breakout-liquid', breakoutDailyLiquidResearchRouter);
+app.use('/api/breakout-55-20-shadow', breakout5520ShadowRouter);
 app.use('/api/crypto-v51-shadow', cryptoV51ShadowRouter);
 app.use('/api/equity-v71-shadow', equityV71ShadowRouter);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
