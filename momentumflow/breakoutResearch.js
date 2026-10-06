@@ -4,6 +4,13 @@ import { getCredentials } from './alpacaClient.js';
 
 const router = express.Router();
 const CORE_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA', 'AMD'];
+const LIQUID_SYMBOLS = [
+  'SPY', 'QQQ', 'IWM', 'DIA', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'TSLA',
+  'AMD', 'GOOGL', 'NFLX', 'AVGO', 'INTC', 'MU', 'ORCL', 'CRM', 'ADBE', 'PLTR',
+  'JPM', 'BAC', 'WFC', 'GS', 'V', 'MA', 'XOM', 'CVX', 'COP', 'SLB',
+  'WMT', 'COST', 'HD', 'LOW', 'DIS', 'NKE', 'UBER', 'ABNB', 'BA', 'CAT',
+  'GE', 'F', 'GM', 'PFE', 'LLY', 'UNH', 'JNJ', 'KO', 'PEP', 'T',
+];
 const DATA_BASE = 'https://data.alpaca.markets';
 const ROUND_TRIP_COST_PCT = 0.04;
 const ENTRY_LOOKBACK = 55;
@@ -18,9 +25,9 @@ function headers() {
   };
 }
 
-async function dailyBars(symbol, start, end) {
+async function stockBars(symbol, start, end, timeframe = '1Day') {
   const qs = new URLSearchParams({
-    timeframe: '1Day',
+    timeframe,
     start: start.toISOString(),
     end: end.toISOString(),
     feed: 'iex',
@@ -34,6 +41,20 @@ async function dailyBars(symbol, start, end) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.message || `Bars request failed for ${symbol} (${response.status})`);
   return Array.isArray(payload?.bars) ? payload.bars : [];
+}
+
+async function fetchWithConcurrency(symbols, worker, concurrency = 5) {
+  const out = new Array(symbols.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, symbols.length) }, async () => {
+    while (true) {
+      const index = next++;
+      if (index >= symbols.length) return;
+      out[index] = await worker(symbols[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return out;
 }
 
 function summarize(trades = []) {
@@ -118,7 +139,7 @@ function backtest(bars = []) {
     if (pos) {
       const priorExitLow = Math.min(...lows.slice(i - EXIT_LOOKBACK, i));
       if (closes[i] < priorExitLow) {
-        closePos(opens[i + 1], i + 1, '20_DAY_LOW_BREAK');
+        closePos(opens[i + 1], i + 1, '20_BAR_LOW_BREAK');
       }
       continue;
     }
@@ -171,29 +192,38 @@ function aggregate(perSymbol, recentCutoffMs) {
   };
 }
 
+function chooseSymbols(req, allowed, fallback) {
+  const requested = String(req.query.symbols || '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter((s) => allowed.includes(s));
+  return requested.length ? [...new Set(requested)] : fallback;
+}
+
+async function runTest({ symbols, timeframe, days }) {
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 86400000);
+  const recentCutoffMs = end.getTime() - Math.min(365, days) * 86400000;
+  const fetched = await fetchWithConcurrency(symbols, async (symbol) => [symbol, await stockBars(symbol, start, end, timeframe)], 5);
+  const perSymbol = {};
+  for (const [symbol, bars] of fetched) {
+    const trades = backtest(bars);
+    const recentTrades = trades.filter((t) => new Date(t.entryTime || 0).getTime() >= recentCutoffMs);
+    perSymbol[symbol] = {
+      bars: bars.length,
+      trades,
+      summary: summarize(trades),
+      recentSummary: summarize(recentTrades),
+    };
+  }
+  return { end, perSymbol, stats: aggregate(perSymbol, recentCutoffMs) };
+}
+
 router.get('/daily', async (req, res) => {
   try {
-    const requested = String(req.query.symbols || '').split(',').map((s) => s.trim().toUpperCase()).filter((s) => CORE_SYMBOLS.includes(s));
-    const symbols = requested.length ? [...new Set(requested)] : CORE_SYMBOLS;
+    const symbols = chooseSymbols(req, CORE_SYMBOLS, CORE_SYMBOLS);
     const days = Math.max(900, Math.min(1825, Math.floor(Number(req.query.days || 1200))));
-    const end = new Date();
-    const start = new Date(end.getTime() - days * 86400000);
-    const recentCutoffMs = end.getTime() - 365 * 86400000;
-
-    const fetched = await Promise.all(symbols.map(async (symbol) => [symbol, await dailyBars(symbol, start, end)]));
-    const perSymbol = {};
-    for (const [symbol, bars] of fetched) {
-      const trades = backtest(bars);
-      const recentTrades = trades.filter((t) => new Date(t.entryTime || 0).getTime() >= recentCutoffMs);
-      perSymbol[symbol] = {
-        bars: bars.length,
-        trades,
-        summary: summarize(trades),
-        recentSummary: summarize(recentTrades),
-      };
-    }
-
-    const stats = aggregate(perSymbol, recentCutoffMs);
+    const { perSymbol, stats } = await runTest({ symbols, timeframe: '1Day', days });
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(),
@@ -205,8 +235,8 @@ router.get('/daily', async (req, res) => {
       symbols,
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
       rules: {
-        entry: 'daily close above the highest high of the prior 55 trading days; enter next open',
-        exit: 'daily close below the lowest low of the prior 20 trading days; exit next open',
+        entry: 'close above the highest high of the prior 55 bars; enter next open',
+        exit: 'close below the lowest low of the prior 20 bars; exit next open',
         direction: 'long only',
         fixedTarget: false,
         indicatorStack: false,
@@ -217,6 +247,47 @@ router.get('/daily', async (req, res) => {
         bars: row.bars,
         ...row.summary,
         recent365d: row.recentSummary,
+      }])),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/intraday', async (req, res) => {
+  try {
+    const timeframe = String(req.query.timeframe || '1Hour') === '30Min' ? '30Min' : '1Hour';
+    const days = Math.max(90, Math.min(730, Math.floor(Number(req.query.days || 365))));
+    const universe = String(req.query.universe || 'liquid50').toLowerCase();
+    const fallback = universe === 'core9' ? CORE_SYMBOLS : LIQUID_SYMBOLS;
+    const symbols = chooseSymbols(req, LIQUID_SYMBOLS, fallback);
+    const { perSymbol, stats } = await runTest({ symbols, timeframe, days });
+    const actualWindowYears = days / 365;
+    const tradesPerYear = actualWindowYears > 0 ? Number((stats.all.trades / actualWindowYears).toFixed(1)) : 0;
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      researchOnly: true,
+      liveBotChanged: false,
+      timeframe,
+      adjustment: 'all',
+      days,
+      universe: universe === 'core9' ? 'core9' : 'liquid50',
+      symbols,
+      modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
+      frozenRules: {
+        entry: 'close above the highest high of the prior 55 bars; enter next bar open',
+        exit: 'close below the lowest low of the prior 20 bars; exit next bar open',
+        direction: 'long only',
+        parameterChangesFromDaily55_20: false,
+      },
+      tradesPerYear,
+      aggregate: stats.all,
+      recentWindow: stats.recent365d,
+      bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, {
+        bars: row.bars,
+        ...row.summary,
+        recentWindow: row.recentSummary,
       }])),
     });
   } catch (error) {
