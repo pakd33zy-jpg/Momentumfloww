@@ -13,7 +13,13 @@ const SYMBOLS = [
   'JPM','BAC','WFC','GS','V','MA','XOM','CVX','COP','SLB',
   'WMT','COST','HD','LOW','DIS','NKE','UBER','ABNB','BA','CAT',
   'GE','F','GM','PFE','LLY','UNH','JNJ','KO','PEP','T',
+  'XLK','XLF','XLE','XLV','XLY','XLP','XLI','XLU','XLB','XLC',
+  'QCOM','TXN','AMAT','LRCX','KLAC','MRVL','CSCO','IBM','NOW','SNOW',
+  'C','SCHW','MS','AXP','COF','OXY','MPC','PSX','HAL','EOG',
+  'MCD','SBUX','TGT','TJX','BKNG','DE','UPS','RTX','LMT','HON',
+  'ABBV','MRK','TMO','ABT','MDT','CMCSA','VZ','SHOP','SNAP','ROKU',
 ];
+const UNIVERSE_VERSION = 'LIQUID100_V1';
 const ENTRY = 55;
 const EXIT = 20;
 const ROUND_TRIP_COST_PCT = 0.04;
@@ -35,6 +41,7 @@ function emptyState() {
     positions: {},
     closedTrades: [],
     updatedAt: null,
+    universeVersion: null,
   };
 }
 
@@ -125,7 +132,7 @@ function processBarTimestamp(current, barsBySymbol, barTs) {
         const returnPct = (exitPrice / Number(pos.entryPrice) - 1) * 100;
         closedTrades.push({
           symbol,
-          strategy: 'DAILY_55_20_LIQUID50_SHADOW',
+          strategy: 'DAILY_55_20_LIQUID100_SHADOW',
           entryTimestamp: pos.entryTimestamp,
           entryPrice: pos.entryPrice,
           exitTimestamp: bar.t,
@@ -209,6 +216,11 @@ async function tick() {
     let todo;
     if (!current.lastProcessedBar) {
       todo = [latest];
+    } else if (current.universeVersion !== UNIVERSE_VERSION) {
+      // Re-evaluate the latest completed bar once when expanding the universe.
+      // Existing positions/pending signals are idempotent; this only allows newly
+      // added symbols to catch signals from the most recent completed session.
+      todo = [latest];
     } else {
       todo = timestamps.filter((n) => n > Number(current.lastProcessedBar));
     }
@@ -219,7 +231,7 @@ async function tick() {
     }
 
     for (const barTs of todo) current = processBarTimestamp(current, barsBySymbol, barTs);
-    current = await save(current);
+    current = await save({ ...current, universeVersion: UNIVERSE_VERSION });
     const last = current.lastCycle || {};
     runtime.lastDecision = `55/20 SHADOW processed ${todo.length} day(s); entered ${last.entered || 0}, exited ${last.exited || 0}, armed ${last.armedEntries || 0} entries/${last.armedExits || 0} exits; ${Object.keys(current.positions || {}).length} open`;
   } catch (e) {
@@ -251,8 +263,9 @@ function status() {
     running: runtime.running,
     mode: 'paper-shadow',
     placesOrders: false,
-    strategy: 'DAILY_55_20_LIQUID50_SHADOW',
+    strategy: 'DAILY_55_20_LIQUID100_SHADOW',
     symbols: SYMBOLS,
+    universeVersion: UNIVERSE_VERSION,
     rules: { entryLookbackBars: ENTRY, exitLookbackBars: EXIT, timeframe: '1Day', direction: 'long-only', roundTripCostPct: ROUND_TRIP_COST_PCT },
     lastTickAt: runtime.lastTickAt,
     lastDecision: runtime.lastDecision,
