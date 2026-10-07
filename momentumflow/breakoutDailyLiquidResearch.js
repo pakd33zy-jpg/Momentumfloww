@@ -225,7 +225,7 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
     barMaps[symbol] = new Map((rows || []).map((b) => [new Date(b.t || 0).getTime(), b]));
   }
 
-  function simulate(positionFraction) {
+  function simulate(positionFraction, roundTripCostPct = ROUND_TRIP_COST_PCT) {
     let cash = 1;
     const positions = {};
     let peak = 1;
@@ -235,13 +235,21 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
     let maxConcurrent = 0;
     let equityAtCutoff = null;
     const acceptedTrades = [];
+    const yearStartEquity = {};
+    const yearEndEquity = {};
+    let previousDayEquity = 1;
+    const baseSide = ROUND_TRIP_COST_PCT / 200;
+    const stressSide = roundTripCostPct / 200;
 
     for (const ts of timeline) {
       const exits = exitsByTs.get(ts) || [];
       for (const trade of exits) {
         const pos = positions[trade.symbol];
         if (!pos || pos.tradeEntryTime !== trade.entryTime) continue;
-        cash += pos.shares * Number(trade.exitPrice || 0);
+        const baseExit = Number(trade.exitPrice || 0);
+        const rawExit = baseExit > 0 ? baseExit / (1 - baseSide) : 0;
+        const stressedExit = rawExit * (1 - stressSide);
+        cash += pos.shares * stressedExit;
         acceptedTrades.push(trade);
         delete positions[trade.symbol];
       }
@@ -266,7 +274,9 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
           skippedForCash += 1;
           continue;
         }
-        const ep = Number(trade.entryPrice || 0);
+        const baseEntry = Number(trade.entryPrice || 0);
+        const rawEntry = baseEntry > 0 ? baseEntry / (1 + baseSide) : 0;
+        const ep = rawEntry * (1 + stressSide);
         if (!(ep > 0)) continue;
         positions[trade.symbol] = {
           shares: target / ep,
@@ -292,6 +302,10 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
       peak = Math.max(peak, equity);
       maxDrawdown = Math.max(maxDrawdown, peak > 0 ? 1 - equity / peak : 0);
       if (equityAtCutoff === null && ts >= cutoff) equityAtCutoff = equity;
+      const year = String(new Date(ts).getUTCFullYear());
+      if (!(year in yearStartEquity)) yearStartEquity[year] = previousDayEquity;
+      yearEndEquity[year] = equity;
+      previousDayEquity = equity;
     }
 
     const lastTs = timeline[timeline.length - 1];
@@ -311,8 +325,17 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
     const completedAccepted = acceptedTrades.length;
     const totalAttempted = acceptedEntries + skippedForCash;
 
+    const annualReturnsPct = Object.fromEntries(
+      Object.keys(yearEndEquity).sort().map((year) => {
+        const startEq = Number(yearStartEquity[year] || 0);
+        const endEq = Number(yearEndEquity[year] || 0);
+        return [year, startEq > 0 ? Number(((endEq / startEq - 1) * 100).toFixed(3)) : null];
+      })
+    );
+
     return {
       positionFractionPct: Number((positionFraction * 100).toFixed(2)),
+      modeledRoundTripCostPct: Number(roundTripCostPct.toFixed(3)),
       acceptedEntries,
       completedAcceptedTrades: completedAccepted,
       skippedForCash,
@@ -324,12 +347,15 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
       maxDailyMarkToMarketDrawdownPct: Number((maxDrawdown * 100).toFixed(3)),
       endingCashPct: endingEquity > 0 ? Number((cash / endingEquity * 100).toFixed(2)) : 0,
       endingGrossExposurePct: endingEquity > 0 ? Number((endingExposure / endingEquity * 100).toFixed(2)) : 0,
+      annualReturnsPct,
     };
   }
 
   return {
     methodology: 'same frozen 55/20 signals; no leverage; each accepted entry invests a fixed fraction of current portfolio equity; exits free cash before same-open entries; simultaneous entries tie-break alphabetically; daily mark-to-market drawdown',
-    variants: [0.01, 0.015, 0.02, 0.025, 0.03, 0.05].map(simulate),
+    coarseVariants: [0.01, 0.015, 0.02, 0.025, 0.03, 0.05].map((f) => simulate(f)),
+    fineVariants: [0.0175, 0.02, 0.0225, 0.025, 0.0275, 0.03, 0.035].map((f) => simulate(f)),
+    costStressAt2_5Pct: [0.04, 0.10, 0.20, 0.30].map((cost) => simulate(0.025, cost)),
   };
 }
 
