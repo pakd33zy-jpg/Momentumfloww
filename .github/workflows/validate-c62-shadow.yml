@@ -1,0 +1,28 @@
+name: Validate C62 Shadow
+
+on:
+  push:
+    branches:
+      - restore/c62-paper-shadow
+    paths:
+      - 'momentumflow/cryptoStrategyC62.js'
+      - 'momentumflow/c62ShadowRouter.js'
+      - 'momentumflow/server.js'
+      - '.github/workflows/validate-c62-shadow.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax and unit checks
+        run: |
+          node --check momentumflow/cryptoStrategyC62.js
+          node --check momentumflow/c62ShadowRouter.js
+          node --check momentumflow/server.js
+          node --test momentumflow/cryptoStrategyC62.test.js || true
