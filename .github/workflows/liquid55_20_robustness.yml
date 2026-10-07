@@ -16,15 +16,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== crypto runtime + realized ==="
-          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/status"             | jq -c '{
-                running,
-                mode,
-                lastTickAt,
-                lastError,
-                lastDecision,
-                cryptoEngine:.engines.crypto,
-                cryptoPerformance:(.strategyPerformance[]? | select(.strategy=="CRYPTO_MACD_VALLEY_CROSS_PAPER"))
-              }'
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/status"             | jq -c '{running,mode,lastTickAt,lastError,lastDecision,cryptoEngine:.engines.crypto,strategyPerformance}'
 
           echo "=== crypto open positions ==="
           curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/broker-diagnostics"             | jq -c '{
