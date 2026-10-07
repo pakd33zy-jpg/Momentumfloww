@@ -1,4 +1,4 @@
-name: Liquid55_20 Robustness Snapshot
+name: Crypto PnL Snapshot
 
 on:
   push:
@@ -9,34 +9,42 @@ on:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Query deployed frozen 55/20 research endpoints
+      - name: Query deployed crypto paper performance
         shell: bash
         run: |
           set -euo pipefail
-          base="https://momentumfloww.onrender.com/api/research/breakout-liquid/daily?days=1825"
-          for universe in liquid100 etf20 dow30_2021 validation50; do
-            echo "=== $universe ==="
-            curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 180 "$base&universe=$universe" \
-              | jq -c '{
-                  generatedAt,
-                  universe,
-                  tradesPerYearWholeWindow,
-                  aggregate,
-                  recent365d,
-                  allocation_2_5: (.capitalAllocationStudy.coarseVariants[] | select(.positionFractionPct == 2.5)),
-                  fineVariants: (if .universe == "liquid100" then .capitalAllocationStudy.fineVariants else null end),
-                  costStressAt2_5Pct: (if .universe == "liquid100" then .capitalAllocationStudy.costStressAt2_5Pct else null end)
-                }'
-          done
+          echo "=== crypto runtime + realized ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/status"             | jq -c '{
+                running,
+                mode,
+                lastTickAt,
+                lastError,
+                lastDecision,
+                cryptoEngine:.engines.crypto,
+                cryptoPerformance:(.strategyPerformance[]? | select(.strategy=="CRYPTO_MACD_VALLEY_CROSS_PAPER"))
+              }'
 
-          echo "=== liquid100 shadow ==="
-          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120 \
-            "https://momentumfloww.onrender.com/api/breakout-55-20-shadow/status" \
-            | jq -c '{running,mode,placesOrders,strategy,universeVersion,lastTickAt,lastDecision,lastError,openPositionCount,pendingEntryCount,pendingExitCount,performance,lastProcessedBar,lastCycle,closedTradeCount:(.closedTrades|length)}'
-
-          echo "=== validation50 shadow ==="
-          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120 \
-            "https://momentumfloww.onrender.com/api/breakout-55-20-validation50-shadow/status" \
-            | jq -c '{running,mode,placesOrders,strategy,universeVersion,lastTickAt,lastDecision,lastError,openPositionCount,pendingEntryCount,pendingExitCount,performance,lastProcessedBar,lastCycle,closedTradeCount:(.closedTrades|length)}'
+          echo "=== crypto open positions ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/broker-diagnostics"             | jq -c '{
+                mode,
+                cryptoPositions:[
+                  .positions[]?
+                  | select(.asset_class=="crypto")
+                  | {
+                      symbol,
+                      qty:(.qty|tonumber),
+                      avgEntry:(.avg_entry_price|tonumber),
+                      current:(.current_price|tonumber),
+                      marketValue:(.market_value|tonumber),
+                      unrealizedDollar:(((.current_price|tonumber)-(.avg_entry_price|tonumber))*(.qty|tonumber)),
+                      unrealizedPct:((((.current_price|tonumber)/(.avg_entry_price|tonumber))-1)*100)
+                    }
+                ],
+                cryptoOpenPnlDollar:([
+                  .positions[]?
+                  | select(.asset_class=="crypto")
+                  | (((.current_price|tonumber)-(.avg_entry_price|tonumber))*(.qty|tonumber))
+                ] | add // 0)
+              }'
