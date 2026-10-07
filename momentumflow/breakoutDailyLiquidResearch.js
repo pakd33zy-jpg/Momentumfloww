@@ -228,7 +228,7 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
   }
   for (const arr of entriesByTs.values()) arr.sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
 
-  const timeline = [...new Set((barsBySymbol.SPY || []).map((b) => new Date(b.t || 0).getTime()).filter((n) => n > 0))].sort((a, b) => a - b);
+  const timeline = [...new Set(Object.values(barsBySymbol).flatMap((rows) => (rows || []).map((b) => new Date(b.t || 0).getTime()).filter((n) => n > 0)))].sort((a, b) => a - b);
   const barMaps = {};
   for (const [symbol, rows] of Object.entries(barsBySymbol)) {
     barMaps[symbol] = new Map((rows || []).map((b) => [new Date(b.t || 0).getTime(), b]));
