@@ -1,4 +1,4 @@
-name: Crypto PnL Snapshot
+name: MomentumFlow Status Snapshot
 
 on:
   push:
@@ -11,16 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Query deployed crypto paper performance
+      - name: Query deployed status
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== crypto runtime + realized ==="
-          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/status"             | jq -c '{running,mode,lastTickAt,lastError,lastDecision,cryptoEngine:.engines.crypto,strategyPerformance}'
 
-          echo "=== crypto open positions ==="
+          echo "=== live-bot ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/status"             | jq -c '{running,mode,lastTickAt,lastError,lastDecision,openPositionCount,maxOpenPositions,cryptoEngine:.engines.crypto,strategyPerformance}'
+
+          echo "=== broker ==="
           curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/live-bot/broker-diagnostics"             | jq -c '{
                 mode,
+                account,
                 cryptoPositions:[
                   .positions[]?
                   | select(.asset_class=="crypto")
@@ -40,3 +42,9 @@ jobs:
                   | (((.current_price|tonumber)-(.avg_entry_price|tonumber))*(.qty|tonumber))
                 ] | add // 0)
               }'
+
+          echo "=== liquid100 shadow ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/breakout-55-20-shadow/status"             | jq -c '{running,mode,placesOrders,lastTickAt,lastDecision,lastError,lastProcessedBar,openPositionCount,pendingEntryCount,pendingExitCount,closedTradeCount:(.closedTrades|length),performance}'
+
+          echo "=== validation50 shadow ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/breakout-55-20-validation50-shadow/status"             | jq -c '{running,mode,placesOrders,lastTickAt,lastDecision,lastError,lastProcessedBar,openPositionCount,pendingEntryCount,pendingExitCount,closedTradeCount:(.closedTrades|length),performance}'
