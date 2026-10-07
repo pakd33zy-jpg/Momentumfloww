@@ -29,30 +29,36 @@ function headers() {
   return { 'APCA-API-KEY-ID': c.keyId, 'APCA-API-SECRET-KEY': c.secretKey };
 }
 
-async function bars(symbol, start, end) {
-  const qs = new URLSearchParams({
-    timeframe: '1Day', start: start.toISOString(), end: end.toISOString(),
-    feed: 'iex', adjustment: 'all', sort: 'asc', limit: '10000',
-  });
-  const r = await fetch(`${DATA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars?${qs}`, { headers: headers() });
-  const p = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(p?.message || `Bars failed ${symbol} (${r.status})`);
-  return Array.isArray(p?.bars) ? p.bars : [];
+async function batchBars(symbols, start, end) {
+  const output = Object.fromEntries(symbols.map((s) => [s, []]));
+  let pageToken = null;
+  let pages = 0;
+  do {
+    const qs = new URLSearchParams({
+      symbols: symbols.join(','),
+      timeframe: '1Day',
+      start: start.toISOString(),
+      end: end.toISOString(),
+      feed: 'iex',
+      adjustment: 'all',
+      sort: 'asc',
+      limit: '10000',
+    });
+    if (pageToken) qs.set('page_token', pageToken);
+    const r = await fetch(`${DATA_BASE}/v2/stocks/bars?${qs}`, { headers: headers() });
+    const p = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(p?.message || `Bars batch failed (${r.status})`);
+    for (const [symbol, rows] of Object.entries(p?.bars || {})) {
+      if (!output[symbol]) output[symbol] = [];
+      output[symbol].push(...(Array.isArray(rows) ? rows : []));
+    }
+    pageToken = p?.next_page_token || null;
+    pages += 1;
+    if (pages > 30) throw new Error('Bars pagination exceeded 30 pages');
+  } while (pageToken);
+  return output;
 }
 
-async function mapLimit(items, limit, worker) {
-  const out = new Array(items.length);
-  let cursor = 0;
-  const jobs = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      out[i] = await worker(items[i]);
-    }
-  });
-  await Promise.all(jobs);
-  return out;
-}
 
 function test(rows = [], regimeOk = null) {
   const x = rows.filter((b) => Number(b?.o) > 0 && Number(b?.h) > 0 && Number(b?.l) > 0 && Number(b?.c) > 0);
@@ -145,7 +151,8 @@ router.get('/daily', async (req, res) => {
     const cutoff = end.getTime() - 365 * 86400000;
     const universe = String(req.query.universe || 'liquid100').toLowerCase();
     const symbols = universe === 'liquid50' ? LIQUID50 : LIQUID100;
-    const fetched = await mapLimit(symbols, 5, async (s) => [s, await bars(s, start, end)]);
+    const barsBySymbol = await batchBars(symbols, start, end);
+    const fetched = symbols.map((s) => [s, barsBySymbol[s] || []]);
     const regime = String(req.query.regime || 'none').toLowerCase();
     let regimeOk = null;
     if (regime === 'spy200') {
