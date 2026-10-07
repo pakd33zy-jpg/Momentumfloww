@@ -22,6 +22,11 @@ const ETF20 = [
   'SPY','QQQ','IWM','DIA','XLK','XLF','XLE','XLV','XLY','XLP',
   'XLI','XLU','XLB','XLC','GLD','SLV','TLT','HYG','EEM','EFA',
 ];
+const DOW30_2021 = [
+  'MMM','AXP','AMGN','AAPL','BA','CAT','CVX','CSCO','KO','DIS',
+  'DOW','GS','HD','HON','IBM','INTC','JNJ','JPM','MCD','MRK',
+  'MSFT','NKE','PG','CRM','TRV','UNH','VZ','V','WBA','WMT',
+];
 const DATA_BASE = 'https://data.alpaca.markets';
 const ENTRY = 55;
 const EXIT = 20;
@@ -370,7 +375,7 @@ router.get('/daily', async (req, res) => {
     const start = new Date(end.getTime() - days * 86400000);
     const cutoff = end.getTime() - 365 * 86400000;
     const universe = String(req.query.universe || 'liquid100').toLowerCase();
-    const symbols = universe === 'etf20' ? ETF20 : (universe === 'liquid50' ? LIQUID50 : LIQUID100);
+    const symbols = universe === 'dow30_2021' ? DOW30_2021 : (universe === 'etf20' ? ETF20 : (universe === 'liquid50' ? LIQUID50 : LIQUID100));
     const barsBySymbol = await batchBars(symbols, start, end);
     const fetched = symbols.map((s) => [s, barsBySymbol[s] || []]);
     const regime = String(req.query.regime || 'none').toLowerCase();
@@ -396,7 +401,7 @@ router.get('/daily', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
-      timeframe: '1Day', universe: universe === 'etf20' ? 'etf20' : (universe === 'liquid50' ? 'liquid50' : 'liquid100'), regime: regime === 'spy200' ? 'spy200' : 'none', days, adjustment: 'all',
+      timeframe: '1Day', universe: universe === 'dow30_2021' ? 'dow30_2021' : (universe === 'etf20' ? 'etf20' : (universe === 'liquid50' ? 'liquid50' : 'liquid100')), regime: regime === 'spy200' ? 'spy200' : 'none', days, adjustment: 'all',
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
       frozenRules: { entry: 'close above prior 55-day high; enter next open', exit: 'close below prior 20-day low; exit next open', parameterChanges: false },
       tradesPerYearWholeWindow: Number((stats.all.trades / (days / 365)).toFixed(1)),
