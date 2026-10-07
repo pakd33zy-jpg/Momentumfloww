@@ -18,6 +18,10 @@ const LIQUID100 = [
   'MCD','SBUX','TGT','TJX','BKNG','DE','UPS','RTX','LMT','HON',
   'ABBV','MRK','TMO','ABT','MDT','CMCSA','VZ','SHOP','SNAP','ROKU',
 ];
+const ETF20 = [
+  'SPY','QQQ','IWM','DIA','XLK','XLF','XLE','XLV','XLY','XLP',
+  'XLI','XLU','XLB','XLC','GLD','SLV','TLT','HYG','EEM','EFA',
+];
 const DATA_BASE = 'https://data.alpaca.markets';
 const ENTRY = 55;
 const EXIT = 20;
@@ -361,12 +365,12 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
 
 router.get('/daily', async (req, res) => {
   try {
-    const days = Math.max(900, Math.min(1825, Math.floor(Number(req.query.days || 1825))));
+    const days = Math.max(900, Math.min(3650, Math.floor(Number(req.query.days || 1825))));
     const end = new Date();
     const start = new Date(end.getTime() - days * 86400000);
     const cutoff = end.getTime() - 365 * 86400000;
     const universe = String(req.query.universe || 'liquid100').toLowerCase();
-    const symbols = universe === 'liquid50' ? LIQUID50 : LIQUID100;
+    const symbols = universe === 'etf20' ? ETF20 : (universe === 'liquid50' ? LIQUID50 : LIQUID100);
     const barsBySymbol = await batchBars(symbols, start, end);
     const fetched = symbols.map((s) => [s, barsBySymbol[s] || []]);
     const regime = String(req.query.regime || 'none').toLowerCase();
@@ -392,7 +396,7 @@ router.get('/daily', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
-      timeframe: '1Day', universe: universe === 'liquid50' ? 'liquid50' : 'liquid100', regime: regime === 'spy200' ? 'spy200' : 'none', days, adjustment: 'all',
+      timeframe: '1Day', universe: universe === 'etf20' ? 'etf20' : (universe === 'liquid50' ? 'liquid50' : 'liquid100'), regime: regime === 'spy200' ? 'spy200' : 'none', days, adjustment: 'all',
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
       frozenRules: { entry: 'close above prior 55-day high; enter next open', exit: 'close below prior 20-day low; exit next open', parameterChanges: false },
       tradesPerYearWholeWindow: Number((stats.all.trades / (days / 365)).toFixed(1)),
