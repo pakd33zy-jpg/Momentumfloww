@@ -30,3 +30,13 @@ jobs:
                   costStressAt2_5Pct: (if .universe == "liquid100" then .capitalAllocationStudy.costStressAt2_5Pct else null end)
                 }'
           done
+
+          echo "=== liquid100 shadow ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120 \
+            "https://momentumfloww.onrender.com/api/breakout-55-20-shadow/status" \
+            | jq -c '{running,mode,placesOrders,strategy,universeVersion,lastTickAt,lastDecision,lastError,openPositionCount,pendingEntryCount,pendingExitCount,performance,lastProcessedBar,lastCycle,closedTradeCount:(.closedTrades|length)}'
+
+          echo "=== validation50 shadow ==="
+          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120 \
+            "https://momentumfloww.onrender.com/api/breakout-55-20-validation50-shadow/status" \
+            | jq -c '{running,mode,placesOrders,strategy,universeVersion,lastTickAt,lastDecision,lastError,openPositionCount,pendingEntryCount,pendingExitCount,performance,lastProcessedBar,lastCycle,closedTradeCount:(.closedTrades|length)}'
