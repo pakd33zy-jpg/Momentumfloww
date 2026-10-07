@@ -197,7 +197,7 @@ function capacityStudy(per, cutoff) {
     methodology: 'first-come-first-served by entry timestamp; exits at the same open free capacity before new entries; simultaneous entries tie-break alphabetically; no position sizing or portfolio-return assumptions',
     rawSignals: trades.length,
     unconstrainedMaxConcurrentPositions: uncapped.maxConcurrentUsed,
-    variants: [simulate(8), simulate(12), simulate(20), uncapped],
+    variants: [simulate(8), simulate(12), simulate(20), simulate(30), simulate(40), simulate(60), uncapped],
   };
 }
 
