@@ -54,7 +54,7 @@ async function mapLimit(items, limit, worker) {
   return out;
 }
 
-function test(rows = []) {
+function test(rows = [], regimeOk = null) {
   const x = rows.filter((b) => Number(b?.o) > 0 && Number(b?.h) > 0 && Number(b?.l) > 0 && Number(b?.c) > 0);
   if (x.length < ENTRY + 5) return [];
   const o = x.map((b) => Number(b.o));
@@ -82,7 +82,9 @@ function test(rows = []) {
       continue;
     }
     const high55 = Math.max(...h.slice(i - ENTRY, i));
-    if (c[i] > high55) pos = { entry: o[i + 1] * (1 + side), i: i + 1 };
+    const signalTs = new Date(x[i]?.t || 0).getTime();
+    const regimePass = !regimeOk || regimeOk.get(signalTs) === true;
+    if (regimePass && c[i] > high55) pos = { entry: o[i + 1] * (1 + side), i: i + 1 };
   }
   if (pos) close(c[x.length - 1], x.length - 1, 'END_MARK');
   return trades;
@@ -144,9 +146,20 @@ router.get('/daily', async (req, res) => {
     const universe = String(req.query.universe || 'liquid100').toLowerCase();
     const symbols = universe === 'liquid50' ? LIQUID50 : LIQUID100;
     const fetched = await mapLimit(symbols, 5, async (s) => [s, await bars(s, start, end)]);
+    const regime = String(req.query.regime || 'none').toLowerCase();
+    let regimeOk = null;
+    if (regime === 'spy200') {
+      const spyRows = (fetched.find(([s]) => s === 'SPY')?.[1] || [])
+        .filter((b) => Number(b?.c) > 0);
+      regimeOk = new Map();
+      for (let i = 199; i < spyRows.length; i += 1) {
+        const sma200 = spyRows.slice(i - 199, i + 1).reduce((sum, b) => sum + Number(b.c), 0) / 200;
+        regimeOk.set(new Date(spyRows[i].t).getTime(), Number(spyRows[i].c) > sma200);
+      }
+    }
     const per = {};
     for (const [symbol, b] of fetched) {
-      const trades = test(b);
+      const trades = test(b, regimeOk);
       const recentTrades = trades.filter((t) => new Date(t.entryTime || 0).getTime() >= cutoff);
       per[symbol] = { bars: b.length, trades, summary: summarize(trades), recent: summarize(recentTrades) };
     }
@@ -154,7 +167,7 @@ router.get('/daily', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
-      timeframe: '1Day', universe: universe === 'liquid50' ? 'liquid50' : 'liquid100', days, adjustment: 'all',
+      timeframe: '1Day', universe: universe === 'liquid50' ? 'liquid50' : 'liquid100', regime: regime === 'spy200' ? 'spy200' : 'none', days, adjustment: 'all',
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
       frozenRules: { entry: 'close above prior 55-day high; enter next open', exit: 'close below prior 20-day low; exit next open', parameterChanges: false },
       tradesPerYearWholeWindow: Number((stats.all.trades / (days / 365)).toFixed(1)),
