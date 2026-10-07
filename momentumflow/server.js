@@ -18,6 +18,7 @@ import breakoutDailyLiquidResearchRouter from './breakoutDailyLiquidResearch.js'
 import breakout5520ShadowRouter, { startBreakout5520Shadow } from './breakout5520ShadowRouter.js';
 import breakout5520Validation50ShadowRouter, { startBreakout5520Validation50Shadow } from './breakout5520Validation50ShadowRouter.js';
 import cryptoV51ShadowRouter from './cryptoV51ShadowRouter.js';
+import c62ShadowRouter, { startC62Shadow } from './c62ShadowRouter.js';
 import equityV71ShadowRouter, { startEquityV71Shadow } from './equityV71ShadowRouter.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
@@ -66,7 +67,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     });
   }
 
-  console.log('[boot] MACD valley/cross crypto PAPER runtime active; equity remains V35; crypto max concurrent positions=8.');
+  console.log('[boot] Legacy MACD crypto positions remain managed; new MACD entries are paused; C62 crypto runs shadow-only.');
 }
 
 const credentialPersistence = await initPersistentCredentials();
@@ -80,6 +81,7 @@ if (credentialPersistence.ready) {
     loadPersistentConfig('trades', []),
     loadPersistentConfig('breakout5520ShadowState', {}),
     loadPersistentConfig('breakout5520Validation50ShadowState', {}),
+    loadPersistentConfig('c62ShadowState', {}),
   ]);
 }
 
@@ -100,6 +102,7 @@ startEquityFastScalpMonitor();
 startEquityV71Shadow();
 startBreakout5520Shadow();
 startBreakout5520Validation50Shadow();
+startC62Shadow();
 
 if (credentialPersistence.ready && credentialPersistence.loaded) {
   setTimeout(() => {
@@ -129,6 +132,7 @@ app.use('/api/research/breakout-liquid', breakoutDailyLiquidResearchRouter);
 app.use('/api/breakout-55-20-shadow', breakout5520ShadowRouter);
 app.use('/api/breakout-55-20-validation50-shadow', breakout5520Validation50ShadowRouter);
 app.use('/api/crypto-v51-shadow', cryptoV51ShadowRouter);
+app.use('/api/c62-shadow', c62ShadowRouter);
 app.use('/api/equity-v71-shadow', equityV71ShadowRouter);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
 
