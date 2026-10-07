@@ -75,6 +75,8 @@ function test(rows = [], regimeOk = null) {
     trades.push({
       entryTime: x[pos.i]?.t || null,
       exitTime: x[i]?.t || null,
+      entryPrice: pos.entry,
+      exitPrice: exit,
       netReturn: exit / pos.entry - 1,
       holdBars: Math.max(1, i - pos.i + 1),
       reason,
@@ -201,6 +203,136 @@ function capacityStudy(per, cutoff) {
   };
 }
 
+function capitalAllocationStudy(per, barsBySymbol, cutoff) {
+  const trades = Object.entries(per).flatMap(([symbol, v]) =>
+    (v.trades || []).map((t) => ({ ...t, symbol }))
+  );
+  const entriesByTs = new Map();
+  const exitsByTs = new Map();
+  for (const t of trades) {
+    const e = new Date(t.entryTime || 0).getTime();
+    const x = new Date(t.exitTime || 0).getTime();
+    if (!entriesByTs.has(e)) entriesByTs.set(e, []);
+    entriesByTs.get(e).push(t);
+    if (!exitsByTs.has(x)) exitsByTs.set(x, []);
+    exitsByTs.get(x).push(t);
+  }
+  for (const arr of entriesByTs.values()) arr.sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
+
+  const timeline = [...new Set((barsBySymbol.SPY || []).map((b) => new Date(b.t || 0).getTime()).filter((n) => n > 0))].sort((a, b) => a - b);
+  const barMaps = {};
+  for (const [symbol, rows] of Object.entries(barsBySymbol)) {
+    barMaps[symbol] = new Map((rows || []).map((b) => [new Date(b.t || 0).getTime(), b]));
+  }
+
+  function simulate(positionFraction) {
+    let cash = 1;
+    const positions = {};
+    let peak = 1;
+    let maxDrawdown = 0;
+    let acceptedEntries = 0;
+    let skippedForCash = 0;
+    let maxConcurrent = 0;
+    let equityAtCutoff = null;
+    const acceptedTrades = [];
+
+    for (const ts of timeline) {
+      const exits = exitsByTs.get(ts) || [];
+      for (const trade of exits) {
+        const pos = positions[trade.symbol];
+        if (!pos || pos.tradeEntryTime !== trade.entryTime) continue;
+        cash += pos.shares * Number(trade.exitPrice || 0);
+        acceptedTrades.push(trade);
+        delete positions[trade.symbol];
+      }
+
+      const valueAtOpen = () => {
+        let v = cash;
+        for (const [symbol, pos] of Object.entries(positions)) {
+          const bar = barMaps[symbol]?.get(ts);
+          const mark = Number(bar?.o || bar?.c || pos.lastMark || pos.entryPrice || 0);
+          pos.lastMark = mark > 0 ? mark : pos.lastMark;
+          v += pos.shares * (pos.lastMark || 0);
+        }
+        return v;
+      };
+
+      const entries = entriesByTs.get(ts) || [];
+      for (const trade of entries) {
+        if (positions[trade.symbol]) continue;
+        const equityBefore = valueAtOpen();
+        const target = equityBefore * positionFraction;
+        if (!(target > 0) || cash + 1e-12 < target) {
+          skippedForCash += 1;
+          continue;
+        }
+        const ep = Number(trade.entryPrice || 0);
+        if (!(ep > 0)) continue;
+        positions[trade.symbol] = {
+          shares: target / ep,
+          entryPrice: ep,
+          tradeEntryTime: trade.entryTime,
+          lastMark: ep,
+        };
+        cash -= target;
+        acceptedEntries += 1;
+        maxConcurrent = Math.max(maxConcurrent, Object.keys(positions).length);
+      }
+
+      let equity = cash;
+      let grossExposure = 0;
+      for (const [symbol, pos] of Object.entries(positions)) {
+        const bar = barMaps[symbol]?.get(ts);
+        const mark = Number(bar?.c || bar?.o || pos.lastMark || pos.entryPrice || 0);
+        if (mark > 0) pos.lastMark = mark;
+        const mv = pos.shares * (pos.lastMark || 0);
+        equity += mv;
+        grossExposure += mv;
+      }
+      peak = Math.max(peak, equity);
+      maxDrawdown = Math.max(maxDrawdown, peak > 0 ? 1 - equity / peak : 0);
+      if (equityAtCutoff === null && ts >= cutoff) equityAtCutoff = equity;
+    }
+
+    const lastTs = timeline[timeline.length - 1];
+    let endingEquity = cash;
+    let endingExposure = 0;
+    for (const [symbol, pos] of Object.entries(positions)) {
+      const bar = barMaps[symbol]?.get(lastTs);
+      const mark = Number(bar?.c || pos.lastMark || pos.entryPrice || 0);
+      const mv = pos.shares * mark;
+      endingEquity += mv;
+      endingExposure += mv;
+    }
+
+    const recentReturnPct = equityAtCutoff && equityAtCutoff > 0
+      ? Number(((endingEquity / equityAtCutoff - 1) * 100).toFixed(3))
+      : null;
+    const completedAccepted = acceptedTrades.length;
+    const totalAttempted = acceptedEntries + skippedForCash;
+
+    return {
+      positionFractionPct: Number((positionFraction * 100).toFixed(2)),
+      acceptedEntries,
+      completedAcceptedTrades: completedAccepted,
+      skippedForCash,
+      signalCaptureRatePct: totalAttempted ? Number((acceptedEntries / totalAttempted * 100).toFixed(2)) : 0,
+      maxConcurrentPositions: maxConcurrent,
+      endingOpenPositions: Object.keys(positions).length,
+      portfolioReturnPct: Number(((endingEquity - 1) * 100).toFixed(3)),
+      recent365dPortfolioReturnPct: recentReturnPct,
+      maxDailyMarkToMarketDrawdownPct: Number((maxDrawdown * 100).toFixed(3)),
+      endingCashPct: endingEquity > 0 ? Number((cash / endingEquity * 100).toFixed(2)) : 0,
+      endingGrossExposurePct: endingEquity > 0 ? Number((endingExposure / endingEquity * 100).toFixed(2)) : 0,
+    };
+  }
+
+  return {
+    methodology: 'same frozen 55/20 signals; no leverage; each accepted entry invests a fixed fraction of current portfolio equity; exits free cash before same-open entries; simultaneous entries tie-break alphabetically; daily mark-to-market drawdown',
+    variants: [0.01, 0.015, 0.02, 0.025, 0.03, 0.05].map(simulate),
+  };
+}
+
 router.get('/daily', async (req, res) => {
   try {
     const days = Math.max(900, Math.min(1825, Math.floor(Number(req.query.days || 1825))));
@@ -230,6 +362,7 @@ router.get('/daily', async (req, res) => {
     }
     const stats = aggregate(per, cutoff);
     const capacity = capacityStudy(per, cutoff);
+    const capitalAllocation = capitalAllocationStudy(per, barsBySymbol, cutoff);
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
@@ -241,6 +374,7 @@ router.get('/daily', async (req, res) => {
       aggregate: stats.all,
       recent365d: stats.recent365d,
       capacityStudy: capacity,
+      capitalAllocationStudy: capitalAllocation,
       bySymbol: Object.fromEntries(Object.entries(per).map(([s, v]) => [s, { bars: v.bars, ...v.summary, recent365d: v.recent }])),
     });
   } catch (e) {
