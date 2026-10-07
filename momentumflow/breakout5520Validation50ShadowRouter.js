@@ -87,6 +87,34 @@ async function mapLimit(items, limit, worker) {
 function ts(bar) { return new Date(bar?.t || 0).getTime(); }
 function px(bar, key) { return Number(bar?.[key] || 0); }
 
+function nyParts(ms = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  return Object.fromEntries(parts.map((p) => [p.type, p.value]));
+}
+
+function nyDateKey(ms) {
+  const p = nyParts(ms);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function isCompletedDailyBar(barTs, nowMs = Date.now()) {
+  const barDate = nyDateKey(barTs);
+  const now = nyParts(nowMs);
+  const today = `${now.year}-${now.month}-${now.day}`;
+  if (barDate < today) return true;
+  if (barDate > today) return false;
+  const minuteOfDay = Number(now.hour) * 60 + Number(now.minute);
+  return minuteOfDay >= (16 * 60 + 15);
+}
+
 function summarizeClosed(trades = []) {
   let wins = 0, gw = 0, gl = 0, sum = 0;
   for (const t of trades) {
@@ -104,7 +132,7 @@ function summarizeClosed(trades = []) {
   };
 }
 
-function processBarTimestamp(current, barsBySymbol, barTs) {
+function processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals = true, markProcessed = true } = {}) {
   const pendingEntries = { ...(current.pendingEntries || {}) };
   const pendingExits = { ...(current.pendingExits || {}) };
   const positions = { ...(current.positions || {}) };
@@ -157,6 +185,7 @@ function processBarTimestamp(current, barsBySymbol, barTs) {
       }
     }
 
+    if (!evaluateSignals) continue;
     if (i < ENTRY) continue;
     const close = px(bar, 'c');
     if (!(close > 0)) continue;
@@ -185,7 +214,7 @@ function processBarTimestamp(current, barsBySymbol, barTs) {
     pendingExits,
     positions,
     closedTrades: closedTrades.slice(-5000),
-    lastProcessedBar: barTs,
+    lastProcessedBar: markProcessed ? barTs : current.lastProcessedBar,
     lastCycle: { barTimestamp: barTs, entered, exited, armedEntries, armedExits },
   };
 }
@@ -202,33 +231,47 @@ async function tick() {
     const barsBySymbol = Object.fromEntries(fetched);
     const spy = barsBySymbol.SPY || [];
     const timestamps = spy.map(ts).filter((n) => n > 0).sort((a, b) => a - b);
-    if (!timestamps.length) throw new Error('No completed SPY daily bars returned');
+    const completedTimestamps = timestamps.filter((n) => isCompletedDailyBar(n));
+    if (!completedTimestamps.length) throw new Error('No completed SPY daily bars returned');
 
     let current = state();
-    const latest = timestamps[timestamps.length - 1];
+    const latestCompleted = completedTimestamps[completedTimestamps.length - 1];
+    const latestSeen = timestamps[timestamps.length - 1];
     if (!current.startedAt) current = await save({ ...current, startedAt: new Date().toISOString() });
 
     let todo;
     if (!current.lastProcessedBar) {
-      todo = [latest];
+      todo = [latestCompleted];
     } else if (current.universeVersion !== UNIVERSE_VERSION) {
-      // Re-evaluate the latest completed bar once when expanding the universe.
-      // Existing positions/pending signals are idempotent; this only allows newly
-      // added symbols to catch signals from the most recent completed session.
-      todo = [latest];
+      todo = [latestCompleted];
     } else {
-      todo = timestamps.filter((n) => n > Number(current.lastProcessedBar));
+      todo = completedTimestamps.filter((n) => n > Number(current.lastProcessedBar));
+    }
+
+    for (const barTs of todo) {
+      current = processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals: true, markProcessed: true });
+    }
+
+    let liveExecution = null;
+    if (latestSeen > latestCompleted && latestSeen > Number(current.lastProcessedBar || 0)) {
+      current = processBarTimestamp(current, barsBySymbol, latestSeen, { evaluateSignals: false, markProcessed: false });
+      liveExecution = current.lastCycle || null;
+    }
+
+    if (todo.length || liveExecution) {
+      current = await save({ ...current, universeVersion: UNIVERSE_VERSION });
     }
 
     if (!todo.length) {
-      runtime.lastDecision = `55/20 VALIDATION50 SHADOW current through ${new Date(latest).toISOString().slice(0, 10)}; ${Object.keys(current.positions || {}).length} open, ${Object.keys(current.pendingEntries || {}).length} entries armed, ${Object.keys(current.pendingExits || {}).length} exits armed`;
+      const fillNote = liveExecution && (liveExecution.entered || liveExecution.exited)
+        ? `; today-open shadow fills: +${liveExecution.entered || 0}/-${liveExecution.exited || 0}`
+        : '';
+      runtime.lastDecision = `55/20 VALIDATION50 SHADOW current through completed ${new Date(latestCompleted).toISOString().slice(0, 10)}${fillNote}; ${Object.keys(current.positions || {}).length} open, ${Object.keys(current.pendingEntries || {}).length} entries armed, ${Object.keys(current.pendingExits || {}).length} exits armed`;
       return;
     }
 
-    for (const barTs of todo) current = processBarTimestamp(current, barsBySymbol, barTs);
-    current = await save({ ...current, universeVersion: UNIVERSE_VERSION });
     const last = current.lastCycle || {};
-    runtime.lastDecision = `55/20 VALIDATION50 SHADOW processed ${todo.length} day(s); entered ${last.entered || 0}, exited ${last.exited || 0}, armed ${last.armedEntries || 0} entries/${last.armedExits || 0} exits; ${Object.keys(current.positions || {}).length} open`;
+    runtime.lastDecision = `55/20 VALIDATION50 SHADOW processed ${todo.length} completed day(s); entered ${last.entered || 0}, exited ${last.exited || 0}, armed ${last.armedEntries || 0} entries/${last.armedExits || 0} exits; ${Object.keys(current.positions || {}).length} open`;
   } catch (e) {
     runtime.lastError = e.message;
     runtime.lastDecision = `55/20 validation50 shadow error: ${e.message}`;
