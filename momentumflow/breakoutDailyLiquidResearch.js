@@ -3,12 +3,20 @@ import fetch from 'node-fetch';
 import { getCredentials } from './alpacaClient.js';
 
 const router = express.Router();
-const SYMBOLS = [
+const LIQUID50 = [
   'SPY','QQQ','IWM','DIA','AAPL','MSFT','NVDA','AMZN','META','TSLA',
   'AMD','GOOGL','NFLX','AVGO','INTC','MU','ORCL','CRM','ADBE','PLTR',
   'JPM','BAC','WFC','GS','V','MA','XOM','CVX','COP','SLB',
   'WMT','COST','HD','LOW','DIS','NKE','UBER','ABNB','BA','CAT',
   'GE','F','GM','PFE','LLY','UNH','JNJ','KO','PEP','T',
+];
+const LIQUID100 = [
+  ...LIQUID50,
+  'XLK','XLF','XLE','XLV','XLY','XLP','XLI','XLU','XLB','XLC',
+  'QCOM','TXN','AMAT','LRCX','KLAC','MRVL','CSCO','IBM','NOW','SNOW',
+  'C','SCHW','MS','AXP','COF','OXY','MPC','PSX','HAL','EOG',
+  'MCD','SBUX','TGT','TJX','BKNG','DE','UPS','RTX','LMT','HON',
+  'ABBV','MRK','TMO','ABT','MDT','CMCSA','VZ','SHOP','SNAP','ROKU',
 ];
 const DATA_BASE = 'https://data.alpaca.markets';
 const ENTRY = 55;
@@ -133,7 +141,9 @@ router.get('/daily', async (req, res) => {
     const end = new Date();
     const start = new Date(end.getTime() - days * 86400000);
     const cutoff = end.getTime() - 365 * 86400000;
-    const fetched = await mapLimit(SYMBOLS, 5, async (s) => [s, await bars(s, start, end)]);
+    const universe = String(req.query.universe || 'liquid100').toLowerCase();
+    const symbols = universe === 'liquid50' ? LIQUID50 : LIQUID100;
+    const fetched = await mapLimit(symbols, 5, async (s) => [s, await bars(s, start, end)]);
     const per = {};
     for (const [symbol, b] of fetched) {
       const trades = test(b);
@@ -144,7 +154,7 @@ router.get('/daily', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
-      timeframe: '1Day', universe: 'liquid50', days, adjustment: 'all',
+      timeframe: '1Day', universe: universe === 'liquid50' ? 'liquid50' : 'liquid100', days, adjustment: 'all',
       modeledRoundTripCostPct: ROUND_TRIP_COST_PCT,
       frozenRules: { entry: 'close above prior 55-day high; enter next open', exit: 'close below prior 20-day low; exit next open', parameterChanges: false },
       tradesPerYearWholeWindow: Number((stats.all.trades / (days / 365)).toFixed(1)),
