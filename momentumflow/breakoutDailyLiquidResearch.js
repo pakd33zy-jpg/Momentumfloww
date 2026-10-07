@@ -143,6 +143,64 @@ function aggregate(per, cutoff) {
   };
 }
 
+function capacityStudy(per, cutoff) {
+  const trades = Object.entries(per).flatMap(([symbol, v]) =>
+    (v.trades || []).map((t) => ({ ...t, symbol }))
+  ).sort((a, b) => {
+    const dt = new Date(a.entryTime || 0).getTime() - new Date(b.entryTime || 0).getTime();
+    return dt || String(a.symbol).localeCompare(String(b.symbol));
+  });
+
+  function simulate(cap = Infinity) {
+    const active = [];
+    const accepted = [];
+    const skipped = [];
+    let maxConcurrentUsed = 0;
+
+    for (const trade of trades) {
+      const entryMs = new Date(trade.entryTime || 0).getTime();
+      for (let i = active.length - 1; i >= 0; i -= 1) {
+        const exitMs = new Date(active[i].exitTime || 0).getTime();
+        if (exitMs <= entryMs) active.splice(i, 1);
+      }
+      if (active.length < cap) {
+        accepted.push(trade);
+        active.push(trade);
+        maxConcurrentUsed = Math.max(maxConcurrentUsed, active.length);
+      } else {
+        skipped.push(trade);
+      }
+    }
+
+    const recentAccepted = accepted.filter((t) => new Date(t.entryTime || 0).getTime() >= cutoff);
+    const recentSkipped = skipped.filter((t) => new Date(t.entryTime || 0).getTime() >= cutoff);
+    const recentSignals = recentAccepted.length + recentSkipped.length;
+
+    return {
+      cap: Number.isFinite(cap) ? cap : 'uncapped',
+      acceptedTrades: accepted.length,
+      skippedSignals: skipped.length,
+      captureRatePct: trades.length ? Number((accepted.length / trades.length * 100).toFixed(2)) : 0,
+      maxConcurrentUsed,
+      acceptedTradeStats: summarize(accepted),
+      recent365d: {
+        acceptedTrades: recentAccepted.length,
+        skippedSignals: recentSkipped.length,
+        captureRatePct: recentSignals ? Number((recentAccepted.length / recentSignals * 100).toFixed(2)) : 0,
+        acceptedTradeStats: summarize(recentAccepted),
+      },
+    };
+  }
+
+  const uncapped = simulate(Infinity);
+  return {
+    methodology: 'first-come-first-served by entry timestamp; exits at the same open free capacity before new entries; simultaneous entries tie-break alphabetically; no position sizing or portfolio-return assumptions',
+    rawSignals: trades.length,
+    unconstrainedMaxConcurrentPositions: uncapped.maxConcurrentUsed,
+    variants: [simulate(8), simulate(12), simulate(20), uncapped],
+  };
+}
+
 router.get('/daily', async (req, res) => {
   try {
     const days = Math.max(900, Math.min(1825, Math.floor(Number(req.query.days || 1825))));
@@ -171,6 +229,7 @@ router.get('/daily', async (req, res) => {
       per[symbol] = { bars: b.length, trades, summary: summarize(trades), recent: summarize(recentTrades) };
     }
     const stats = aggregate(per, cutoff);
+    const capacity = capacityStudy(per, cutoff);
     res.set('Cache-Control', 'no-store');
     return res.json({
       generatedAt: new Date().toISOString(), researchOnly: true, liveBotChanged: false,
@@ -181,6 +240,7 @@ router.get('/daily', async (req, res) => {
       tradesLast365d: stats.recent365d.trades,
       aggregate: stats.all,
       recent365d: stats.recent365d,
+      capacityStudy: capacity,
       bySymbol: Object.fromEntries(Object.entries(per).map(([s, v]) => [s, { bars: v.bars, ...v.summary, recent365d: v.recent }])),
     });
   } catch (e) {
