@@ -1,0 +1,32 @@
+name: Liquid55_20 Robustness Snapshot
+
+on:
+  push:
+    paths:
+      - '.github/workflows/liquid55_20_robustness.yml'
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Query deployed frozen 55/20 research endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://momentumfloww.onrender.com/api/research/breakout-liquid/daily?days=1825"
+          for universe in liquid100 etf20 dow30_2021 validation50; do
+            echo "=== $universe ==="
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 180 "$base&universe=$universe" \
+              | jq -c '{
+                  generatedAt,
+                  universe,
+                  tradesPerYearWholeWindow,
+                  aggregate,
+                  recent365d,
+                  allocation_2_5: (.capitalAllocationStudy.coarseVariants[] | select(.positionFractionPct == 2.5)),
+                  fineVariants: (if .universe == "liquid100" then .capitalAllocationStudy.fineVariants else null end),
+                  costStressAt2_5Pct: (if .universe == "liquid100" then .capitalAllocationStudy.costStressAt2_5Pct else null end)
+                }'
+          done
