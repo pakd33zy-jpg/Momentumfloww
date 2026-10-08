@@ -70,6 +70,61 @@ This ledger is research-only. It does not authorize live trading and does not ch
 
 ---
 
+### Crypto evolution: C55/V55 -> C56 -> C57 -> C60 -> C62
+
+This chain is important because it shows how a weak/small-sample idea improved when individual pieces were changed instead of throwing the family away.
+
+**C55 / V55 lead-lag core**
+- BTC rises about 1% over 2 hours.
+- Bullish, high-volatility regime.
+- Targets: ETH, SOL, LINK.
+- Target altcoin has only partially reacted to BTC.
+- Direct closed-candle / next-bar entry.
+- 1% round-trip cost assumption.
+- Best recovered result: +17.14%, PF 1.82, 52.6% win rate, 19 trades.
+- Folds: -1.95%, +8.12%, +10.97%.
+- Max DD later referenced at 13.34%.
+- Verdict: promising mechanism, but failed the >=30-trade / all-fold consistency bar.
+
+**C56**
+- Preserved BTC lead-lag.
+- Changed timing to wait for a target pullback + closed-candle reclaim, then next-candle entry.
+- 216 configurations.
+- Only 1 qualifying trade.
+- Verdict: rejected for extreme over-filtering / destroyed frequency.
+- Reusable lesson: waiting for a “prettier” entry can erase the edge by arriving too late or almost never.
+
+**C57**
+- Restored the C55 direct entry.
+- Tested a half/smaller starter plus confirmation add.
+- 648 configurations.
+- Best: +13.86%, PF 1.89, DD 9.67%, 19 trades.
+- Folds: -1.70%, +8.01%, +7.55%.
+- Improvement: lower DD than C55/V55 (13.34% -> 9.67%) without changing the entry mechanism.
+- Failure: sample stayed at 19 trades and first fold stayed negative.
+- Reusable lesson: staged sizing can improve risk even when it does not fix entry robustness.
+
+**C60**
+- Removed the C59 mean-reversion branch and audited the momentum/lead-lag family across folds, coins, leave-one-coin-out, and 0.5% / 1.0% / 1.5% friction.
+- Best verified historical audit: +27.13% after 1% friction, PF 2.19, DD 5.90%, 33 trades.
+- All folds profitable.
+- ETH, SOL, LINK each profitable.
+- Leave-one-coin-out survived.
+- Still +10.63% at 1.5% friction.
+- Failure/limitation: 33 trades remained below the desired 50-trade confidence target.
+- Reusable lesson: removing a conflicting mean-reversion branch and auditing across assets/regimes improved the family more than adding another entry filter.
+
+**C62**
+- Preserved C60's validated momentum signal.
+- Changed hold time, cooldown, and trailing exits to seek more opportunities without weakening the entry.
+- Live/shadow implementation used exact closed-candle signal, ATR stop/target, half-size starter, add only after +1R.
+- Best recovered historical result: +31.75% after 1% friction, PF 2.33, 48.5% win rate.
+- All folds and all coins profitable.
+- Leave-one-coin-out survived.
+- +15.25% at 1.5% friction.
+- Still 33 trades, so it was **not promoted as proven**.
+- Reusable lesson: better exits/risk can improve the same entry family, but they do not manufacture more independent observations.
+
 ### Crypto: C60 core recovered through exact C62 source
 
 **Universe / role**
@@ -181,6 +236,32 @@ This ledger is research-only. It does not authorize live trading and does not ch
 - Candidate as an independent sleeve, not necessarily a filter on 55/20.
 
 ---
+
+### V30 / V31 equity research — strong headline, fold robustness problem
+
+**V30 recovered result**
+- Full return: +58.73%.
+- CAGR: 9.53%.
+- Sharpe: 0.845.
+- Max DD: -10.62%.
+- PF: 1.78.
+- Win rate: 57.38%.
+- 122 cycles.
+- 4x costs: +27.17%.
+- Robustness failure: 0/48 folds passed; fold 1 was -1.02%.
+- Verdict: rejected despite attractive full-sample headline.
+
+**V31 intended change**
+- Removed a weak defensive-bond idea.
+- Added an SPY trend/shock cash brake to V30's strongest long/cash-relative family, specifically targeting 2022 deterioration.
+- Research tooling later added a 48-config tournament, qualification-failure diagnostics, survivor funnel, and bottleneck summary.
+- A software isolation bug initially contaminated V31 with V30 shared functions; tests were 109/110 with one failure before research. That is an implementation failure, not evidence against the strategy idea.
+- Final V31 tournament metrics remain unverified.
+
+**Reusable lessons**
+- High full-sample return + PF can still be rejected when fold robustness is poor.
+- A regime cash brake is a valid hypothesis when a specific bad regime is identified, but must be tested without contaminating prior-version code.
+- Software/test failures must be separated from strategy failures.
 
 ### V6R_ROBUST — initial promise, unseen failure
 
@@ -411,9 +492,18 @@ Freeze the C62 entry and compare:
 **Reason:** separate entry-edge quality from exit engineering.
 
 ### H4 — 55/20 equity signals + V26-style ranking under cash contention
-Do not block 55/20 signals. When cash cannot accept every signal, compare deterministic alphabetical allocation against ranking accepted signals by medium-term relative momentum / trend quality.
+Do not block 55/20 signals. When cash cannot accept every signal, compare deterministic alphabetical allocation against ranking accepted signals by 63-session momentum.
 
-**Reason:** 55/20 already has more signals than 2.5% shared capital can fund; ranking may improve **which signals get capital** without reducing raw signal generation.
+**Reason:** 55/20 already has more signals than 2.5% shared capital can fund; ranking might improve **which signals get capital** without reducing raw signal generation.
+
+**First test result — useful failure**
+- Liquid20 direct Alpaca replay: 201 raw signals, 201 accepted, 0 skipped. Alphabetical and momentum63 both returned +23.624%, recent +3.755%, DD 9.061%. No difference because there was no cash contention.
+- Liquid50 direct Alpaca replay: 496 raw signals; 493 accepted, 3 skipped; 99.4% capture. Both methods returned +28.361%, recent +7.333%, DD 13.307%. No difference.
+- There were 2 Liquid50 days with cash-related skips, but momentum ordering did not change the allocation on those days.
+
+**Conclusion:** same-open tie-breaking is **not the right place** to use V26 momentum. Most cash contention comes from capital already tied up in older 55/20 positions, not several new signals fighting for the same morning's cash. Preserve this result. Do not keep retesting the same tie-break idea unchanged.
+
+**Next derivative hypothesis:** use momentum as an allocation/weighting or portfolio-priority layer that can affect capital already deployed, while keeping the 55/20 signal generator frozen in research comparisons.
 
 ### H5 — 55/20 + correlation-aware allocation
 Freeze entry/exit rules. Compare current cash-first acceptance with a portfolio allocator that penalizes highly correlated simultaneous positions while preserving the same total risk.
@@ -430,10 +520,11 @@ Run 55/20 trend breakout and V26 RSI(2) pullback as separate sleeves sharing por
 ## Missing evidence queue
 
 Do not invent these. Recover source/artifacts:
-- Exact original C55 rules and metrics.
-- Exact original C60 result artifact to resolve +27.13/PF2.19 vs +28.88/PF2.26 fingerprint.
-- V55/V56 exact rules and test results.
-- V28/V30/V31/V32 exact component/result deltas.
+- Original C55/C60 raw result artifacts and trade lists (rules/metrics are now recovered from prior research conversations, but raw provenance should still be matched).
+- Resolve the later +28.88% / PF 2.26 C60 recap against the verified +27.13% / PF 2.19 audit; do not blend them.
+- V28 exact component/result deltas.
+- V31 final tournament metrics after software-isolation repair.
+- V32 exact strategy metrics; current recovered evidence only proves its paper-forward blocker was HTTP 401, not a logic failure.
 - Any V36+ result tables not already in repository.
 - Exact V50 historical validation metrics if they exist.
 - Historical MACD Valley/Cross result set before it was activated in paper runtime.
