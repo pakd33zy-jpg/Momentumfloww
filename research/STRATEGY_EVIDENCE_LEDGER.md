@@ -443,6 +443,22 @@ These are **contextual failures**. If a future hypothesis changes the causal con
 
 ---
 
+## Cross-version deduction: regime is now the highest-value crypto question
+
+The C62 entry/exit ablation produced a useful contradiction:
+- Recent year: same lead-lag entry can be profitable, especially with trailing exits.
+- Prior year: the same entry family loses heavily regardless of exit choice.
+
+That means the next research step should not be “find a better stop” or “add another candle pattern.” It should test whether **broad regime state** explains when the lead-lag relationship has positive expectancy.
+
+Candidate regime pieces already earned the right to be tested because they came from earlier work:
+- V26: long-term trend state (SMA150 / medium-term momentum).
+- V31: trend/shock cash brake aimed at bad regimes.
+- C60 description: bullish, high-volatility BTC regime.
+- V51: multi-horizon persistence / acceleration / relative-pressure context.
+
+Use these as competing regime hypotheses, one at a time, around the frozen C62 entry. Do not stack them all.
+
 ## Component library
 
 | Component | Evidence state | Best-known use | Main risk |
@@ -483,13 +499,30 @@ Test whether excluding only genuinely illiquid/high-friction targets improves ne
 **Reason:** prior research says liquidity helps tradability but did not prove predictive edge.
 
 ### H3 — C62 entry, exit-module tournament
-Freeze the C62 entry and compare:
-- original C60 exit if exact artifact is recovered,
-- current C62 staged/ATR/3.25R/trailing exit,
-- prior-20-bar/period low trend exit,
-- simpler ATR stop + no fixed target.
+Freeze the C62 entry and compare exit/risk modules independently.
 
-**Reason:** separate entry-edge quality from exit engineering.
+**2025-10-08 -> 2026-10-08, direct Alpaca 15m replay, next-bar entry, 1% friction**
+- Same entry family produced 33 trades.
+- Current-style staged + trail + 3.25R target: +14.59% trade-sequence compounding, PF 1.65, DD 7.60%; equal-weight coin-sleeve return +4.69%.
+- Full-size + trail + target: +17.67%, PF 1.50, DD 7.92%; sleeve +5.67%.
+- Staged + target but **no trail**: -4.65%, PF 0.91, DD 23.89%; sleeve -1.32%.
+- Staged + trail with **no fixed target**: +31.19%, PF 2.32, DD 7.68%; sleeve +9.75%.
+- All four modules used the same C62 entry signals. The trail was highly valuable in this period; the fixed target appeared to truncate winners.
+- Even the best no-target variant had a negative first chronological third (-2.97%, PF 0.42), so it was not uniformly robust.
+
+**Independent prior period 2024-10-08 -> 2025-10-08**
+- 60 trades from the same C62 entry family.
+- Staged + trail + target: -44.80%, PF 0.38, DD 54.0%.
+- Full-size + trail + target: -56.86%, PF 0.37, DD 65.66%.
+- Staged + target / no trail: -52.67%, PF 0.31, DD 58.48%.
+- Staged + trail / no target: -46.54%, PF 0.34, DD 54.27%.
+- ETH, SOL and LINK were all negative in that prior period.
+
+**Conclusion**
+- The recent-year exit clue is real **within that regime**, but exit engineering cannot rescue the entry family in the prior-year regime.
+- Do not promote the no-target variant.
+- The next question is **regime identification**, not more exit tweaking.
+- Specifically test whether a higher-timeframe BTC trend/cash-brake concept (reusing V26/V31 regime evidence) separates the good C62 regime from the bad one without over-filtering.
 
 ### H4 — 55/20 equity signals + V26-style ranking under cash contention
 Do not block 55/20 signals. When cash cannot accept every signal, compare deterministic alphabetical allocation against ranking accepted signals by 63-session momentum.
