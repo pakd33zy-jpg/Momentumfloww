@@ -1,5 +1,5 @@
 import express from 'express';
-import { getStockBars } from './alpacaClient.js';
+import { getCredentials, getStockBars } from './alpacaClient.js';
 import { store } from './store.js';
 import { persistConfig } from './persistentCredentialStore.js';
 
