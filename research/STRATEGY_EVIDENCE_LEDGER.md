@@ -407,6 +407,66 @@ This chain is important because it shows how a weak/small-sample idea improved w
 
 ---
 
+## New recombination evidence — 2026-10-07
+
+### 55/20 + V26 63-session same-open ranking
+- Liquid20: 201 raw signals, 201 accepted, 0 skipped; alphabetical and momentum63 both +23.624%, recent +3.755%, DD 9.061%.
+- Liquid50: 496 raw signals, 493 accepted, 3 skipped; both +28.361%, recent +7.333%, DD 13.307%.
+- Conclusion: same-open ranking is ineffective because most cash contention comes from older positions already occupying capital, not multiple new signals competing at one open.
+- Preserve as a failed placement of a good component. Momentum ranking may still matter as portfolio priority/weighting, not same-open tie-break.
+
+### Recovered C62 source vs historical C60 fingerprint
+The exact C62 source recovered from the old branch does **not** reproduce the historical C60 robustness fingerprint on broader direct Alpaca 15m data using causal next-bar execution and 1% round-trip cost.
+
+**Recent 180d, exact recovered lead-lag entry**
+- C62 staged exit: +19.80%, PF 3.75, DD 3.05%, 15 trades.
+- Fixed target: +24.19%, PF 2.67, DD 6.06%, 15 trades.
+- Trailing-only: +26.89%, PF 2.86, DD 6.06%, 15 trades.
+- 20-bar-low exit: +24.20%, PF 2.54, DD 6.56%, 15 trades.
+- ATR-stop + 24h time exit: +30.93%, PF 3.37, DD 6.06%, 14 trades.
+- This looked promising but was explicitly **not promoted** because the sample was tiny.
+
+**Latest 365d**
+- C62 staged exit: -0.04%, PF 1.03, DD 18.29%, 33 trades.
+- Fixed target: -2.69%, PF 0.98, DD 23.71%, 33 trades.
+- Trailing-only: +2.22%, PF 1.10, DD 21.75%, 33 trades.
+- 20-bar-low exit: -5.69%, PF 0.91, DD 28.18%, 33 trades.
+- ATR-stop + 24h time exit: -2.14%, PF 1.00, DD 29.56%, 32 trades.
+- At 1.5% friction every tested exit variant was negative.
+
+**Prior independent 365d fold: 2024-10-08 through 2025-10-07**
+- Current 0.6% BTC 2h impulse threshold: -44.49%, PF 0.38, DD 53.79%, 60 trades.
+- 0.8% threshold: -46.41%, PF 0.24, DD 50.03%, 44 trades.
+- 1.0% threshold (older C55 clue): -42.48%, PF 0.14, DD 43.26%, 35 trades.
+- 1.2% threshold: -37.00%, PF 0.12, DD 37.11%, 27 trades.
+- Every ETH/SOL/LINK result was negative for the 1.0% variant in this fold.
+
+**Entry-edge isolation on the same bad fold**
+- 512 historically motivated entry combinations were tested around BTC impulse, BTC volatility, lag fraction, target structure, bullish candle, and local breakout.
+- With C62 exit: zero configurations with >=20 trades were positive with PF > 1.
+- With fixed 6h/12h/24h forward returns at 1% cost: zero configurations with >=20 trades were positive with PF > 1.
+- Therefore this is not merely an exit problem in that fold; the reconstructed entry family itself lacks edge there.
+
+**Old C58 higher-timeframe context recombination**
+A declared hypothesis—not claimed as exact C58 reconstruction—required positive BTC 7-day and 20-day returns on top of the ~1% lead-lag entry.
+- No HTF gate: 45 trades, -48.1%, PF 0.44 on fixed 24h forward returns.
+- BTC 7d positive: 37 trades, -47.3%, PF 0.40.
+- BTC 20d positive: 42 trades, -47.8%, PF 0.42.
+- Both positive: 37 trades, -47.3%, PF 0.40.
+- Stronger 7d >3% and 20d >5%: 31 trades, -37.5%, PF 0.48.
+- Conclusion: this particular HTF-strength interpretation does not rescue the bad fold.
+
+**Critical provenance conclusion**
+- The recovered C62 live-source file must **not** be treated as proof that the historical C60 +27.13% / PF 2.19 / 5.90% result has been reproduced.
+- The historical C60 audit remains a separate artifact/result whose exact parameter implementation is still missing.
+- Preserve both facts rather than forcing them to agree.
+
+### C59 -> C60 subtraction lesson
+- C59 momentum branch: +19.04% across 37 trades.
+- C59 range mean-reversion branch: -119.39%.
+- C60 was created by removing the range mean-reversion branch completely and then auditing nearby momentum configurations.
+- Reusable lesson: major improvement can come from **removing a conflicting component**, not adding filters.
+
 ## Known failed / weak families — retain the lesson, not a blanket ban
 
 The following forms were rejected or weak in prior testing:
