@@ -519,6 +519,26 @@ Candidate regime pieces already earned the right to be tested because they came 
 
 Use these as competing regime hypotheses, one at a time, around the frozen C62 entry. Do not stack them all.
 
+## C62 regime test 1 — V26 BTC trend state
+
+**Tested 2026-10-08; research only; active C62 unchanged.**
+
+Frozen C62 replay plus one causal regime gate: at the C62 signal close, the most recent fully completed BTC daily candle must satisfy **close > SMA150** and **63-day momentum > 0**. No other entry filters were added.
+
+**Consistent direct-Alpaca replay provenance check**
+- Prior window 2024-10-07 -> 2025-10-07: 60 trades, **-44.37%**, PF **0.384**, DD 53.81%. This closely reproduces the saved -44.49% / PF 0.38 failure on return and PF; the DD-accounting difference remains unresolved.
+- Recent window 2025-10-08 -> 2026-10-08: 33 trades, **+0.70%**, PF **1.053**, DD 18.08% under the same replay mechanics.
+- That recent replay does **not** reproduce the saved +13.87% / PF 1.62 / DD 7.74 fingerprint even though the accepted-trade count remains 33. Preserve both fingerprints and treat the recent positive fingerprint as a provenance/reproducibility item until trade-level source matching resolves the discrepancy.
+
+**V26 BTC regime gate result**
+- Recent window: 8 trades, **+8.87%**, PF **3.096**, DD 3.05%; only 24.2% of the consistent 33-trade baseline survives.
+- Prior window: 46 trades, **-35.28%**, PF **0.446**, DD 46.27%.
+- The prior window had 81 raw C62 signals before overlap/position blocking; 67 passed the V26 daily state, so the gate removed relatively little of the bad regime.
+
+**Verdict: reject this exact combined V26 hard gate as a standalone C62 regime discriminator.** It improves the losing year but leaves it deeply negative, while deleting roughly three quarters of the recent accepted trades. Do not retest this exact gate unchanged. SMA150 and 63-day momentum remain reusable components in other contexts.
+
+Full note: research/C62_V26_BTC_REGIME_TEST_2026-10-08.md
+
 ## Component library
 
 | Component | Evidence state | Best-known use | Main risk |
