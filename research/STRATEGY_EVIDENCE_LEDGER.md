@@ -539,6 +539,28 @@ Frozen C62 replay plus one causal regime gate: at the C62 signal close, the most
 
 Full note: research/C62_V26_BTC_REGIME_TEST_2026-10-08.md
 
+
+## C62 regime test 2 — V31 BTC trend/shock hard brakes
+
+**Attempted 2026-10-08; research only; active C62 unchanged.**
+
+Recovered the exact V31 trend/shock logic from AdaptiveConfluenceLab and ported only the BTC-mappable hard-cash predicates. No synthetic crypto breadth proxy was invented.
+
+**Provenance gate**
+- The older window had to reproduce approximately the known 60-trade C62 baseline before filtered results could be trusted.
+- The Render replay returned only 6 baseline trades because historical altcoin coverage was incomplete: SOL/USD and LINK/USD each returned only 577 bars.
+- The runner stopped automatically and skipped the recent window.
+- Any superficially improved filtered metric from that incomplete sample is invalid and is **not strategy evidence**.
+
+**Verdict: no V31 verdict; data provenance failed.**
+- Do not mark V31 passed or failed.
+- A future attempt must first reproduce the known C62 trade-count fingerprint.
+- Keep the V31 source rules as reusable hypotheses, but do not parameter-mine around this invalid replay.
+
+Operationally, this investigation also exposed Alpaca market-data rate-limit collisions among paper/shadow processes. Shared request pacing/retry was added and 55/20 bar access was routed through it while preserving adjusted-bar behavior. Treat that as execution reliability work, not alpha evidence.
+
+Full note: research/C62_V31_BTC_REGIME_ATTEMPT_2026-10-08.md
+
 ## Component library
 
 | Component | Evidence state | Best-known use | Main risk |
