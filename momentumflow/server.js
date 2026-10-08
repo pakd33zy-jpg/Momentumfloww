@@ -12,7 +12,7 @@ import liveBotRouter, { startLiveBotV35 } from './liveBotV35.js';
 import v50PaperRouter from './liveBotV50.js';
 import v26Router from './v26.js';
 import researchRouter from './research.js';
-import c62RegimeResearchRouter from './c62RegimeResearch.js';
+import c62RegimeResearchRouter, { runC62RegimeWindow } from './c62RegimeResearch.js';
 import trendPullbackResearchRouter from './trendPullbackResearch.js';
 import breakoutResearchRouter from './breakoutResearch.js';
 import breakoutDailyLiquidResearchRouter from './breakoutDailyLiquidResearch.js';
@@ -104,6 +104,18 @@ startEquityV71Shadow();
 startBreakout5520Shadow();
 startBreakout5520Validation50Shadow();
 startC62Shadow();
+
+setTimeout(async () => {
+  try {
+    const older = await runC62RegimeWindow('older');
+    console.log('[c62-v31-result][older]', JSON.stringify(older));
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const recent = await runC62RegimeWindow('recent');
+    console.log('[c62-v31-result][recent]', JSON.stringify(recent));
+  } catch (error) {
+    console.error('[c62-v31-result][error]', error.message);
+  }
+}, 60000).unref?.();
 
 
 
