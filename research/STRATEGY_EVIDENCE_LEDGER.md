@@ -517,6 +517,28 @@ Freeze the C62 entry and compare exit modules.
 - Re-running current C62 with signal-close fills produced only +7.21%, PF 1.31, DD 9.56%.
 - Next-bar-open fills were **better**, not worse, in this window; this means the positive result is not coming from an optimistic signal-close fill assumption.
 
+**Parameter/cost stress around the no-target trailing exit**
+- 2.5R trigger / 1.0R trail @ 1.0% cost: +38.18%, PF 2.00, DD 11.33%, 33 trades.
+  - ETH +10.26%, PF 3.19.
+  - SOL **-5.51%, PF 0.72**.
+  - LINK +32.63%, PF 3.56.
+- 2.0R trigger / 1.0R trail @ 1.0% cost: +34.09%, PF 1.86, DD 12.39%, 34 trades.
+  - SOL **-8.30%, PF 0.61**.
+- 2.5R trigger / 1.5R trail @ 1.0% cost: +33.87%, PF 1.90, DD 11.33%, 33 trades.
+  - ETH +8.84%, PF 2.90.
+  - SOL +0.12%, PF 1.05.
+  - LINK +22.85%, PF 2.86.
+- 2.5R / 1.5R at 1.25% cost: +23.34%, PF 1.59, DD 13.21%.
+- 2.5R / 1.5R at 1.50% cost: +13.62%, PF 1.35, DD 15.17%; SOL turns negative (-6.20%, PF 0.76).
+- 2.5R / 1.0R at 1.50% cost: +17.29%, PF 1.43, DD 15.72%; SOL also negative (-11.50%, PF 0.49).
+
+**Interpretation**
+- The entire neighborhood remains profitable in aggregate at 1.0% cost, so the no-target trailing result is not a one-parameter spike.
+- Tighter trailing raises aggregate return mostly by helping ETH/LINK, but hurts SOL materially.
+- 2.5R / 1.5R is currently the more balanced 1.0%-cost variant because all three coins remain positive, even though it is not the highest headline return.
+- Cost stress exposes fragility in SOL. Do not call the exit robust yet.
+- Next required test: prior non-overlapping year with the same frozen entry and the same small exit neighborhood.
+
 **Current conclusion**
 - The C60/C62 lead-lag **entry mechanism still shows positive evidence** on fresh causal data.
 - The fixed 3.25R target appears to cut off too much trend upside.
