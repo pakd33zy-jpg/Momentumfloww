@@ -499,30 +499,30 @@ Test whether excluding only genuinely illiquid/high-friction targets improves ne
 **Reason:** prior research says liquidity helps tradability but did not prove predictive edge.
 
 ### H3 — C62 entry, exit-module tournament
-Freeze the C62 entry and compare exit/risk modules independently.
+Freeze the C62 entry and compare exit modules.
 
-**2025-10-08 -> 2026-10-08, direct Alpaca 15m replay, next-bar entry, 1% friction**
-- Same entry family produced 33 trades.
-- Current-style staged + trail + 3.25R target: +14.59% trade-sequence compounding, PF 1.65, DD 7.60%; equal-weight coin-sleeve return +4.69%.
-- Full-size + trail + target: +17.67%, PF 1.50, DD 7.92%; sleeve +5.67%.
-- Staged + target but **no trail**: -4.65%, PF 0.91, DD 23.89%; sleeve -1.32%.
-- Staged + trail with **no fixed target**: +31.19%, PF 2.32, DD 7.68%; sleeve +9.75%.
-- All four modules used the same C62 entry signals. The trail was highly valuable in this period; the fixed target appeared to truncate winners.
-- Even the best no-target variant had a negative first chronological third (-2.97%, PF 0.42), so it was not uniformly robust.
+**Fresh 365-day causal Alpaca test (ETH/SOL/LINK, BTC leader, 15m, 1.0% modeled round-trip cost, entry at next 15m bar open)**
+- C62 staged + 3.25R target + trail + 24h max: 33 trades, +13.87%, PF 1.62, DD 7.74%.
+  - Early half: -1.37%, PF 0.90.
+  - Late half: +15.46%, PF 2.43.
+- Fixed 3.25R target, no staging/trailing: 33 trades, -2.69%, PF 0.98, DD 15.30%.
+- 2.5R trigger / 1.5R trailing stop, **no fixed target**, no staging: 33 trades, +33.87%, PF 1.90, DD 11.33%.
+  - Early half: +6.11%, PF 1.37.
+  - Late half: +26.17%, PF 2.58.
+  - ETH +8.84% PF 2.90; SOL +0.12% PF 1.05; LINK +22.85% PF 2.86.
+- Prior-20-bar-low exit: 36 trades, -28.66%, PF 0.37, DD 34.62%.
+- Bare ATR stop + 24h max, no target/trail: 32 trades, -2.14%, PF 1.00, DD 21.36%.
 
-**Independent prior period 2024-10-08 -> 2025-10-08**
-- 60 trades from the same C62 entry family.
-- Staged + trail + target: -44.80%, PF 0.38, DD 54.0%.
-- Full-size + trail + target: -56.86%, PF 0.37, DD 65.66%.
-- Staged + target / no trail: -52.67%, PF 0.31, DD 58.48%.
-- Staged + trail / no target: -46.54%, PF 0.34, DD 54.27%.
-- ETH, SOL and LINK were all negative in that prior period.
+**Execution check**
+- Re-running current C62 with signal-close fills produced only +7.21%, PF 1.31, DD 9.56%.
+- Next-bar-open fills were **better**, not worse, in this window; this means the positive result is not coming from an optimistic signal-close fill assumption.
 
-**Conclusion**
-- The recent-year exit clue is real **within that regime**, but exit engineering cannot rescue the entry family in the prior-year regime.
-- Do not promote the no-target variant.
-- The next question is **regime identification**, not more exit tweaking.
-- Specifically test whether a higher-timeframe BTC trend/cash-brake concept (reusing V26/V31 regime evidence) separates the good C62 regime from the bad one without over-filtering.
+**Current conclusion**
+- The C60/C62 lead-lag **entry mechanism still shows positive evidence** on fresh causal data.
+- The fixed 3.25R target appears to cut off too much trend upside.
+- The prior-20-low trend exit is incompatible with this short-horizon lead-lag entry.
+- The no-target trailing exit is the current research leader, but 33 trades is still a small sample and SOL was only barely positive. It must survive cost stress, parameter-neighborhood checks, and another independent window before promotion.
+- Active C62 shadow remains unchanged; this is research only.
 
 ### H4 — 55/20 equity signals + V26-style ranking under cash contention
 Do not block 55/20 signals. When cash cannot accept every signal, compare deterministic alphabetical allocation against ranking accepted signals by 63-session momentum.
