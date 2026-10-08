@@ -67,6 +67,7 @@ async function bars(symbol) {
     end,
     limit: 1000,
     feed: 'iex',
+    adjustment: 'all',
     sort: 'asc',
     maxPages: 1,
   });
