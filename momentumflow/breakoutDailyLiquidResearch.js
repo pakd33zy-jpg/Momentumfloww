@@ -230,12 +230,29 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
   for (const arr of entriesByTs.values()) arr.sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
 
   const timeline = [...new Set(Object.values(barsBySymbol).flatMap((rows) => (rows || []).map((b) => new Date(b.t || 0).getTime()).filter((n) => n > 0)))].sort((a, b) => a - b);
+  const barRows = {};
   const barMaps = {};
+  const barIndexByTs = {};
   for (const [symbol, rows] of Object.entries(barsBySymbol)) {
-    barMaps[symbol] = new Map((rows || []).map((b) => [new Date(b.t || 0).getTime(), b]));
+    const clean = (rows || [])
+      .filter((b) => new Date(b.t || 0).getTime() > 0 && Number(b?.c) > 0)
+      .sort((a, b) => new Date(a.t || 0).getTime() - new Date(b.t || 0).getTime());
+    barRows[symbol] = clean;
+    barMaps[symbol] = new Map(clean.map((b) => [new Date(b.t || 0).getTime(), b]));
+    barIndexByTs[symbol] = new Map(clean.map((b, i) => [new Date(b.t || 0).getTime(), i]));
   }
 
-  function simulate(positionFraction, roundTripCostPct = ROUND_TRIP_COST_PCT) {
+  function momentum63AtEntry(symbol, entryTs) {
+    const rows = barRows[symbol] || [];
+    const entryIndex = barIndexByTs[symbol]?.get(entryTs);
+    const signalIndex = Number.isInteger(entryIndex) ? entryIndex - 1 : -1;
+    if (signalIndex < 63) return -Infinity;
+    const nowClose = Number(rows[signalIndex]?.c || 0);
+    const priorClose = Number(rows[signalIndex - 63]?.c || 0);
+    return nowClose > 0 && priorClose > 0 ? nowClose / priorClose - 1 : -Infinity;
+  }
+
+  function simulate(positionFraction, roundTripCostPct = ROUND_TRIP_COST_PCT, selectionMode = 'alphabetical') {
     let cash = 1;
     const positions = {};
     let peak = 1;
@@ -276,7 +293,15 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
       };
 
       const entries = entriesByTs.get(ts) || [];
-      for (const trade of entries) {
+      const orderedEntries = [...entries].sort((a, b) => {
+        if (selectionMode === 'momentum63') {
+          const scoreA = momentum63AtEntry(a.symbol, ts);
+          const scoreB = momentum63AtEntry(b.symbol, ts);
+          if (scoreB !== scoreA) return scoreB - scoreA;
+        }
+        return String(a.symbol).localeCompare(String(b.symbol));
+      });
+      for (const trade of orderedEntries) {
         if (positions[trade.symbol]) continue;
         const equityBefore = valueAtOpen();
         const target = equityBefore * positionFraction;
@@ -346,6 +371,7 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
     return {
       positionFractionPct: Number((positionFraction * 100).toFixed(2)),
       modeledRoundTripCostPct: Number(roundTripCostPct.toFixed(3)),
+      selectionMode,
       acceptedEntries,
       completedAcceptedTrades: completedAccepted,
       skippedForCash,
@@ -362,10 +388,17 @@ function capitalAllocationStudy(per, barsBySymbol, cutoff) {
   }
 
   return {
-    methodology: 'same frozen 55/20 signals; no leverage; each accepted entry invests a fixed fraction of current portfolio equity; exits free cash before same-open entries; simultaneous entries tie-break alphabetically; daily mark-to-market drawdown',
+    methodology: 'same frozen 55/20 signals; no leverage; each accepted entry invests a fixed fraction of current portfolio equity; exits free cash before same-open entries; baseline simultaneous-entry tie-break is alphabetical; daily mark-to-market drawdown',
     coarseVariants: [0.01, 0.015, 0.02, 0.025, 0.03, 0.05].map((f) => simulate(f)),
     fineVariants: [0.0175, 0.02, 0.0225, 0.025, 0.0275, 0.03, 0.035].map((f) => simulate(f)),
     costStressAt2_5Pct: [0.04, 0.10, 0.20, 0.30].map((cost) => simulate(0.025, cost)),
+    selectionStudyAt2_5Pct: {
+      methodology: 'Frozen 55/20 signals and 2.5% sizing are unchanged. Only simultaneous same-open entries are reordered when cash cannot fund all of them. momentum63 ranks by the target symbol 63-session return measured through the prior completed daily close; it is a ranking rule, never an entry filter.',
+      variants: [
+        simulate(0.025, ROUND_TRIP_COST_PCT, 'alphabetical'),
+        simulate(0.025, ROUND_TRIP_COST_PCT, 'momentum63'),
+      ],
+    },
   };
 }
 
