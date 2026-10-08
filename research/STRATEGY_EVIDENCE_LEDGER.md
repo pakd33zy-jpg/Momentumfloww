@@ -539,6 +539,24 @@ Freeze the C62 entry and compare exit modules.
 - Cost stress exposes fragility in SOL. Do not call the exit robust yet.
 - Next required test: prior non-overlapping year with the same frozen entry and the same small exit neighborhood.
 
+**Independent prior-year failure — 2024-10-07 to 2025-10-07**
+- Same frozen C60/C62 entry, next-15m-open execution, 1.0% modeled round-trip cost.
+- Current C62 staged/target/trail: 60 trades, **-44.49%**, PF **0.38**, DD 47.33%.
+  - ETH -13.74%, PF 0.45.
+  - SOL -18.22%, PF 0.52.
+  - LINK -21.31%, PF 0.07.
+- 2.5R trigger / 1.5R no-target trail: 60 trades, **-57.36%**, PF **0.36**, DD 60.89%.
+- 2.5R trigger / 1.0R trail: 60 trades, **-55.75%**, PF **0.39**, DD 59.81%.
+- 2.0R trigger / 1.0R trail: 60 trades, **-57.55%**, PF **0.35**, DD 60.87%.
+- At 1.5% cost the 2.5R/1.5R trail worsened to -68.57%, PF 0.25.
+
+**What this changes**
+- The recent-year positive result is **not robust across a prior non-overlapping year**.
+- The failure is not primarily an exit problem: every tested exit family failed in the older window.
+- Therefore the next research question moves upstream: **what regime/context made the same lead-lag entry work recently and fail badly before?**
+- Do not discard the entry family. Preserve it as a regime-dependent component and search for a causal context discriminator using already-tested pieces (V51 persistence/relative-pressure/participation, broader BTC trend/regime, volatility state, and friction).
+- Active C62 forward shadow remains unchanged so forward evidence is not contaminated by retrospective tuning.
+
 **Current conclusion**
 - The C60/C62 lead-lag **entry mechanism still shows positive evidence** on fresh causal data.
 - The fixed 3.25R target appears to cut off too much trend upside.
