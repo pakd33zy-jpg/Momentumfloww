@@ -23,6 +23,9 @@ const UNIVERSE_VERSION = 'LIQUID100_V1';
 const ENTRY = 55;
 const EXIT = 20;
 const ROUND_TRIP_COST_PCT = 0.04;
+const VIRTUAL_PORTFOLIO_VERSION = 'V1_2_5PCT';
+const VIRTUAL_STARTING_CAPITAL = 100;
+const VIRTUAL_POSITION_FRACTION = 0.025;
 const runtime = {
   running: false,
   busy: false,
@@ -42,6 +45,7 @@ function emptyState() {
     closedTrades: [],
     updatedAt: null,
     universeVersion: null,
+    virtualPortfolio: null,
   };
 }
 
@@ -120,6 +124,74 @@ function isCompletedDailyBar(barTs, nowMs = Date.now()) {
   return minuteOfDay >= (16 * 60 + 15);
 }
 
+
+function makeVirtualPortfolio(existingPositions = {}) {
+  const vp = {
+    version: VIRTUAL_PORTFOLIO_VERSION,
+    startingCapital: VIRTUAL_STARTING_CAPITAL,
+    positionFraction: VIRTUAL_POSITION_FRACTION,
+    cash: VIRTUAL_STARTING_CAPITAL,
+    equity: VIRTUAL_STARTING_CAPITAL,
+    peakEquity: VIRTUAL_STARTING_CAPITAL,
+    maxDrawdownPct: 0,
+    realizedPnl: 0,
+    positions: {},
+    bootstrappedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const rows = Object.values(existingPositions || {}).sort((a, b) => {
+    const dt = new Date(a?.entryTimestamp || 0).getTime() - new Date(b?.entryTimestamp || 0).getTime();
+    return dt || String(a?.symbol || '').localeCompare(String(b?.symbol || ''));
+  });
+  for (const pos of rows) {
+    const entryPrice = Number(pos?.entryPrice || 0);
+    if (!(entryPrice > 0)) continue;
+    const target = VIRTUAL_STARTING_CAPITAL * VIRTUAL_POSITION_FRACTION;
+    if (vp.cash + 1e-12 < target) break;
+    const shares = target / entryPrice;
+    vp.cash -= target;
+    vp.positions[pos.symbol] = {
+      symbol: pos.symbol,
+      shares,
+      entryPrice,
+      costBasis: target,
+      entryTimestamp: pos.entryTimestamp,
+      entrySignalTimestamp: pos.entrySignalTimestamp,
+      lastMark: entryPrice,
+    };
+  }
+  return vp;
+}
+
+function virtualEquityAt(vp, barsBySymbol, barTs, priceKey = 'c') {
+  let equity = Number(vp?.cash || 0);
+  let exposure = 0;
+  for (const [symbol, pos] of Object.entries(vp?.positions || {})) {
+    const rows = barsBySymbol[symbol] || [];
+    const bar = rows.find((b) => ts(b) === barTs);
+    const mark = Number(bar?.[priceKey] || bar?.c || bar?.o || pos.lastMark || pos.entryPrice || 0);
+    if (mark > 0) pos.lastMark = mark;
+    const mv = Number(pos.shares || 0) * Number(pos.lastMark || 0);
+    equity += mv;
+    exposure += mv;
+  }
+  return { equity, exposure };
+}
+
+function markVirtualPortfolio(vp, barsBySymbol, barTs) {
+  const { equity, exposure } = virtualEquityAt(vp, barsBySymbol, barTs, 'c');
+  vp.equity = equity;
+  vp.peakEquity = Math.max(Number(vp.peakEquity || VIRTUAL_STARTING_CAPITAL), equity);
+  const dd = vp.peakEquity > 0 ? (1 - equity / vp.peakEquity) * 100 : 0;
+  vp.maxDrawdownPct = Math.max(Number(vp.maxDrawdownPct || 0), dd);
+  vp.grossExposure = exposure;
+  vp.grossExposurePct = equity > 0 ? exposure / equity * 100 : 0;
+  vp.cashPct = equity > 0 ? Number(vp.cash || 0) / equity * 100 : 0;
+  vp.returnPct = (equity / Number(vp.startingCapital || VIRTUAL_STARTING_CAPITAL) - 1) * 100;
+  vp.updatedAt = new Date().toISOString();
+  return vp;
+}
+
 function summarizeClosed(trades = []) {
   let wins = 0, gw = 0, gl = 0, sum = 0;
   for (const t of trades) {
@@ -143,7 +215,14 @@ function processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals = t
   const positions = { ...(current.positions || {}) };
   const closedTrades = [...(current.closedTrades || [])];
   const sideCost = ROUND_TRIP_COST_PCT / 200;
+  const virtualPortfolio = current.virtualPortfolio?.version === VIRTUAL_PORTFOLIO_VERSION
+    ? {
+        ...current.virtualPortfolio,
+        positions: { ...(current.virtualPortfolio.positions || {}) },
+      }
+    : makeVirtualPortfolio(positions);
   let entered = 0, exited = 0, armedEntries = 0, armedExits = 0;
+  let virtualEntered = 0, virtualExited = 0, virtualSkippedForCash = 0;
 
   for (const symbol of SYMBOLS) {
     const rows = barsBySymbol[symbol] || [];
@@ -158,6 +237,14 @@ function processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals = t
         const exitPrice = rawExit * (1 - sideCost);
         const pos = positions[symbol];
         const returnPct = (exitPrice / Number(pos.entryPrice) - 1) * 100;
+        const virtualPos = virtualPortfolio.positions[symbol];
+        if (virtualPos) {
+          const proceeds = Number(virtualPos.shares || 0) * exitPrice;
+          virtualPortfolio.cash = Number(virtualPortfolio.cash || 0) + proceeds;
+          virtualPortfolio.realizedPnl = Number(virtualPortfolio.realizedPnl || 0) + (proceeds - Number(virtualPos.costBasis || 0));
+          delete virtualPortfolio.positions[symbol];
+          virtualExited += 1;
+        }
         closedTrades.push({
           symbol,
           strategy: 'DAILY_55_20_LIQUID100_SHADOW',
@@ -179,12 +266,30 @@ function processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals = t
     if (pen && Number(pen.signalTimestamp) < barTs && !positions[symbol]) {
       const rawEntry = px(bar, 'o');
       if (rawEntry > 0) {
+        const entryPrice = rawEntry * (1 + sideCost);
         positions[symbol] = {
           symbol,
           entryTimestamp: bar.t,
-          entryPrice: rawEntry * (1 + sideCost),
+          entryPrice,
           entrySignalTimestamp: pen.signalTimestamp,
         };
+        const { equity: equityAtOpen } = virtualEquityAt(virtualPortfolio, barsBySymbol, barTs, 'o');
+        const target = equityAtOpen * VIRTUAL_POSITION_FRACTION;
+        if (target > 0 && Number(virtualPortfolio.cash || 0) + 1e-12 >= target) {
+          virtualPortfolio.positions[symbol] = {
+            symbol,
+            shares: target / entryPrice,
+            entryPrice,
+            costBasis: target,
+            entryTimestamp: bar.t,
+            entrySignalTimestamp: pen.signalTimestamp,
+            lastMark: entryPrice,
+          };
+          virtualPortfolio.cash = Number(virtualPortfolio.cash || 0) - target;
+          virtualEntered += 1;
+        } else {
+          virtualSkippedForCash += 1;
+        }
         delete pendingEntries[symbol];
         entered += 1;
       }
@@ -213,14 +318,17 @@ function processBarTimestamp(current, barsBySymbol, barTs, { evaluateSignals = t
     }
   }
 
+  markVirtualPortfolio(virtualPortfolio, barsBySymbol, barTs);
+
   return {
     ...current,
     pendingEntries,
     pendingExits,
     positions,
+    virtualPortfolio,
     closedTrades: closedTrades.slice(-5000),
     lastProcessedBar: markProcessed ? barTs : current.lastProcessedBar,
-    lastCycle: { barTimestamp: barTs, entered, exited, armedEntries, armedExits },
+    lastCycle: { barTimestamp: barTs, entered, exited, armedEntries, armedExits, virtualEntered, virtualExited, virtualSkippedForCash },
   };
 }
 
@@ -243,6 +351,9 @@ async function tick() {
     const latestCompleted = completedTimestamps[completedTimestamps.length - 1];
     const latestSeen = timestamps[timestamps.length - 1];
     if (!current.startedAt) current = await save({ ...current, startedAt: new Date().toISOString() });
+    if (current.virtualPortfolio?.version !== VIRTUAL_PORTFOLIO_VERSION) {
+      current = await save({ ...current, virtualPortfolio: makeVirtualPortfolio(current.positions || {}) });
+    }
 
     let todo;
     if (!current.lastProcessedBar) {
@@ -316,8 +427,25 @@ function status() {
     openPositionCount: Object.keys(s.positions || {}).length,
     pendingEntryCount: Object.keys(s.pendingEntries || {}).length,
     pendingExitCount: Object.keys(s.pendingExits || {}).length,
-    performance: summarizeClosed(s.closedTrades || []),
     ...s,
+    performance: summarizeClosed(s.closedTrades || []),
+    virtualPortfolio: s.virtualPortfolio ? {
+      version: s.virtualPortfolio.version,
+      startingCapital: Number(s.virtualPortfolio.startingCapital || 0),
+      positionFractionPct: Number((Number(s.virtualPortfolio.positionFraction || 0) * 100).toFixed(2)),
+      cash: Number(Number(s.virtualPortfolio.cash || 0).toFixed(4)),
+      equity: Number(Number(s.virtualPortfolio.equity || 0).toFixed(4)),
+      returnPct: Number(Number(s.virtualPortfolio.returnPct || 0).toFixed(3)),
+      peakEquity: Number(Number(s.virtualPortfolio.peakEquity || 0).toFixed(4)),
+      maxDrawdownPct: Number(Number(s.virtualPortfolio.maxDrawdownPct || 0).toFixed(3)),
+      realizedPnl: Number(Number(s.virtualPortfolio.realizedPnl || 0).toFixed(4)),
+      grossExposurePct: Number(Number(s.virtualPortfolio.grossExposurePct || 0).toFixed(2)),
+      cashPct: Number(Number(s.virtualPortfolio.cashPct || 0).toFixed(2)),
+      openPositionCount: Object.keys(s.virtualPortfolio.positions || {}).length,
+      positions: s.virtualPortfolio.positions || {},
+      bootstrappedAt: s.virtualPortfolio.bootstrappedAt || null,
+      updatedAt: s.virtualPortfolio.updatedAt || null,
+    } : null,
   };
 }
 
