@@ -436,6 +436,137 @@ const DATA_BASE_URL =
     .ALPACA_DATA_BASE_URL ||
   'https://data.alpaca.markets';
 
+const DATA_REQUEST_GAP_MS =
+  Math.max(
+    100,
+    Number(
+      process.env
+        .ALPACA_DATA_REQUEST_GAP_MS ||
+      350
+    ) || 350
+  );
+
+const DATA_MAX_RETRIES =
+  Math.max(
+    0,
+    Math.min(
+      6,
+      Number(
+        process.env
+          .ALPACA_DATA_MAX_RETRIES ||
+        4
+      ) || 4
+    )
+  );
+
+let dataRequestSlotTail =
+  Promise.resolve();
+
+let nextDataRequestAt =
+  0;
+
+async function waitForDataRequestSlot() {
+  let release;
+
+  const previous =
+    dataRequestSlotTail;
+
+  dataRequestSlotTail =
+    new Promise(
+      (resolve) => {
+        release = resolve;
+      }
+    );
+
+  await previous;
+
+  const waitMs =
+    Math.max(
+      0,
+      nextDataRequestAt -
+      Date.now()
+    );
+
+  if (waitMs > 0) {
+    await new Promise(
+      (resolve) =>
+        setTimeout(
+          resolve,
+          waitMs
+        )
+    );
+  }
+
+  nextDataRequestAt =
+    Date.now() +
+    DATA_REQUEST_GAP_MS;
+
+  release();
+}
+
+function retryDelayMs(
+  res,
+  attempt
+) {
+  const retryAfter =
+    Number(
+      res.headers.get(
+        'retry-after'
+      )
+    );
+
+  if (
+    Number.isFinite(
+      retryAfter
+    ) &&
+    retryAfter > 0
+  ) {
+    return Math.min(
+      60_000,
+      retryAfter * 1000
+    );
+  }
+
+  const reset =
+    Number(
+      res.headers.get(
+        'x-ratelimit-reset'
+      )
+    );
+
+  if (
+    Number.isFinite(
+      reset
+    ) &&
+    reset > 0
+  ) {
+    const resetMs =
+      reset > 1e12
+        ? reset
+        : reset * 1000;
+
+    const untilReset =
+      resetMs -
+      Date.now() +
+      250;
+
+    if (
+      untilReset > 0
+    ) {
+      return Math.min(
+        60_000,
+        untilReset
+      );
+    }
+  }
+
+  return Math.min(
+    30_000,
+    1000 *
+      (2 ** attempt)
+  );
+}
+
 async function alpacaDataRequest(
   mode,
   path
@@ -451,37 +582,95 @@ async function alpacaDataRequest(
     );
   }
 
-  const res =
-    await fetch(
-      `${DATA_BASE_URL}${path}`,
-      {
-        headers: {
-          'APCA-API-KEY-ID':
-            creds.keyId,
+  let lastStatus =
+    null;
 
-          'APCA-API-SECRET-KEY':
-            creds.secretKey,
-        },
-      }
-    );
+  let lastMessage =
+    '';
 
-  const data =
-    await res
-      .json()
-      .catch(
-        () => ({})
+  for (
+    let attempt = 0;
+    attempt <=
+      DATA_MAX_RETRIES;
+    attempt += 1
+  ) {
+    await waitForDataRequestSlot();
+
+    const res =
+      await fetch(
+        `${DATA_BASE_URL}${path}`,
+        {
+          headers: {
+            'APCA-API-KEY-ID':
+              creds.keyId,
+
+            'APCA-API-SECRET-KEY':
+              creds.secretKey,
+          },
+        }
       );
 
-  if (!res.ok) {
-    throw new Error(
-      `Alpaca market data failed (${res.status}): ${
-        data.message ||
-        res.statusText
-      }`
+    const data =
+      await res
+        .json()
+        .catch(
+          () => ({})
+        );
+
+    if (res.ok) {
+      return data;
+    }
+
+    lastStatus =
+      res.status;
+
+    lastMessage =
+      data.message ||
+      res.statusText ||
+      '';
+
+    const retryable =
+      res.status ===
+        429 ||
+      [
+        500,
+        502,
+        503,
+        504,
+      ].includes(
+        res.status
+      );
+
+    if (
+      !retryable ||
+      attempt >=
+        DATA_MAX_RETRIES
+    ) {
+      break;
+    }
+
+    const delayMs =
+      retryDelayMs(
+        res,
+        attempt
+      );
+
+    console.warn(
+      `[alpaca-data] ${res.status} on ${path.split('?')[0]}; retry ${attempt + 1}/${DATA_MAX_RETRIES} in ${delayMs}ms.`
+    );
+
+    await new Promise(
+      (resolve) =>
+        setTimeout(
+          resolve,
+          delayMs
+        )
     );
   }
 
-  return data;
+  throw new Error(
+    `Alpaca market data failed (${lastStatus}): ${lastMessage}`
+  );
 }
 
 const CASH_LIKE_CRYPTO_BASES =
