@@ -928,6 +928,7 @@ export async function getStockBars(
     end,
     limit = 10000,
     feed = 'iex',
+    adjustment = null,
     sort = 'asc',
     maxPages = 5,
   } = {}
@@ -995,6 +996,15 @@ export async function getStockBars(
         feed,
         sort,
       });
+
+    if (adjustment) {
+      query.set(
+        'adjustment',
+        String(
+          adjustment
+        )
+      );
+    }
 
     const startIso =
       isoOrNull(
