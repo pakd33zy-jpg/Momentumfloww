@@ -1,12 +1,10 @@
 import express from 'express';
-import fetch from 'node-fetch';
-import { getCredentials } from './alpacaClient.js';
+import { getStockBars } from './alpacaClient.js';
 import { store } from './store.js';
 import { persistConfig } from './persistentCredentialStore.js';
 
 const router = express.Router();
 const STORE_KEY = 'breakout5520ShadowState';
-const DATA_BASE = 'https://data.alpaca.markets';
 const SYMBOLS = [
   'SPY','QQQ','IWM','DIA','AAPL','MSFT','NVDA','AMZN','META','TSLA',
   'AMD','GOOGL','NFLX','AVGO','INTC','MU','ORCL','CRM','ADBE','PLTR',
@@ -60,23 +58,19 @@ async function save(patch) {
   return next;
 }
 
-function headers() {
-  const c = getCredentials('paper');
-  if (!c) throw new Error('No Alpaca paper credentials configured');
-  return { 'APCA-API-KEY-ID': c.keyId, 'APCA-API-SECRET-KEY': c.secretKey };
-}
-
 async function bars(symbol) {
   const end = new Date();
   const start = new Date(end.getTime() - 220 * 86400000);
-  const qs = new URLSearchParams({
-    timeframe: '1Day', start: start.toISOString(), end: end.toISOString(),
-    feed: 'iex', adjustment: 'all', sort: 'asc', limit: '1000',
+  const result = await getStockBars('paper', [symbol], {
+    timeframe: '1Day',
+    start,
+    end,
+    limit: 1000,
+    feed: 'iex',
+    sort: 'asc',
+    maxPages: 1,
   });
-  const r = await fetch(`${DATA_BASE}/v2/stocks/${encodeURIComponent(symbol)}/bars?${qs}`, { headers: headers() });
-  const p = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(p?.message || `Bars failed ${symbol} (${r.status})`);
-  return Array.isArray(p?.bars) ? p.bars : [];
+  return Array.isArray(result?.[symbol]) ? result[symbol] : [];
 }
 
 async function mapLimit(items, limit, worker) {
