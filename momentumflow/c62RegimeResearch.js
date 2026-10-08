@@ -299,63 +299,68 @@ const WINDOWS = {
   },
 };
 
+export async function runC62RegimeWindow(windowId = 'recent') {
+  const id = String(windowId || 'recent').toLowerCase();
+  const cfg = WINDOWS[id];
+  if (!cfg) throw new Error('window must be older or recent');
+
+  const start = new Date(cfg.start);
+  const end = new Date(cfg.end);
+  const warmup15m = new Date(start.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const warmupDaily = new Date(start.getTime() - 220 * 24 * 60 * 60 * 1000);
+
+  const symbols = [BTC, ...TARGETS];
+  const parts = await Promise.all(
+    symbols.map(async (symbol) => {
+      const data = await getCryptoBars('paper', [symbol], {
+        timeframe: '15Min',
+        start: warmup15m,
+        end,
+        limit: 10000,
+        sort: 'asc',
+        maxPages: 6,
+      });
+      return [symbol, data[symbol] || data[symbol.replace('/', '')] || []];
+    }),
+  );
+
+  const dailyData = await getCryptoBars('paper', [BTC], {
+    timeframe: '1Day',
+    start: warmupDaily,
+    end,
+    limit: 10000,
+    sort: 'asc',
+    maxPages: 2,
+  });
+
+  const barsBySymbol = Object.fromEntries(parts);
+  const daily = dailyData[BTC] || dailyData[BTC.replace('/', '')] || [];
+
+  const baseline = runWindow({ start, end, barsBySymbol, daily, applyRegime: false });
+  const v26Regime = runWindow({ start, end, barsBySymbol, daily, applyRegime: true });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    researchOnly: true,
+    placesOrders: false,
+    strategy: 'C62_FROZEN_ENTRY_EXIT',
+    window: id,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    ruleUnderTest: 'BTC prior-completed-day close > SMA150 AND 63-day momentum > 0',
+    execution: 'Closed 15m C62 signal; next 15m open entry; 1% modeled round-trip cost; same-bar stop priority; 24h max hold.',
+    dataCounts: Object.fromEntries(Object.entries(barsBySymbol).map(([symbol, rows]) => [symbol, rows.length])),
+    dailyBtcBars: daily.length,
+    baseline,
+    v26Regime,
+  };
+}
+
 router.get('/backtest', async (req, res) => {
   try {
-    const windowId = String(req.query.window || 'recent').toLowerCase();
-    const cfg = WINDOWS[windowId];
-    if (!cfg) return res.status(400).json({ error: 'window must be older or recent' });
-
-    const start = new Date(cfg.start);
-    const end = new Date(cfg.end);
-    const warmup15m = new Date(start.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const warmupDaily = new Date(start.getTime() - 220 * 24 * 60 * 60 * 1000);
-
-    const symbols = [BTC, ...TARGETS];
-    const parts = await Promise.all(
-      symbols.map(async (symbol) => {
-        const data = await getCryptoBars('paper', [symbol], {
-          timeframe: '15Min',
-          start: warmup15m,
-          end,
-          limit: 10000,
-          sort: 'asc',
-          maxPages: 6,
-        });
-        return [symbol, data[symbol] || data[symbol.replace('/', '')] || []];
-      }),
-    );
-
-    const dailyData = await getCryptoBars('paper', [BTC], {
-      timeframe: '1Day',
-      start: warmupDaily,
-      end,
-      limit: 10000,
-      sort: 'asc',
-      maxPages: 2,
-    });
-
-    const barsBySymbol = Object.fromEntries(parts);
-    const daily = dailyData[BTC] || dailyData[BTC.replace('/', '')] || [];
-
-    const baseline = runWindow({ start, end, barsBySymbol, daily, applyRegime: false });
-    const v26Regime = runWindow({ start, end, barsBySymbol, daily, applyRegime: true });
-
+    const result = await runC62RegimeWindow(req.query.window || 'recent');
     res.set('Cache-Control', 'no-store');
-    return res.json({
-      generatedAt: new Date().toISOString(),
-      researchOnly: true,
-      placesOrders: false,
-      strategy: 'C62_FROZEN_ENTRY_EXIT',
-      window: windowId,
-      start: start.toISOString(),
-      end: end.toISOString(),
-      ruleUnderTest: 'BTC prior-completed-day close > SMA150 AND 63-day momentum > 0',
-      execution: 'Closed 15m C62 signal; next 15m open entry; 1% modeled round-trip cost; same-bar stop priority; 24h max hold.',
-      dataCounts: Object.fromEntries(Object.entries(barsBySymbol).map(([symbol, rows]) => [symbol, rows.length])),
-      dailyBtcBars: daily.length,
-      baseline,
-      v26Regime,
-    });
+    return res.json(result);
   } catch (error) {
     console.error('[c62-regime-research]', error);
     return res.status(500).json({ error: error.message });
