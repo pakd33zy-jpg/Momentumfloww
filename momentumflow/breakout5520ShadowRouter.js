@@ -160,6 +160,11 @@ function makeVirtualPortfolio(existingPositions = {}) {
       lastMark: entryPrice,
     };
   }
+  const exposure = Object.values(vp.positions).reduce((sum, pos) => sum + Number(pos.costBasis || 0), 0);
+  vp.grossExposure = exposure;
+  vp.grossExposurePct = VIRTUAL_STARTING_CAPITAL > 0 ? exposure / VIRTUAL_STARTING_CAPITAL * 100 : 0;
+  vp.cashPct = VIRTUAL_STARTING_CAPITAL > 0 ? vp.cash / VIRTUAL_STARTING_CAPITAL * 100 : 0;
+  vp.returnPct = 0;
   return vp;
 }
 
@@ -352,7 +357,9 @@ async function tick() {
     const latestSeen = timestamps[timestamps.length - 1];
     if (!current.startedAt) current = await save({ ...current, startedAt: new Date().toISOString() });
     if (current.virtualPortfolio?.version !== VIRTUAL_PORTFOLIO_VERSION) {
-      current = await save({ ...current, virtualPortfolio: makeVirtualPortfolio(current.positions || {}) });
+      const virtualPortfolio = makeVirtualPortfolio(current.positions || {});
+      markVirtualPortfolio(virtualPortfolio, barsBySymbol, latestSeen || latestCompleted);
+      current = await save({ ...current, virtualPortfolio });
     }
 
     let todo;
