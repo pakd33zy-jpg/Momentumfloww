@@ -34,11 +34,12 @@ function px(bar, key) {
   return n(bar?.[key] ?? bar?.[aliases[key]]);
 }
 
-async function cryptoBarsWithRetry(symbol, options, attempts = 6) {
+async function cryptoBarsWithRetry(symbols, options, attempts = 6) {
+  const wanted = Array.isArray(symbols) ? symbols : [symbols];
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await getCryptoBars('paper', [symbol], options);
+      return await getCryptoBars('paper', wanted, options);
     } catch (error) {
       lastError = error;
       const message = String(error?.message || error);
@@ -344,19 +345,42 @@ function runVariant({ start, end, barsBySymbol, daily, variant }) {
 async function fetchWindow(start, end) {
   const warmup15m = new Date(start.getTime() - 3 * DAY_MS);
   const warmupDaily = new Date(start.getTime() - 260 * DAY_MS);
-  const parts = [];
+  const symbols = [BTC, ...TARGETS];
+  const collected = Object.fromEntries(symbols.map((symbol) => [symbol, []]));
 
-  for (const symbol of [BTC, ...TARGETS]) {
-    const data = await cryptoBarsWithRetry(symbol, {
+  let cursor = new Date(warmup15m);
+  while (cursor < end) {
+    const nextMonth = new Date(Date.UTC(
+      cursor.getUTCFullYear(),
+      cursor.getUTCMonth() + 1,
+      1,
+      0, 0, 0, 0,
+    ));
+    const chunkEnd = nextMonth < end ? nextMonth : end;
+
+    const data = await cryptoBarsWithRetry(symbols, {
       timeframe: '15Min',
-      start: warmup15m,
-      end,
+      start: cursor,
+      end: chunkEnd,
       limit: 10000,
       sort: 'asc',
-      maxPages: 6,
+      maxPages: 4,
     });
-    parts.push([symbol, data[symbol] || data[symbol.replace('/', '')] || []]);
-    await sleep(1500);
+
+    for (const symbol of symbols) {
+      const rows = data[symbol] || data[symbol.replace('/', '')] || [];
+      collected[symbol].push(...rows);
+    }
+
+    cursor = new Date(chunkEnd);
+    await sleep(1000);
+  }
+
+  for (const symbol of symbols) {
+    const deduped = new Map(
+      collected[symbol].map((bar) => [t(bar), bar]),
+    );
+    collected[symbol] = [...deduped.values()].sort((a, b) => t(a) - t(b));
   }
 
   const dailyData = await cryptoBarsWithRetry(BTC, {
@@ -369,7 +393,7 @@ async function fetchWindow(start, end) {
   });
 
   return {
-    barsBySymbol: Object.fromEntries(parts),
+    barsBySymbol: collected,
     daily: dailyData[BTC] || dailyData[BTC.replace('/', '')] || [],
   };
 }
