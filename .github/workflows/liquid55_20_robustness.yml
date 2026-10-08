@@ -1,4 +1,4 @@
-name: C62 Shadow Status
+name: 55/20 Recombination Snapshot
 
 on:
   push:
@@ -9,10 +9,17 @@ on:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Query C62 shadow
+      - name: Compare frozen allocation rules
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 120             "https://momentumfloww.onrender.com/api/c62-shadow/status"             | jq -c '{running,mode,placesOrders,strategy,lastTickAt,lastDecision,lastError,rules,performance,openPositions:(.positions|keys),closedTrades:(.closedTrades|length)}'
+          for universe in liquid100 validation50; do
+            echo "=== $universe ==="
+            curl --fail --silent --show-error --retry 3 --retry-delay 5 --max-time 300               "https://momentumfloww.onrender.com/api/research/breakout-liquid/daily?days=1825&universe=$universe"               | jq -c '{
+                  universe,
+                  baseline:.capitalAllocationStudy.selectionStudyAt2_5Pct.variants[0],
+                  momentum63:.capitalAllocationStudy.selectionStudyAt2_5Pct.variants[1]
+                }'
+          done
