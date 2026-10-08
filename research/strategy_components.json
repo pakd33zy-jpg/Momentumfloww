@@ -1,0 +1,257 @@
+{
+  "updatedAt": "2026-10-07",
+  "purpose": "Machine-readable component registry for cumulative strategy research. Failed whole strategies remain evidence; components are reused only with explicit hypotheses and validation.",
+  "executionInvariants": [
+    "completed-candles-only",
+    "no-lookahead",
+    "next-eligible-bar-or-open execution unless strategy explicitly differs",
+    "entry-bar stops evaluated",
+    "adverse gaps modeled at opening price",
+    "same-bar stop wins stop/target ambiguity",
+    "test boundaries applied before indicator calculation",
+    "shared-capital idle cash preserved",
+    "actual entry/exit notional costs included",
+    "deterministic same-time allocation",
+    "raw symbol compounding is not portfolio return"
+  ],
+  "components": [
+    {
+      "id": "breakout_55",
+      "type": "entry",
+      "markets": [
+        "equity",
+        "crypto"
+      ],
+      "evidence": "positive-context-dependent",
+      "notes": "Broad positive equity evidence; positive but concentrated crypto evidence."
+    },
+    {
+      "id": "exit_low_20",
+      "type": "exit",
+      "markets": [
+        "equity",
+        "crypto"
+      ],
+      "evidence": "positive",
+      "notes": "Current 55/20 equity baseline; also useful trend-trailing concept in crypto."
+    },
+    {
+      "id": "momentum_63_rank",
+      "type": "ranking",
+      "markets": [
+        "equity"
+      ],
+      "evidence": "positive-with-concentration-risk",
+      "notes": "V26; use as ranking before considering as hard gate."
+    },
+    {
+      "id": "sma150_trend_context",
+      "type": "regime",
+      "markets": [
+        "equity"
+      ],
+      "evidence": "positive-context",
+      "notes": "V26 rotation and pullback; can over-filter if stacked."
+    },
+    {
+      "id": "rsi2_pullback",
+      "type": "entry",
+      "markets": [
+        "equity"
+      ],
+      "evidence": "positive",
+      "notes": "V26 tactical sleeve: RSI2<=10 inside SMA trend."
+    },
+    {
+      "id": "atr_stop",
+      "type": "risk",
+      "markets": [
+        "equity",
+        "crypto"
+      ],
+      "evidence": "repeatedly-useful",
+      "notes": "Risk normalization; parameter sensitivity must be tested."
+    },
+    {
+      "id": "fixed_r_target",
+      "type": "exit",
+      "markets": [
+        "equity",
+        "crypto"
+      ],
+      "evidence": "mixed-positive",
+      "notes": "Good in tactical sleeves; can truncate trends."
+    },
+    {
+      "id": "btc_lead_alt_lag",
+      "type": "entry",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "strong-family",
+      "notes": "C60/C62 core; BTC impulse leads ETH/SOL/LINK partial reaction."
+    },
+    {
+      "id": "relative_strength_vs_btc",
+      "type": "ranking-context",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "useful",
+      "notes": "Present in C60/C62 and V51 family."
+    },
+    {
+      "id": "structure_64",
+      "type": "regime-confirmation",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "positive-in-c62",
+      "notes": "BTC up structure; target not-down structure."
+    },
+    {
+      "id": "bullish_closed_breakout",
+      "type": "timing",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "positive-in-c62",
+      "notes": "Bullish target candle closes above prior high."
+    },
+    {
+      "id": "liquidity_rank",
+      "type": "tradability",
+      "markets": [
+        "crypto",
+        "equity"
+      ],
+      "evidence": "not-proven-alpha",
+      "notes": "Useful capacity/execution control; prior predictive result fragile."
+    },
+    {
+      "id": "volume_participation",
+      "type": "ranking-context",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "unproven-alone",
+      "notes": "V51 feature; avoid hard-gate stacking without evidence."
+    },
+    {
+      "id": "spread_friction_penalty",
+      "type": "execution-ranking",
+      "markets": [
+        "crypto",
+        "equity"
+      ],
+      "evidence": "mechanically-sound",
+      "notes": "Penalize expensive opportunities."
+    },
+    {
+      "id": "adaptive_momentum_reversion_selector",
+      "type": "meta-strategy",
+      "markets": [
+        "equity"
+      ],
+      "evidence": "research-candidate",
+      "notes": "V50 idea: choose expert from recent completed observations; risk of recency overfit."
+    },
+    {
+      "id": "cash_state",
+      "type": "risk",
+      "markets": [
+        "equity",
+        "crypto"
+      ],
+      "evidence": "mechanically-useful",
+      "notes": "No-trade is valid when no edge/capacity."
+    },
+    {
+      "id": "staged_entry",
+      "type": "sizing",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "c62-layer",
+      "notes": "50% initial, add remaining at +1R; must separate entry edge from sizing effect."
+    },
+    {
+      "id": "multi_horizon_persistence",
+      "type": "ranking-context",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "research-candidate",
+      "notes": "V51: 1h/6h/24h directional persistence."
+    },
+    {
+      "id": "acceleration",
+      "type": "ranking-context",
+      "markets": [
+        "crypto"
+      ],
+      "evidence": "research-candidate",
+      "notes": "V51: 1h return versus 6h hourly pace."
+    },
+    {
+      "id": "later_candle_confirmation",
+      "type": "execution-integrity",
+      "markets": [
+        "equity"
+      ],
+      "evidence": "important",
+      "notes": "Prevents same-candle confirmation defect; do not confuse with predictive alpha."
+    }
+  ],
+  "baselines": {
+    "equities": {
+      "id": "daily_55_20_liquid100",
+      "frozen": true
+    },
+    "crypto": {
+      "id": "c62_lead_lag_shadow",
+      "frozen": true
+    }
+  },
+  "rejectedUnchangedFamilies": [
+    "opening-gap after corrected session indexing",
+    "intraday gap/open-drive/fade forms that failed generalization",
+    "dedicated short-side families without robust positive candidate",
+    "cost-fragile candidates",
+    "daily EMA200/EMA20 crypto pullback and anti-chase branches",
+    "breakout-strength gate 0.5-1.5 ATR on new eligible crypto symbols",
+    "over-filtered equity confirmation stack as a deployable whole"
+  ],
+  "activeHypotheses": [
+    {
+      "id": "H1",
+      "base": "C62",
+      "change": "Use V51 features only to rank simultaneous C62 qualifiers, not as entry gates."
+    },
+    {
+      "id": "H2",
+      "base": "C62",
+      "change": "Use liquidity only as execution eligibility, not predictive alpha."
+    },
+    {
+      "id": "H3",
+      "base": "C62",
+      "change": "Hold entry fixed and compare exit modules."
+    },
+    {
+      "id": "H4",
+      "base": "55/20",
+      "change": "Hold signals/sizing fixed; use 63-session momentum only to rank simultaneous cash-contention entries."
+    },
+    {
+      "id": "H5",
+      "base": "55/20",
+      "change": "Hold signals fixed; compare correlation-aware allocation."
+    },
+    {
+      "id": "H6",
+      "base": "portfolio",
+      "change": "Run 55/20 trend and V26 RSI2 pullback as separate sleeves rather than stacking filters."
+    }
+  ]
+}
