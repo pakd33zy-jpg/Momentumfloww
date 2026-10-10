@@ -692,6 +692,51 @@ Run 55/20 trend breakout and V26 RSI(2) pullback as separate sleeves sharing por
 
 ---
 
+
+
+## 2026-10-10 C62 exit-module robustness test
+
+### Question
+Hold the recovered C60/C62 lead-lag entry fixed. Does the simpler **2.5 ATR stop + 24h time exit** improve robustness versus the current C62 staged/target/trailing exit?
+
+### Method
+- Targets: ETH/USD, SOL/USD, LINK/USD; BTC/USD remains leader.
+- Closed 15-minute bars.
+- Same recovered C62 entry conditions.
+- Causal next-bar-open entry.
+- Compared:
+  - **C62**: 2.5 ATR stop, 3.25R target, 2.5R trailing trigger / 1.5R trail, 50% starter + 50% add at +1R, 24h max hold.
+  - **ATR_TIME**: full-size entry, same 2.5 ATR stop, no target/trail, 24h max hold.
+- Tested five contiguous subperiods from 2025-10-10 through 2026-10-10.
+- Stress at 1.0% and 1.5% modeled round-trip friction.
+
+### 1.0% friction
+| Window | C62 trades | C62 return | ATR_TIME trades | ATR_TIME return |
+|---|---:|---:|---:|---:|
+| 2025-10-10 -> 2026-01-10 | 4 | -1.63% | 4 | -3.85% |
+| 2026-01-10 -> 2026-04-10 | 13 | -14.57% | 13 | -22.26% |
+| 2026-04-10 -> 2026-07-10 | 6 | +4.33% | 6 | -2.34% |
+| 2026-07-10 -> 2026-08-25 | 9 | +15.86% | 8 | +38.48% |
+| 2026-08-25 -> 2026-10-10 | 1 | -1.60% | 1 | -3.19% |
+
+Compounded across these windows:
+- **C62: approximately -0.04% over 33 trades.**
+- **ATR_TIME: approximately -2.14% over 32 trades.**
+
+### 1.5% friction
+Compounded across the same windows:
+- **C62: approximately -12.44%.**
+- **ATR_TIME: approximately -16.65%.**
+
+### Interpretation
+- The prior 180-day result that favored ATR_TIME was real for that recent slice but was **regime-specific** and was dominated by the strong 2026-07-10 -> 2026-08-25 window.
+- The simpler ATR_TIME exit is **rejected as an upgrade**. It made the bad 2026 Q1 regime worse and failed the full-year robustness test.
+- The current C62 exit was more defensive in weak periods but the current recovered C62 entry/exit combination itself was only roughly flat at 1% friction across this last-year split and materially negative at 1.5%.
+- This does **not** erase the older positive C60/C62 audit. It creates a provenance/regime conflict that must be explained: old positive audit versus current-source recent-year replay.
+- Do not promote either exit based on the recent 180-day headline.
+- Preserve the strong Q3A period and weak Q1 period as diagnostic datasets. The next task is to identify which **pre-entry measurable features** distinguish them before proposing another rule.
+
+
 ## Missing evidence queue
 
 Do not invent these. Recover source/artifacts:
