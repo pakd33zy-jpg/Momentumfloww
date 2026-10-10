@@ -797,3 +797,17 @@ Key result:
 The feature consistently reduces bad exposure and improves some positive periods, but it still does not make the older independent year profitable. This supports the idea that healthy BTC->alt lag needs pre-existing target persistence, while showing that persistence alone is insufficient.
 
 Full note: research/C62_ASSET_PERSISTENCE_GATE_2026-10-10.md
+
+
+## C62 regime test 5 — 4h target-vs-BTC relative pressure
+
+**Tested 2026-10-10; research only; active C62 unchanged.**
+
+The strict state target 4h return >= BTC 4h return appeared positive across the 2024-10 -> 2026-10 windows but retained only about 15 trades. A new independent earlier-year replay rejected it:
+- 2023-10-07 -> 2024-10-07 had complete BTC/ETH/LINK data; SOL history was incomplete and excluded from the verdict.
+- Strict relative-pressure gate: 12 ETH/LINK trades, **1 win / 11 losses, -31.56% normalized deployed-capital sum, PF 0.01**.
+- Moderate -1.0% and -0.5% relative thresholds also failed badly.
+
+**Verdict: reject as standalone discriminator.** Preserve the recent-period success as regime evidence, not alpha proof. Next step is cross-year feature stability, not another hand-picked threshold.
+
+Full note: research/C62_RELATIVE_PRESSURE_GATE_2026-10-10.md
