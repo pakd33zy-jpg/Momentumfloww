@@ -561,6 +561,33 @@ Operationally, this investigation also exposed Alpaca market-data rate-limit col
 
 Full note: research/C62_V31_BTC_REGIME_ATTEMPT_2026-10-08.md
 
+
+
+## C62 regime test 3 — exact V31 brakes on complete direct data
+
+**Tested 2026-10-10; research only; active C62 shadow unchanged.**
+
+The exact source-recovered V31 hard-cash predicates were replayed on complete direct Alpaca 15m data for the disastrous 2024-10-10 -> 2025-01-10 slice, with 354 BTC daily bars available for regime state.
+
+Data counts were complete:
+- BTC/USD: 9,210 15m bars
+- ETH/USD: 9,214
+- SOL/USD: 9,215
+- LINK/USD: 9,215
+
+Using the same normalized-deployed-capital return accounting as the V31 research runner:
+- Baseline C62: 32 trades, **-56.54%**, PF **0.10**, max DD **57.59%**.
+- trend_cash_hard: **identical** 32 trades / -56.54%.
+- fast_brake_hard: **identical** 32 trades / -56.54%.
+- two_stage_hard: **identical** 32 trades / -56.54%.
+
+Every one of the 32 raw C62 signals passed every V31 hard brake.
+
+**Verdict: reject these exact V31 daily BTC hard brakes as a C62 regime discriminator for this failure.** They do not detect the worst observed bad slice at all. This also shows the bad C62 regime can occur while BTC still looks acceptable under long-term daily trend/shock logic; therefore “bear-market filter” is not enough.
+
+Next hypothesis should use shorter-horizon persistence/impulse quality or leader/target relationship state, not another version of the same daily trend brake.
+
+
 ## Component library
 
 | Component | Evidence state | Best-known use | Main risk |
