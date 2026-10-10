@@ -778,3 +778,22 @@ Do not invent these. Recover source/artifacts:
 - Trade-level winner/loser datasets for component-attribution analysis.
 
 Every recovered item gets added here rather than replacing this ledger.
+
+
+## C62 regime test 4 — target-asset 4h persistence
+
+**Tested 2026-10-10; research only; active C62 shadow unchanged.**
+
+A causal pre-entry target-persistence feature was tested with the C62 signal/exit otherwise frozen. The exact 32-trade catastrophic slice and 9-trade strong slice were reproduced.
+
+Key result:
+- target 4h >= +1.0% reduced the catastrophic slice from 32 trades / -81.36% normalized deployed-capital sum / PF 0.10 to 12 trades / -29.19% / PF 0.16.
+- In the strong slice it retained 7/9 trades and +10.56% / PF 5.78.
+- Untouched 2026 Q1: baseline 13 trades / -8.20% / PF 0.54 -> 2 trades / -1.09% / PF 0.58.
+- Untouched 2026 Q2: baseline 6 trades / +2.07% / PF 1.37 -> 4 trades / +4.78% / PF 2.67.
+- Untouched 2025-01-10 -> 2025-10-07 remainder: baseline 28 trades / -25.19% / PF 0.50 -> 10 trades / -6.06% / PF 0.70.
+
+**Verdict: preserve as a useful component, reject as a standalone fix.**
+The feature consistently reduces bad exposure and improves some positive periods, but it still does not make the older independent year profitable. This supports the idea that healthy BTC->alt lag needs pre-existing target persistence, while showing that persistence alone is insufficient.
+
+Full note: research/C62_ASSET_PERSISTENCE_GATE_2026-10-10.md
