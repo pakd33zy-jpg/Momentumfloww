@@ -811,3 +811,25 @@ The strict state target 4h return >= BTC 4h return appeared positive across the 
 **Verdict: reject as standalone discriminator.** Preserve the recent-period success as regime evidence, not alpha proof. Next step is cross-year feature stability, not another hand-picked threshold.
 
 Full note: research/C62_RELATIVE_PRESSURE_GATE_2026-10-10.md
+
+
+## C62 regime test 6 — cross-year feature stability
+
+**Tested 2026-10-10; research only; active C62 unchanged.**
+
+An apples-to-apples ETH/LINK study across three non-overlapping years showed that several intuitive C62 pre-entry features are **nonstationary**: BTC impulse size, BTC directional efficiency, target impulse, target efficiency, and longer target momentum all flipped winner/loser association signs in the middle year.
+
+Stable directional clues did exist:
+- stronger target prior-2h momentum;
+- lower target acceleration (prior 2h stronger than current 2h);
+- better target-vs-BTC 4h relative pressure;
+- weakly stronger BTC prior-2h momentum.
+
+A no-parameter test of target prior-2h > current-2h:
+- 2023-10 -> 2024-10: -105.71% -> -50.49%, PF 0.18 -> 0.22.
+- 2024-10 -> 2025-10: -66.20% -> -23.95%, PF 0.17 -> 0.27.
+- 2025-10 -> 2026-10: +3.48% -> -2.79%, PF 1.19 -> 0.72.
+
+**Verdict: useful risk-quality clue, rejected as a hard fix.** It reduces old-regime damage but sacrifices the recent positive year. Stop parameter-mining C62 thresholds; treat C62 as a regime-dependent component and recover the original C60/C62 audit provenance or combine independent strategy sleeves instead.
+
+Full note: research/C62_CROSS_YEAR_FEATURE_STABILITY_2026-10-10.md
