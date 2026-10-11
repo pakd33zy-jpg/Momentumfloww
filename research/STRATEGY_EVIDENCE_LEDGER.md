@@ -627,6 +627,37 @@ Test whether excluding only genuinely illiquid/high-friction targets improves ne
 
 **Reason:** prior research says liquidity helps tradability but did not prove predictive edge.
 
+### H3 result — C62 entry, exit-module tournament
+
+**Fixed entry:** recovered C60/C62 BTC-lead / ETH-SOL-LINK lag setup. Only the exit/risk module changed.
+
+**Recent 2026-06-01 to 2026-10-10, 1.0% cost**
+- C62 staged/trailing: 12 trades, +20.53%, PF 5.57, DD 3.05%.
+- ATR stop + 24h time exit: 11 trades, +38.93%, PF 6.58, DD 6.06%.
+- At 1.5% cost: C62 +14.47%; ATR/time +31.68%.
+- All three target coins were profitable under ATR/time in this window.
+
+**Prior 2026-02-01 to 2026-06-01, 1.0% cost**
+- C62: 14 trades, -14.28%, PF 0.32, DD 18.29%.
+- ATR/time: 14 trades, -25.11%, PF 0.04, DD 25.95%.
+- At 1.5% cost: C62 -19.13%; ATR/time -30.28%.
+- All three target coins lost in both variants.
+
+**Prior 2025-10-01 to 2026-02-01, 1.0% cost**
+- C62: 7 trades, -3.25%, PF 0.37, DD 3.25%.
+- ATR/time: 7 trades, -5.95%, PF 0.42, DD 5.95%.
+- At 1.5% cost: C62 -5.41%; ATR/time -9.22%.
+
+**Approximate compounded across the three disjoint windows**
+- 1.0% cost: C62 about -0.04%; ATR/time about -2.15%.
+- 1.5% cost: C62 about -12.44%; ATR/time about -16.66%.
+
+**Conclusion**
+- Reject the hypothesis that ATR stop + 24h time exit should replace C62 universally.
+- Preserve ATR/time as a **regime-sensitive component** because it materially outperformed C62 in the recent continuation regime.
+- The bigger issue is entry/regime selectivity: the exact same C60/C62 entry family lost across every target coin in the Feb-Jun 2026 window, regardless of exit.
+- Next test: determine whether information already available at entry (BTC impulse magnitude, BTC volatility, persistence/acceleration, target reaction fraction, structure strength) can identify the regime where ATR/time is beneficial, without adding a hindsight gate.
+
 ### H3 — C62 entry, exit-module tournament
 Freeze the C62 entry and compare exit modules.
 
