@@ -795,6 +795,77 @@ Compounded across the same windows:
 - Preserve the strong Q3A period and weak Q1 period as diagnostic datasets. The next task is to identify which **pre-entry measurable features** distinguish them before proposing another rule.
 
 
+## New recombination candidate — C62 entry + adaptive exit/cash selector
+
+This candidate exists because two older puzzle pieces clicked together:
+
+- C60/C62 supplies the **crypto lead-lag entry**.
+- V50 supplies the **recent completed-observation expert selector + CASH state**.
+- Candidate A supplies the **ATR stop + 24h time exit** as a second exit expert.
+
+### Why it exists
+
+The fixed-entry exit tournament showed clear regime dependence:
+- Recent 2026-06-01..2026-10-10: ATR/time materially beat C62.
+- Earlier 2026-02-01..2026-06-01 and 2025-10-01..2026-02-01: ATR/time was worse than C62.
+- Therefore neither exit should replace the other globally.
+
+### Causal selector design
+
+For each new C60/C62 signal:
+1. Observe hypothetical C62-exit and ATR/time-exit outcomes from **completed prior signals only**.
+2. Use the last N completed observations.
+3. If neither expert has positive recent edge, choose CASH.
+4. Otherwise choose the expert with the better recent average.
+5. No current/future trade outcome is used in the decision.
+
+### Memory-length evidence on independent 90-day slices
+
+**Recent winning slice: 2026-07-10..2026-10-10**
+- Raw C62: 20 signals, +18.38%, 60% WR.
+- Raw ATR/time: 20 signals, +44.58%, 65% WR.
+- Review 2, minimum edge 0: 7 trades, +43.40%, 85.7% WR, DD 2.84%.
+- Review 3: 14 trades, +30.98%, 64.3% WR, DD 11.26%.
+- Review 4: 14 trades, +30.98%, 64.3% WR, DD 11.26%.
+- Review 5: -10.12%.
+- Review 6: -8.66%.
+- Lesson: 5-6 observations lagged the regime and failed. 2-4 adapted faster.
+
+**Bad slice: 2026-03-01..2026-06-01**
+- Raw C62: 13 signals, -15.75%.
+- Raw ATR/time: 13 signals, -25.16%.
+- Review 2: only 2 trades, -2.55%.
+- Review 3: only 1 trade, -1.43%.
+- Review 4: 0 trades, 0.00%.
+- Review 5: 0 trades, 0.00%.
+- Review 6: 0 trades, 0.00%.
+- Lesson: the CASH state correctly suppressed a regime where both exits had negative recent edge.
+
+**Earlier slice: 2025-11-01..2026-02-01**
+- Raw C62: 10 signals, -5.26%.
+- Raw ATR/time: 10 signals, -8.69%.
+- Review 2: 4 trades, -3.38%.
+- Review 3: 2 trades, -3.70%.
+- Review 4: 2 trades, -3.70%.
+- A review-4 minimum recent expert edge of 1.0% kept the selector fully in CASH on this slice; thresholds from 0 through 0.5% still took the same two losing ATR trades.
+- The 1.0% threshold has **not yet been verified on the recent winning slice** because the market-data endpoint rate-limited the final check.
+
+### Current verdict
+
+- **Do not promote yet.**
+- Review 4 is the strongest balance so far: it preserved strong recent participation while avoiding the entire Mar-Jun bad slice, but still lost -3.70% in the earlier slice.
+- A 1.0% minimum expert-edge threshold is a promising refinement because it removed those earlier losses; it still needs independent verification that it does not suppress the recent winner.
+- Preserve review 2 as a separate high-reactivity variant: it produced the strongest recent result and shallowest recent DD, but leaked -2.55% in the bad slice.
+- Review 5/6 are rejected as too slow for this regime-switching problem.
+- This is exactly the kind of cross-version recombination the evidence ledger is intended to preserve.
+
+### Additional rejected/reduced hypotheses from this round
+
+- **ATR/time universally replacing C62:** rejected; strong recent outperformance but worse earlier windows.
+- **BTC acceleration + low volatility as a universal exit selector:** rejected; recent relationship did not generalize cleanly to Feb-Jun.
+- **BTC price above 4-day/7-day moving average:** rejected as a gate; it worsened the bad window and removed very few recent signals.
+- **BTC 4-day/7-day moving-average slope:** retained only as a weak damage-control feature. Positive slope reduced bad-window losses but did not create positive expectancy, while also trimming recent profit.
+
 ## Missing evidence queue
 
 Do not invent these. Recover source/artifacts:
