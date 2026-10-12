@@ -66,6 +66,9 @@ const DEFAULTS = {
   equityDetailLimit: 80,
   maxOpenPositions: 8,
   maxEquityPositions: 8,
+  // Existing positions continue to receive exit management, but no replacement
+  // positions may open until the protective-exit study is validated.
+  pauseNewEntries: true,
   stockFeed: 'iex',
   entryWaitMs: 15000,
   exitWaitMs: 15000,
@@ -432,6 +435,10 @@ function equityBudget(account, best) {
 
 async function enter(mode) {
   syncOpenTradeIds();
+  if (cfg().pauseNewEntries !== false) {
+    state.lastDecision = `${mode.toUpperCase()} new entries paused; managing existing positions only`;
+    return false;
+  }
   if (state.openTradeIds.length >= maxOpenPositions()) {
     state.lastDecision = `${mode.toUpperCase()} managing ${state.openTradeIds.length}/${maxOpenPositions()} V35 positions`;
     return false;
