@@ -575,9 +575,25 @@ async function enter(mode) {
 }
 
 async function closeTrade(mode, trade, price, reason) {
-  const qty = Math.abs(Number(trade.filled_qty ?? trade.qty ?? 0));
+  let qty = Math.abs(Number(trade.filled_qty ?? trade.qty ?? 0));
   if (!(qty > 0)) throw new Error(`No close quantity for ${trade.market}.`);
   const side = trade.direction === 'SHORT' ? 'buy' : 'sell';
+
+  // Alpaca crypto fills can leave a slightly smaller sellable balance than the
+  // quantity recorded at entry. Always clamp a crypto exit to what the broker
+  // actually holds so a tiny balance difference cannot permanently block the
+  // close and prevent the session from recording the completed trade.
+  if (trade.asset_class === 'crypto' && side === 'sell') {
+    const brokerPositions = await getPositions(mode);
+    const brokerPosition = brokerPositions.find(
+      (position) =>
+        normalizeSymbol(position.symbol) === normalizeSymbol(trade.market),
+    );
+    const availableQty = Math.abs(
+      Number(brokerPosition?.qty_available ?? brokerPosition?.qty ?? 0),
+    );
+    if (availableQty > 0 && availableQty < qty) qty = availableQty;
+  }
   const order = await placeOrder({
     mode,
     symbol: trade.market,
