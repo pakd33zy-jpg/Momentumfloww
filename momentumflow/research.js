@@ -219,7 +219,7 @@ function btDateKey(bar) {
   }).format(t);
 }
 
-function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose = false, emergencyStopPct = 0, roundTripCostPct = 0.04 } = {}) {
+function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose = false, emergencyStopPct = 0, maxHoldBars = 0, roundTripCostPct = 0.04 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < lookback + 10) return [];
   const s = btSeries(rows);
@@ -239,6 +239,13 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
         pos = null;
         continue;
       }
+    }
+
+    if (pos && maxHoldBars > 0 && i - pos.entryIndex >= maxHoldBars) {
+      const exitPrice = s.opens[i] * (1 - sideCost);
+      trades.push({ netReturn: exitPrice / pos.entry - 1, reason: 'MAX_HOLD' });
+      pos = null;
+      continue;
     }
 
     if (pos && flatAtClose && btDateKey(rows[i]) !== btDateKey(rows[i + 1])) {
@@ -433,6 +440,69 @@ router.get('/equity-monday-backtest', async (req, res) => {
       symbols,
       roundTripCostPct: 0.04,
       note: 'Research only. Uses next-bar entries and includes modeled round-trip cost.',
+      results,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/crypto-protective-exit-backtest', async (req, res) => {
+  try {
+    const days = Math.max(90, Math.min(730, Math.floor(Number(req.query.days || 365))));
+    const symbols = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'LINK/USD', 'AVAX/USD', 'LTC/USD', 'BCH/USD', 'DOGE/USD'];
+    const end = new Date();
+    const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+    const variants = [
+      { id: 'MACD_ONLY', q: 0.50 },
+      { id: 'STOP_3', q: 0.50, emergencyStopPct: 3 },
+      { id: 'STOP_5', q: 0.50, emergencyStopPct: 5 },
+      { id: 'STOP_8', q: 0.50, emergencyStopPct: 8 },
+      { id: 'MAX_7D', q: 0.50, maxHoldBars: 168 },
+      { id: 'STOP_3_MAX_7D', q: 0.50, emergencyStopPct: 3, maxHoldBars: 168 },
+      { id: 'STOP_5_MAX_7D', q: 0.50, emergencyStopPct: 5, maxHoldBars: 168 },
+      { id: 'STOP_8_MAX_7D', q: 0.50, emergencyStopPct: 8, maxHoldBars: 168 },
+    ];
+
+    const barsBySymbol = {};
+    for (const symbol of symbols) {
+      const result = await getCryptoBars('paper', [symbol], {
+        timeframe: '1Hour', start, end, limit: 10000, sort: 'asc', maxPages: 5,
+      });
+      barsBySymbol[symbol] = result[symbol] || result[symbol.replace('/', '')] || [];
+    }
+
+    const results = variants.map((variant) => {
+      const perSymbol = {};
+      for (const symbol of symbols) {
+        const bars = barsBySymbol[symbol] || [];
+        const trades = backtestValleyCross(bars, {
+          ...variant,
+          lookback: 200,
+          roundTripCostPct: 0.10,
+        });
+        perSymbol[symbol] = { bars: bars.length, summary: btSummary(trades), trades };
+      }
+      return {
+        id: variant.id,
+        aggregate: aggregateSymbolSummaries(perSymbol),
+        bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, { bars: row.bars, ...row.summary }])),
+      };
+    });
+
+    results.sort((a, b) => {
+      if (b.aggregate.profitFactor !== a.aggregate.profitFactor) return b.aggregate.profitFactor - a.aggregate.profitFactor;
+      return b.aggregate.equalWeightSleevesReturnPct - a.aggregate.equalWeightSleevesReturnPct;
+    });
+
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      days,
+      symbols,
+      timeframe: '1Hour',
+      roundTripCostPct: 0.10,
+      note: 'Research only. Closed-candle signals, next-bar entries/exits, modeled cost, gap-aware emergency stops.',
       results,
     });
   } catch (error) {
