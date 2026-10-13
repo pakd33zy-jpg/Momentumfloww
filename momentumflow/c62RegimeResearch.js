@@ -492,21 +492,20 @@ async function fetchWindow(start, end) {
   while (cursor < end) {
     const chunkEnd = new Date(Math.min(end.getTime(), cursor.getTime() + chunkMs));
 
-    // Four symbols x 14 days x 96 fifteen-minute bars/day is ~5,376 rows,
-    // safely below Alpaca's 10,000-row page limit. Fetch together so one
-    // symbol cannot consume pagination pages needed by the others.
-    const data = await cryptoBarsWithRetry(symbols, {
-      timeframe: '15Min',
-      start: cursor,
-      end: chunkEnd,
-      limit: 10000,
-      sort: 'asc',
-      maxPages: 2,
-    });
-
+    // Alpaca paginates multi-symbol crypto results in symbol order, so BTC can
+    // silently starve later symbols even when the combined row estimate is low.
     for (const symbol of symbols) {
+      const data = await cryptoBarsWithRetry(symbol, {
+        timeframe: '15Min',
+        start: cursor,
+        end: chunkEnd,
+        limit: 10000,
+        sort: 'asc',
+        maxPages: 2,
+      });
       const rows = data[symbol] || data[symbol.replace('/', '')] || [];
       collected[symbol].push(...rows);
+      await sleep(150);
     }
 
     cursor = new Date(chunkEnd);
