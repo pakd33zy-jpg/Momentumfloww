@@ -1,5 +1,5 @@
 import express from 'express';
-import { getCryptoBars } from './alpacaClient.js';
+import { getCryptoBars, getTradableAssets } from './alpacaClient.js';
 
 const router = express.Router();
 
@@ -14,7 +14,7 @@ const WINDOWS = {
   recent: { start: '2025-10-08T00:00:00.000Z', end: '2026-10-08T00:00:00.000Z' },
 };
 
-const VARIANTS = ['baseline', 'trend_cash_hard', 'fast_brake_hard', 'two_stage_hard'];
+const VARIANTS = ['baseline', 'trend_cash_hard', 'fast_brake_hard', 'two_stage_hard', 'v4_ready_only', 'v4_cash_only'];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -149,13 +149,82 @@ function v31StateAt(signalTime, daily) {
   };
 }
 
-function variantAllows(variant, state) {
+function completedDailyEnd(rows, signalTime) {
+  let end = -1;
+  for (let i = 0; i < rows.length; i += 1) {
+    if (t(rows[i]) + DAY_MS <= signalTime) end = i;
+    else break;
+  }
+  return end;
+}
+
+function median(values) {
+  const x = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!x.length) return NaN;
+  const mid = Math.floor(x.length / 2);
+  return x.length % 2 ? x[mid] : (x[mid - 1] + x[mid]) / 2;
+}
+
+function v4RotationStateAt(signalTime, dailyBySymbol = {}) {
+  const btcRows = dailyBySymbol[BTC] || [];
+  const btcEnd = completedDailyEnd(btcRows, signalTime);
+  if (btcEnd < 150) return { ready: false, reason: 'btc_history' };
+
+  const btcClose = px(btcRows[btcEnd], 'c');
+  const btcSma150 = btcRows.slice(btcEnd - 149, btcEnd + 1)
+    .reduce((sum, bar) => sum + px(bar, 'c'), 0) / 150;
+  const btcMom30 = btcClose / px(btcRows[btcEnd - 30], 'c') - 1;
+  const btcUp = btcClose > btcSma150 && btcMom30 > 0.05;
+
+  const ranked = [];
+  for (const [symbol, rows] of Object.entries(dailyBySymbol)) {
+    const end = completedDailyEnd(rows, signalTime);
+    if (end < 150 || end < 63 || end < 29) continue;
+
+    const close = px(rows[end], 'c');
+    const prior63 = px(rows[end - 63], 'c');
+    if (!(close > 0) || !(prior63 > 0)) continue;
+
+    const sma150 = rows.slice(end - 149, end + 1)
+      .reduce((sum, bar) => sum + px(bar, 'c'), 0) / 150;
+    const momentum63 = close / prior63 - 1;
+
+    const dollarVolumes = rows.slice(end - 29, end + 1).map((bar) => {
+      const c = px(bar, 'c');
+      const v = n(bar?.v ?? bar?.volume, NaN);
+      return c > 0 && v >= 0 ? c * v : NaN;
+    });
+    const medianDollarVolume = median(dollarVolumes);
+    if (!Number.isFinite(medianDollarVolume)) continue;
+
+    ranked.push({ symbol, momentum63, close, sma150, medianDollarVolume });
+  }
+
+  ranked.sort((a, b) => b.medianDollarVolume - a.medianDollarVolume);
+  const liquid15 = ranked.slice(0, 15);
+  const eligible = liquid15.filter((row) => row.momentum63 > 0 && row.close > row.sma150);
+  const breadth = eligible.length;
+  const ready = btcUp && breadth >= 4;
+
+  return {
+    ready,
+    btcUp,
+    btcMom30,
+    breadth,
+    liquidCount: liquid15.length,
+    eligibleSymbols: eligible.map((row) => row.symbol),
+  };
+}
+
+function variantAllows(variant, state, rotationState) {
   if (variant === 'baseline') return true;
+  if (variant === 'v4_ready_only') return rotationState?.ready === true;
+  if (variant === 'v4_cash_only') return rotationState?.ready === false;
   if (!state?.ready) return false;
   if (variant === 'trend_cash_hard') return !state.broken;
   if (variant === 'fast_brake_hard') return !(state.fastBroken || state.shock);
   if (variant === 'two_stage_hard') return !(state.broken && state.shock);
-  throw new Error(`Unknown V31 variant: ${variant}`);
+  throw new Error(`Unknown regime variant: ${variant}`);
 }
 
 function finish(legs, exit, exitIndex, reason, entryIndex) {
@@ -285,12 +354,13 @@ function summarize(trades) {
   };
 }
 
-function runVariant({ start, end, barsBySymbol, daily, variant }) {
+function runVariant({ start, end, barsBySymbol, daily, dailyBySymbol, variant }) {
   const btcRows = barsBySymbol[BTC] || [];
   const btcIndexByTime = new Map(btcRows.map((bar, index) => [t(bar), index]));
   const trades = [];
   let rawSignals = 0;
   let stateReadySignals = 0;
+  let rotationReadySignals = 0;
   let allowedRawSignals = 0;
 
   for (const symbol of TARGETS) {
@@ -308,8 +378,10 @@ function runVariant({ start, end, barsBySymbol, daily, variant }) {
       rawSignals += 1;
 
       const state = v31StateAt(signalTime, daily);
+      const rotationState = v4RotationStateAt(signalTime, dailyBySymbol);
       if (state.ready) stateReadySignals += 1;
-      if (!variantAllows(variant, state)) continue;
+      if (rotationState.ready) rotationReadySignals += 1;
+      if (!variantAllows(variant, state, rotationState)) continue;
       allowedRawSignals += 1;
 
       const trade = simulateTrade(rows, i, signal.riskPct);
@@ -335,6 +407,7 @@ function runVariant({ start, end, barsBySymbol, daily, variant }) {
     ...summarize(trades),
     rawSignals,
     stateReadySignals,
+    rotationReadySignals,
     allowedRawSignals,
     rawSignalAllowRatePct: stateReadySignals
       ? Number((allowedRawSignals / stateReadySignals * 100).toFixed(2))
@@ -383,18 +456,33 @@ async function fetchWindow(start, end) {
     collected[symbol] = [...deduped.values()].sort((a, b) => t(a) - t(b));
   }
 
-  const dailyData = await cryptoBarsWithRetry(BTC, {
+  const assets = await getTradableAssets('paper');
+  const dailySymbols = [...new Set([
+    BTC,
+    ...TARGETS,
+    ...(assets?.crypto || []).map((asset) => String(asset?.symbol || '').toUpperCase()).filter(Boolean),
+  ])];
+
+  const dailyData = await cryptoBarsWithRetry(dailySymbols, {
     timeframe: '1Day',
     start: warmupDaily,
     end,
     limit: 10000,
     sort: 'asc',
-    maxPages: 2,
+    maxPages: 10,
   });
+
+  const dailyBySymbol = Object.fromEntries(
+    dailySymbols.map((symbol) => [
+      symbol,
+      dailyData[symbol] || dailyData[symbol.replace('/', '')] || [],
+    ]),
+  );
 
   return {
     barsBySymbol: collected,
-    daily: dailyData[BTC] || dailyData[BTC.replace('/', '')] || [],
+    daily: dailyBySymbol[BTC] || [],
+    dailyBySymbol,
   };
 }
 
@@ -405,12 +493,12 @@ export async function runC62RegimeWindow(windowId = 'recent') {
 
   const start = new Date(cfg.start);
   const end = new Date(cfg.end);
-  const { barsBySymbol, daily } = await fetchWindow(start, end);
+  const { barsBySymbol, daily, dailyBySymbol } = await fetchWindow(start, end);
 
   const variants = Object.fromEntries(
     VARIANTS.map((variant) => [
       variant,
-      runVariant({ start, end, barsBySymbol, daily, variant }),
+      runVariant({ start, end, barsBySymbol, daily, dailyBySymbol, variant }),
     ]),
   );
 
@@ -434,6 +522,17 @@ export async function runC62RegimeWindow(windowId = 'recent') {
       Object.entries(barsBySymbol).map(([symbol, rows]) => [symbol, rows.length]),
     ),
     dailyBtcBars: daily.length,
+    v4DailyUniverseCount: Object.values(dailyBySymbol).filter((rows) => rows.length).length,
+    v4ContextRules: {
+      btcUp: 'prior completed BTC daily close > SMA150 and 30d momentum > +5%',
+      liquidity: 'top 15 by trailing 30-day median daily dollar volume',
+      assetEligibility: '63-day momentum > 0 and close > SMA150',
+      minimumEligibleBreadth: 4,
+      variants: {
+        v4_ready_only: 'allow frozen C62 only when V4 broad rotation readiness is true',
+        v4_cash_only: 'allow frozen C62 only when V4 broad rotation readiness is false',
+      },
+    },
     variants,
   };
 }
