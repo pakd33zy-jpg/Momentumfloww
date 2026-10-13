@@ -337,6 +337,29 @@ function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, m
 }
 
 
+
+function aggregateCryptoFourHour(hourly = []) {
+  const buckets = new Map();
+  for (const bar of hourly) {
+    const time = new Date(bar?.t ?? bar?.timestamp ?? 0).getTime();
+    if (!Number.isFinite(time)) continue;
+    const bucket = Math.floor(time / 14400000) * 14400000;
+    const o = Number(bar?.o ?? bar?.open ?? 0);
+    const h = Number(bar?.h ?? bar?.high ?? 0);
+    const l = Number(bar?.l ?? bar?.low ?? 0);
+    const c = Number(bar?.c ?? bar?.close ?? 0);
+    if (!(o > 0 && h > 0 && l > 0 && c > 0)) continue;
+    const row = buckets.get(bucket);
+    if (!row) buckets.set(bucket, { t: new Date(bucket).toISOString(), o, h, l, c });
+    else {
+      row.h = Math.max(row.h, h);
+      row.l = Math.min(row.l, l);
+      row.c = c;
+    }
+  }
+  return [...buckets.values()].sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
+}
+
 function btcDailyTrendAt(daily = [], signalTime = 0, strong = false) {
   let end = -1;
   for (let i = 0; i < daily.length; i += 1) {
@@ -757,9 +780,10 @@ router.get('/crypto-regime-breakout-backtest', async (req, res) => {
     const barsBySymbol = {};
     for (const symbol of symbols) {
       const result = await getCryptoBars('paper', [symbol], {
-        timeframe: '4Hour', start: warmup, end, limit: 10000, sort: 'asc', maxPages: 5,
+        timeframe: '1Hour', start: warmup, end, limit: 10000, sort: 'asc', maxPages: 5,
       });
-      barsBySymbol[symbol] = result[symbol] || result[symbol.replace('/', '')] || [];
+      const hourly = result[symbol] || result[symbol.replace('/', '')] || [];
+      barsBySymbol[symbol] = aggregateCryptoFourHour(hourly);
     }
     const results = variants.map((variant) => {
       const perSymbol = {};
