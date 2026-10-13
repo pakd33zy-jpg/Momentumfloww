@@ -941,3 +941,17 @@ A no-parameter test of target prior-2h > current-2h:
 **Verdict: useful risk-quality clue, rejected as a hard fix.** It reduces old-regime damage but sacrifices the recent positive year. Stop parameter-mining C62 thresholds; treat C62 as a regime-dependent component and recover the original C60/C62 audit provenance or combine independent strategy sleeves instead.
 
 Full note: research/C62_CROSS_YEAR_FEATURE_STABILITY_2026-10-10.md
+
+
+## 2026-10-13 corrected adaptive C62 exit selector
+
+The C62 + V50-style causal exit/CASH selector was rerun after fixing Alpaca multi-symbol pagination that had silently starved ETH/SOL/LINK history.
+
+Frozen selector: last four fully settled counterfactual outcomes, choose C62 exit or ATR/time exit only when the best recent mean edge is at least 1.0%; otherwise CASH. Execution retained the C62 1.0% round-trip cost model.
+
+- 2025-10-08 -> 2026-10-08: 48 raw signals, 10 selected trades, **+14.499%**, PF **2.246**, 50% wins, 3.696% max drawdown.
+- 2026-07-10 -> 2026-10-10: 20 raw signals, 5 selected trades, **+15.697%**, PF **3.687**, 60% wins, 2.962% max drawdown.
+- 2026-03-01 -> 2026-06-01: 13 raw signals, 0 selected trades.
+- Independent 2024-10-07 -> 2025-10-07: 81 raw signals, 11 selected trades, **-17.090%**, PF **0.409**, 27.27% wins, 22.277% max drawdown.
+
+**Verdict: reject as a standalone winner.** The selector improved the recent year and correctly stayed in cash during one bad slice, but failed badly in the independent prior year. Preserve the causal CASH/exit-expert architecture; do not deploy this four-observation threshold configuration.
