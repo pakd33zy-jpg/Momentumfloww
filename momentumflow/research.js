@@ -306,7 +306,7 @@ function rsiSeries(values = [], period = 2) {
   return out;
 }
 
-function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, maxHoldBars = 5, roundTripCostPct = 0.50 } = {}) {
+function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, maxHoldBars = 5, roundTripCostPct = 0.50, startMs = 0 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < 210) return [];
   const closes = rows.map((b) => Number(b?.c ?? b?.close));
@@ -325,6 +325,8 @@ function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, m
       }
       continue;
     }
+    const signalTime = new Date(rows[i]?.t ?? rows[i]?.timestamp ?? 0).getTime();
+    if (signalTime < startMs) continue;
     const sma200 = closes.slice(i - 199, i + 1).reduce((sum, value) => sum + value, 0) / 200;
     if (closes[i] > sma200 && rsi2[i] <= entryRsi) {
       pos = { entry: opens[i + 1] * (1 + sideCost), entryIndex: i + 1 };
@@ -655,12 +657,12 @@ router.get('/crypto-daily-pullback-backtest', async (req, res) => {
         timeframe: '1Day', start: warmupStart, end, limit: 10000, sort: 'asc', maxPages: 2,
       });
       const all = result[symbol] || result[symbol.replace('/', '')] || [];
-      barsBySymbol[symbol] = all.filter((bar) => new Date(bar?.t ?? bar?.timestamp ?? 0) >= start);
+      barsBySymbol[symbol] = all;
     }
     const results = variants.map((variant) => {
       const perSymbol = {};
       for (const symbol of symbols) {
-        const trades = backtestCryptoDailyPullback(barsBySymbol[symbol], { ...variant, exitRsi: 70, maxHoldBars: 5, roundTripCostPct: 0.50 });
+        const trades = backtestCryptoDailyPullback(barsBySymbol[symbol], { ...variant, exitRsi: 70, maxHoldBars: 5, roundTripCostPct: 0.50, startMs: start.getTime() });
         perSymbol[symbol] = { bars: barsBySymbol[symbol].length, summary: btSummary(trades), trades };
       }
       return {
