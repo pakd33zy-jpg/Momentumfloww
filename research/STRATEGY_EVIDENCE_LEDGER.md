@@ -8,6 +8,12 @@ Never discard a strategy because the whole strategy failed. Preserve every teste
 
 This ledger is research-only. It does not authorize live trading and does not change the active 55/20 equity shadow or C62 crypto shadow.
 
+## 2026-10-13 crypto 4-hour channel family
+
+Tested fixed 20/10, 55/20, and 100/40 channel breakouts across nine crypto pairs with completed 4-hour candles, next-bar execution, and 0.50% modeled round-trip cost. All three were strongly profitable in 2024-10-13 through 2025-10-13, then all failed in the independent 2025-10-13 through 2026-10-13 window. The least selective 20/10 form moved from PF 6.475 and +51.519% equal-weight to PF 0.082 and -7.622%.
+
+**Verdict:** reject fixed channel breakout as a standalone crypto replacement. Preserve it only as a possible trend-regime sleeve; do not deploy or parameter-tune it unchanged. Full note: `research/CRYPTO_CHANNEL_CROSS_YEAR_2026-10-13.md`.
+
 ## Permanent research rules
 
 1. A failed strategy is data, not trash.
