@@ -283,6 +283,36 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
   return trades;
 }
 
+function backtestCryptoBreakout(bars = [], { entryBars = 55, exitBars = 20, roundTripCostPct = 0.50 } = {}) {
+  const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
+  if (rows.length < entryBars + 5) return [];
+  const sideCost = roundTripCostPct / 200;
+  const trades = [];
+  let pos = null;
+  for (let i = entryBars; i < rows.length - 1; i += 1) {
+    const high = (b) => Number(b?.h ?? b?.high ?? 0);
+    const low = (b) => Number(b?.l ?? b?.low ?? 0);
+    const close = Number(rows[i]?.c ?? rows[i]?.close ?? 0);
+    const nextOpen = Number(rows[i + 1]?.o ?? rows[i + 1]?.open ?? 0);
+    if (pos) {
+      const priorLow = Math.min(...rows.slice(i - exitBars, i).map(low));
+      if (close < priorLow && nextOpen > 0) {
+        const exit = nextOpen * (1 - sideCost);
+        trades.push({ netReturn: exit / pos.entry - 1, reason: 'CHANNEL_EXIT' });
+        pos = null;
+      }
+      continue;
+    }
+    const priorHigh = Math.max(...rows.slice(i - entryBars, i).map(high));
+    if (close > priorHigh && nextOpen > 0) pos = { entry: nextOpen * (1 + sideCost) };
+  }
+  if (pos) {
+    const finalClose = Number(rows.at(-1)?.c ?? rows.at(-1)?.close ?? 0);
+    if (finalClose > 0) trades.push({ netReturn: finalClose * (1 - sideCost) / pos.entry - 1, reason: 'END_MARK' });
+  }
+  return trades;
+}
+
 function backtestTrendCross(bars = [], { atrStop = 1.0, rewardRisk = 2.0, roundTripCostPct = 0.04 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < 220) return [];
@@ -503,6 +533,50 @@ router.get('/crypto-protective-exit-backtest', async (req, res) => {
       timeframe: '1Hour',
       roundTripCostPct: 0.10,
       note: 'Research only. Closed-candle signals, next-bar entries/exits, modeled cost, gap-aware emergency stops.',
+      results,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/crypto-breakout-backtest', async (req, res) => {
+  try {
+    const days = Math.max(180, Math.min(1095, Math.floor(Number(req.query.days || 365))));
+    const end = req.query.end ? new Date(String(req.query.end)) : new Date();
+    if (!Number.isFinite(end.getTime())) throw new Error('Invalid end date');
+    const start = new Date(end.getTime() - days * 86400000);
+    const symbols = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'LINK/USD', 'AVAX/USD', 'LTC/USD', 'BCH/USD', 'DOGE/USD'];
+    const variants = [
+      { id: 'CHANNEL_20_10', entryBars: 20, exitBars: 10 },
+      { id: 'CHANNEL_55_20', entryBars: 55, exitBars: 20 },
+      { id: 'CHANNEL_100_40', entryBars: 100, exitBars: 40 },
+    ];
+    const barsBySymbol = {};
+    for (const symbol of symbols) {
+      const result = await getCryptoBars('paper', [symbol], {
+        timeframe: '4Hour', start, end, limit: 10000, sort: 'asc', maxPages: 5,
+      });
+      barsBySymbol[symbol] = result[symbol] || result[symbol.replace('/', '')] || [];
+    }
+    const results = variants.map((variant) => {
+      const perSymbol = {};
+      for (const symbol of symbols) {
+        const trades = backtestCryptoBreakout(barsBySymbol[symbol], { ...variant, roundTripCostPct: 0.50 });
+        perSymbol[symbol] = { bars: barsBySymbol[symbol].length, summary: btSummary(trades), trades };
+      }
+      return {
+        id: variant.id,
+        aggregate: aggregateSymbolSummaries(perSymbol),
+        bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, { bars: row.bars, ...row.summary }])),
+      };
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(), researchOnly: true, timeframe: '4Hour',
+      start: start.toISOString(), end: end.toISOString(), days, symbols,
+      roundTripCostPct: 0.50,
+      execution: 'completed candle; next 4h open; long only; no lookahead',
       results,
     });
   } catch (error) {
