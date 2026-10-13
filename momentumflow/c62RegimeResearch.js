@@ -612,6 +612,38 @@ router.get('/backtest', async (req, res) => {
 });
 
 
+
+router.get('/context-slice-backtest', async (req, res) => {
+  try {
+    const slices = {
+      earlier: ['2025-11-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z'],
+      bad: ['2026-03-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'],
+      winning: ['2026-07-10T00:00:00.000Z', '2026-10-10T00:00:00.000Z'],
+    };
+    const id = String(req.query.slice || 'winning').toLowerCase();
+    if (!slices[id]) throw new Error('slice must be earlier, bad, or winning');
+    const [startIso, endIso] = slices[id];
+    const start = new Date(startIso);
+    const end = new Date(endIso);
+    const { barsBySymbol, daily, dailyBySymbol } = await fetchWindow(start, end);
+    const variants = Object.fromEntries(
+      VARIANTS.map((variant) => [
+        variant,
+        runVariant({ start, end, barsBySymbol, daily, dailyBySymbol, variant }),
+      ])
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(), researchOnly: true, placesOrders: false,
+      slice: id, start: startIso, end: endIso,
+      dataCounts: Object.fromEntries(Object.entries(barsBySymbol).map(([symbol, rows]) => [symbol, rows.length])),
+      variants,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/adaptive-exit-backtest', async (req, res) => {
   try {
     const slices = {
