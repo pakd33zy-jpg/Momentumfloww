@@ -283,6 +283,57 @@ function backtestValleyCross(bars = [], { q = 0.5, lookback = 200, flatAtClose =
   return trades;
 }
 
+
+function rsiSeries(values = [], period = 2) {
+  const out = new Array(values.length).fill(NaN);
+  if (values.length <= period) return out;
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const d = values[i] - values[i - 1];
+    gains += Math.max(d, 0);
+    losses += Math.max(-d, 0);
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < values.length; i += 1) {
+    const d = values[i] - values[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
+function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, maxHoldBars = 5, roundTripCostPct = 0.50 } = {}) {
+  const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
+  if (rows.length < 210) return [];
+  const closes = rows.map((b) => Number(b?.c ?? b?.close));
+  const opens = rows.map((b) => Number(b?.o ?? b?.open));
+  const rsi2 = rsiSeries(closes, 2);
+  const sideCost = roundTripCostPct / 200;
+  const trades = [];
+  let pos = null;
+  for (let i = 200; i < rows.length - 1; i += 1) {
+    if (pos) {
+      const held = i - pos.entryIndex;
+      if (rsi2[i] >= exitRsi || held >= maxHoldBars) {
+        const exit = opens[i + 1] * (1 - sideCost);
+        trades.push({ netReturn: exit / pos.entry - 1, reason: rsi2[i] >= exitRsi ? 'RSI_REBOUND' : 'MAX_HOLD' });
+        pos = null;
+      }
+      continue;
+    }
+    const sma200 = closes.slice(i - 199, i + 1).reduce((sum, value) => sum + value, 0) / 200;
+    if (closes[i] > sma200 && rsi2[i] <= entryRsi) {
+      pos = { entry: opens[i + 1] * (1 + sideCost), entryIndex: i + 1 };
+    }
+  }
+  if (pos) trades.push({ netReturn: closes.at(-1) * (1 - sideCost) / pos.entry - 1, reason: 'END_MARK' });
+  return trades;
+}
+
 function backtestCryptoBreakout(bars = [], { entryBars = 55, exitBars = 20, roundTripCostPct = 0.50 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < entryBars + 5) return [];
@@ -577,6 +628,53 @@ router.get('/crypto-breakout-backtest', async (req, res) => {
       start: start.toISOString(), end: end.toISOString(), days, symbols,
       roundTripCostPct: 0.50,
       execution: 'completed candle; next 4h open; long only; no lookahead',
+      results,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+
+router.get('/crypto-daily-pullback-backtest', async (req, res) => {
+  try {
+    const days = Math.max(365, Math.min(1460, Math.floor(Number(req.query.days || 365))));
+    const end = req.query.end ? new Date(String(req.query.end)) : new Date();
+    if (!Number.isFinite(end.getTime())) throw new Error('Invalid end date');
+    const warmupStart = new Date(end.getTime() - (days + 260) * 86400000);
+    const start = new Date(end.getTime() - days * 86400000);
+    const symbols = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'LINK/USD', 'AVAX/USD', 'LTC/USD', 'BCH/USD', 'DOGE/USD'];
+    const variants = [
+      { id: 'RSI2_5', entryRsi: 5 },
+      { id: 'RSI2_10', entryRsi: 10 },
+      { id: 'RSI2_15', entryRsi: 15 },
+    ];
+    const barsBySymbol = {};
+    for (const symbol of symbols) {
+      const result = await getCryptoBars('paper', [symbol], {
+        timeframe: '1Day', start: warmupStart, end, limit: 10000, sort: 'asc', maxPages: 2,
+      });
+      const all = result[symbol] || result[symbol.replace('/', '')] || [];
+      barsBySymbol[symbol] = all.filter((bar) => new Date(bar?.t ?? bar?.timestamp ?? 0) >= start);
+    }
+    const results = variants.map((variant) => {
+      const perSymbol = {};
+      for (const symbol of symbols) {
+        const trades = backtestCryptoDailyPullback(barsBySymbol[symbol], { ...variant, exitRsi: 70, maxHoldBars: 5, roundTripCostPct: 0.50 });
+        perSymbol[symbol] = { bars: barsBySymbol[symbol].length, summary: btSummary(trades), trades };
+      }
+      return {
+        id: variant.id,
+        aggregate: aggregateSymbolSummaries(perSymbol),
+        bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, { bars: row.bars, ...row.summary }])),
+      };
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(), researchOnly: true, timeframe: '1Day',
+      start: start.toISOString(), end: end.toISOString(), days, symbols,
+      roundTripCostPct: 0.50,
+      execution: 'completed daily candle; next daily open; long only; close above SMA200; RSI2 pullback; RSI2 rebound or five-day exit',
       results,
     });
   } catch (error) {
