@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import { verifyAlphaInsider } from './alphainsiderVerify.js';
 import cors from 'cors';
 import credentialsRouter from './credentials.js';
 import sessionsRouter from './sessions.js';
@@ -148,3 +149,9 @@ app.use((err, req, res, next) => { console.error('[error]', err); res.status(500
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`MomentumFlow backend listening on port ${PORT}`));
+// One-shot, read-only token check. Never blocks trading startup, prints only fixed statuses.
+// No public endpoint, no token or account data in logs.
+void verifyAlphaInsider().then(({ status, httpStatus }) => {
+  const safeHttpStatus = Number.isInteger(httpStatus) ? ` http=${httpStatus}` : '';
+  console.log(`[alphainsider:read-only] verifyToken=${status}${safeHttpStatus}`);
+});
