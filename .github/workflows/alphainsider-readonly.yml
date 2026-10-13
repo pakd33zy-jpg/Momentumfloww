@@ -1,0 +1,31 @@
+name: AlphaInsider read-only checks
+
+on:
+  push:
+    paths:
+      - 'momentumflow/alphainsider*.js'
+      - 'momentumflow/alphainsider*.mjs'
+      - '.github/workflows/alphainsider-readonly.yml'
+  pull_request:
+    paths:
+      - 'momentumflow/alphainsider*.js'
+      - 'momentumflow/alphainsider*.mjs'
+      - 'momentumflow/server.js'
+      - '.github/workflows/alphainsider-readonly.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check AlphaInsider JavaScript syntax
+        run: |
+          node --check momentumflow/alphainsiderVerify.js
+          node --check momentumflow/alphainsiderStrategies.js
+          node --check momentumflow/alphainsiderRouter.js
+          node --check momentumflow/server.js
+      - name: Run mocked, no-key AlphaInsider tests
+        run: node --test momentumflow/alphainsiderVerify.test.mjs momentumflow/alphainsiderStrategies.test.mjs
