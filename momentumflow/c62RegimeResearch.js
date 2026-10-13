@@ -431,22 +431,22 @@ async function fetchWindow(start, end) {
     ));
     const chunkEnd = nextMonth < end ? nextMonth : end;
 
-    const data = await cryptoBarsWithRetry(symbols, {
-      timeframe: '15Min',
-      start: cursor,
-      end: chunkEnd,
-      limit: 10000,
-      sort: 'asc',
-      maxPages: 4,
-    });
-
     for (const symbol of symbols) {
+      const data = await cryptoBarsWithRetry([symbol], {
+        timeframe: '15Min',
+        start: cursor,
+        end: chunkEnd,
+        limit: 10000,
+        sort: 'asc',
+        maxPages: 4,
+      });
       const rows = data[symbol] || data[symbol.replace('/', '')] || [];
       collected[symbol].push(...rows);
+      await sleep(250);
     }
 
     cursor = new Date(chunkEnd);
-    await sleep(1000);
+    await sleep(500);
   }
 
   for (const symbol of symbols) {
