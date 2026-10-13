@@ -1,0 +1,22 @@
+name: EMA MACD research-only regression
+on:
+  pull_request:
+    paths:
+      - 'momentumflow/research/ema_*ablation.py'
+      - 'momentumflow/research/test_ema*.py'
+      - '.github/workflows/ema-macd-research.yml'
+  push:
+    paths:
+      - 'momentumflow/research/ema_*ablation.py'
+      - 'momentumflow/research/test_ema*.py'
+      - '.github/workflows/ema-macd-research.yml'
+jobs:
+  test-offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m py_compile momentumflow/research/ema_macd_ablation.py momentumflow/research/ema_exit_ablation.py momentumflow/research/ema_entry_ablation.py
+      - run: python3 -m unittest discover -s momentumflow/research -p 'test_ema*.py' -v
