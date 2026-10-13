@@ -338,6 +338,26 @@ function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, m
 
 
 
+
+async function fetchCryptoHourlyComplete(symbol, start, end) {
+  const rows = [];
+  let cursor = new Date(start);
+  const chunkMs = 180 * 86400000;
+  while (cursor < end) {
+    const chunkEnd = new Date(Math.min(end.getTime(), cursor.getTime() + chunkMs));
+    const result = await getCryptoBars('paper', [symbol], {
+      timeframe: '1Hour', start: cursor, end: chunkEnd, limit: 10000, sort: 'asc', maxPages: 2,
+    });
+    rows.push(...(result[symbol] || result[symbol.replace('/', '')] || []));
+    cursor = chunkEnd;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const deduped = new Map(rows.map((bar) => [new Date(bar?.t ?? bar?.timestamp ?? 0).getTime(), bar]));
+  return [...deduped.values()].sort((a, b) =>
+    new Date(a?.t ?? a?.timestamp ?? 0).getTime() - new Date(b?.t ?? b?.timestamp ?? 0).getTime()
+  );
+}
+
 function aggregateCryptoFourHour(hourly = []) {
   const buckets = new Map();
   for (const bar of hourly) {
@@ -779,10 +799,7 @@ router.get('/crypto-regime-breakout-backtest', async (req, res) => {
     const btcDaily = dailyResult['BTC/USD'] || dailyResult.BTCUSD || [];
     const barsBySymbol = {};
     for (const symbol of symbols) {
-      const result = await getCryptoBars('paper', [symbol], {
-        timeframe: '1Hour', start: warmup, end, limit: 10000, sort: 'asc', maxPages: 5,
-      });
-      const hourly = result[symbol] || result[symbol.replace('/', '')] || [];
+      const hourly = await fetchCryptoHourlyComplete(symbol, warmup, end);
       barsBySymbol[symbol] = aggregateCryptoFourHour(hourly);
     }
     const results = variants.map((variant) => {
