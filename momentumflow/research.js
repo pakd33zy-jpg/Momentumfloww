@@ -336,6 +336,57 @@ function backtestCryptoDailyPullback(bars = [], { entryRsi = 10, exitRsi = 70, m
   return trades;
 }
 
+
+function btcDailyTrendAt(daily = [], signalTime = 0, strong = false) {
+  let end = -1;
+  for (let i = 0; i < daily.length; i += 1) {
+    const barTime = new Date(daily[i]?.t ?? daily[i]?.timestamp ?? 0).getTime();
+    if (barTime + 86400000 <= signalTime) end = i;
+    else break;
+  }
+  if (end < 150) return false;
+  const closes = daily.map((b) => Number(b?.c ?? b?.close ?? 0));
+  const close = closes[end];
+  const sma150 = closes.slice(end - 149, end + 1).reduce((a, b) => a + b, 0) / 150;
+  const mom30 = close / closes[end - 30] - 1;
+  return close > sma150 && mom30 > (strong ? 0.05 : 0);
+}
+
+function backtestCryptoBreakoutWithRegime(bars = [], btcDaily = [], {
+  entryBars = 20, exitBars = 10, roundTripCostPct = 0.50, startMs = 0, regime = 'mild',
+} = {}) {
+  const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
+  if (rows.length < entryBars + 5) return [];
+  const sideCost = roundTripCostPct / 200;
+  const high = (b) => Number(b?.h ?? b?.high ?? 0);
+  const low = (b) => Number(b?.l ?? b?.low ?? 0);
+  const trades = [];
+  let pos = null;
+  for (let i = entryBars; i < rows.length - 1; i += 1) {
+    const close = Number(rows[i]?.c ?? rows[i]?.close ?? 0);
+    const nextOpen = Number(rows[i + 1]?.o ?? rows[i + 1]?.open ?? 0);
+    if (pos) {
+      const priorLow = Math.min(...rows.slice(i - exitBars, i).map(low));
+      if (close < priorLow && nextOpen > 0) {
+        const exit = nextOpen * (1 - sideCost);
+        trades.push({ netReturn: exit / pos.entry - 1, reason: 'CHANNEL_EXIT' });
+        pos = null;
+      }
+      continue;
+    }
+    const signalTime = new Date(rows[i]?.t ?? rows[i]?.timestamp ?? 0).getTime();
+    if (signalTime < startMs) continue;
+    const priorHigh = Math.max(...rows.slice(i - entryBars, i).map(high));
+    const allowed = regime === 'none' || btcDailyTrendAt(btcDaily, signalTime, regime === 'strong');
+    if (allowed && close > priorHigh && nextOpen > 0) pos = { entry: nextOpen * (1 + sideCost) };
+  }
+  if (pos) {
+    const finalClose = Number(rows.at(-1)?.c ?? rows.at(-1)?.close ?? 0);
+    if (finalClose > 0) trades.push({ netReturn: finalClose * (1 - sideCost) / pos.entry - 1, reason: 'END_MARK' });
+  }
+  return trades;
+}
+
 function backtestCryptoBreakout(bars = [], { entryBars = 55, exitBars = 20, roundTripCostPct = 0.50 } = {}) {
   const rows = bars.filter((b) => Number(b?.c ?? b?.close ?? 0) > 0 && Number(b?.o ?? b?.open ?? 0) > 0);
   if (rows.length < entryBars + 5) return [];
@@ -677,6 +728,59 @@ router.get('/crypto-daily-pullback-backtest', async (req, res) => {
       start: start.toISOString(), end: end.toISOString(), days, symbols,
       roundTripCostPct: 0.50,
       execution: 'completed daily candle; next daily open; long only; close above SMA200; RSI2 pullback; RSI2 rebound or five-day exit',
+      results,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+
+router.get('/crypto-regime-breakout-backtest', async (req, res) => {
+  try {
+    const days = Math.max(365, Math.min(1095, Math.floor(Number(req.query.days || 365))));
+    const end = req.query.end ? new Date(String(req.query.end)) : new Date();
+    if (!Number.isFinite(end.getTime())) throw new Error('Invalid end date');
+    const start = new Date(end.getTime() - days * 86400000);
+    const warmup = new Date(start.getTime() - 260 * 86400000);
+    const symbols = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'LINK/USD', 'AVAX/USD', 'LTC/USD', 'BCH/USD', 'DOGE/USD'];
+    const variants = [
+      { id: 'CH20_10_MILD', entryBars: 20, exitBars: 10, regime: 'mild' },
+      { id: 'CH20_10_STRONG', entryBars: 20, exitBars: 10, regime: 'strong' },
+      { id: 'CH55_20_MILD', entryBars: 55, exitBars: 20, regime: 'mild' },
+      { id: 'CH55_20_STRONG', entryBars: 55, exitBars: 20, regime: 'strong' },
+    ];
+    const dailyResult = await getCryptoBars('paper', ['BTC/USD'], {
+      timeframe: '1Day', start: warmup, end, limit: 10000, sort: 'asc', maxPages: 2,
+    });
+    const btcDaily = dailyResult['BTC/USD'] || dailyResult.BTCUSD || [];
+    const barsBySymbol = {};
+    for (const symbol of symbols) {
+      const result = await getCryptoBars('paper', [symbol], {
+        timeframe: '4Hour', start: warmup, end, limit: 10000, sort: 'asc', maxPages: 5,
+      });
+      barsBySymbol[symbol] = result[symbol] || result[symbol.replace('/', '')] || [];
+    }
+    const results = variants.map((variant) => {
+      const perSymbol = {};
+      for (const symbol of symbols) {
+        const trades = backtestCryptoBreakoutWithRegime(barsBySymbol[symbol], btcDaily, {
+          ...variant, roundTripCostPct: 0.50, startMs: start.getTime(),
+        });
+        perSymbol[symbol] = { bars: barsBySymbol[symbol].length, summary: btSummary(trades), trades };
+      }
+      return {
+        id: variant.id,
+        aggregate: aggregateSymbolSummaries(perSymbol),
+        bySymbol: Object.fromEntries(Object.entries(perSymbol).map(([symbol, row]) => [symbol, { bars: row.bars, ...row.summary }])),
+      };
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      generatedAt: new Date().toISOString(), researchOnly: true, timeframe: '4Hour',
+      start: start.toISOString(), end: end.toISOString(), days, symbols,
+      roundTripCostPct: 0.50,
+      regimes: { mild: 'prior completed BTC daily close above SMA150 and 30d momentum above 0', strong: 'same with 30d momentum above 5%' },
       results,
     });
   } catch (error) {
