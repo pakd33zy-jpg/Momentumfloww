@@ -616,12 +616,16 @@ router.get('/backtest', async (req, res) => {
 router.get('/context-slice-backtest', async (req, res) => {
   try {
     const slices = {
+      q4_2024: ['2024-10-07T00:00:00.000Z', '2025-01-07T00:00:00.000Z'],
+      q1_2025: ['2025-01-07T00:00:00.000Z', '2025-04-07T00:00:00.000Z'],
+      q2_2025: ['2025-04-07T00:00:00.000Z', '2025-07-07T00:00:00.000Z'],
+      q3_2025: ['2025-07-07T00:00:00.000Z', '2025-10-07T00:00:00.000Z'],
       earlier: ['2025-11-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z'],
       bad: ['2026-03-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'],
       winning: ['2026-07-10T00:00:00.000Z', '2026-10-10T00:00:00.000Z'],
     };
     const id = String(req.query.slice || 'winning').toLowerCase();
-    if (!slices[id]) throw new Error('slice must be earlier, bad, or winning');
+    if (!slices[id]) throw new Error('slice must be q4_2024, q1_2025, q2_2025, q3_2025, earlier, bad, or winning');
     const [startIso, endIso] = slices[id];
     const start = new Date(startIso);
     const end = new Date(endIso);
