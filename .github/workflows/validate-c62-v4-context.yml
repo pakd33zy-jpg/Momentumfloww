@@ -1,0 +1,17 @@
+name: Validate C62 V4 Context
+on:
+  push:
+    branches:
+      - research/c62-v4-context-20261013
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          node --check momentumflow/c62RegimeResearch.js
+          node --check momentumflow/server.js
