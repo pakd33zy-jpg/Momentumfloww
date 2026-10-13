@@ -22,6 +22,7 @@ import breakout5520ShadowRouter, { startBreakout5520Shadow } from './breakout552
 import breakout5520Validation50ShadowRouter, { startBreakout5520Validation50Shadow } from './breakout5520Validation50ShadowRouter.js';
 import cryptoV51ShadowRouter from './cryptoV51ShadowRouter.js';
 import c62ShadowRouter, { startC62Shadow } from './c62ShadowRouter.js';
+import cryptoCandidateResearchRouter from './cryptoCandidateResearch.js';
 import equityV71ShadowRouter, { startEquityV71Shadow } from './equityV71ShadowRouter.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
@@ -145,6 +146,7 @@ app.use('/api/research/breakout-liquid', breakoutDailyLiquidResearchRouter);
 app.use('/api/breakout-55-20-shadow', breakout5520ShadowRouter);
 app.use('/api/breakout-55-20-validation50-shadow', breakout5520Validation50ShadowRouter);
 app.use('/api/crypto-v51-shadow', cryptoV51ShadowRouter);
+app.use('/api/research', cryptoCandidateResearchRouter);
 app.use('/api/c62-shadow', c62ShadowRouter);
 app.use('/api/equity-v71-shadow', equityV71ShadowRouter);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
