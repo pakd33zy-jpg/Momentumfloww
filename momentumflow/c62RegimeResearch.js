@@ -305,6 +305,72 @@ function simulateTrade(rows, signalIndex, riskPct) {
   return null;
 }
 
+
+function simulateAtrTimeTrade(rows, signalIndex, riskPct) {
+  const entryIndex = signalIndex + 1;
+  if (entryIndex >= rows.length || t(rows[entryIndex]) - t(rows[signalIndex]) > BAR_MS + 60_000) return null;
+  const entry = px(rows[entryIndex], 'o');
+  if (!(entry > 0) || !(riskPct > 0)) return null;
+  const stop = entry * (1 - riskPct / 100);
+  const maxExitIndex = Math.min(rows.length - 1, entryIndex + 96);
+  for (let i = entryIndex; i <= maxExitIndex; i += 1) {
+    const open = px(rows[i], 'o');
+    const low = px(rows[i], 'l');
+    if (open <= stop || low <= stop) {
+      const exit = open <= stop ? open : stop;
+      return { netReturn: exit / entry - 1 - COST_PCT / 100, exitIndex: i, entryIndex, reason: 'ATR_STOP' };
+    }
+    if (i === maxExitIndex) {
+      return { netReturn: px(rows[i], 'c') / entry - 1 - COST_PCT / 100, exitIndex: i, entryIndex, reason: 'MAX_HOLD' };
+    }
+  }
+  return null;
+}
+
+function runAdaptiveExitSelector({ start, end, barsBySymbol, review = 4, minEdgePct = 1 }) {
+  const btcRows = barsBySymbol[BTC] || [];
+  const btcIndexByTime = new Map(btcRows.map((bar, index) => [t(bar), index]));
+  const candidates = [];
+  for (const symbol of TARGETS) {
+    const rows = barsBySymbol[symbol] || [];
+    for (let i = 129; i < rows.length - 1; i += 1) {
+      const signalTime = t(rows[i]);
+      if (signalTime < start.getTime() || signalTime >= end.getTime()) continue;
+      const btcEnd = btcIndexByTime.get(signalTime);
+      if (!Number.isInteger(btcEnd)) continue;
+      const signal = c62Signal(rows, i, btcRows, btcEnd);
+      if (!signal) continue;
+      const c62 = simulateTrade(rows, i, signal.riskPct);
+      const atrTime = simulateAtrTimeTrade(rows, i, signal.riskPct);
+      if (!c62 || !atrTime) continue;
+      candidates.push({
+        symbol, signalTime,
+        c62: { ...c62, settledAt: t(rows[c62.exitIndex]) },
+        atrTime: { ...atrTime, settledAt: t(rows[atrTime.exitIndex]) },
+      });
+    }
+  }
+  candidates.sort((a, b) => a.signalTime - b.signalTime);
+  const selected = [];
+  const blockedUntil = {};
+  for (const candidate of candidates) {
+    if ((blockedUntil[candidate.symbol] || 0) >= candidate.signalTime) continue;
+    const completed = candidates.filter((prior) =>
+      prior.signalTime < candidate.signalTime &&
+      Math.max(prior.c62.settledAt, prior.atrTime.settledAt) < candidate.signalTime
+    ).slice(-review);
+    if (completed.length < review) continue;
+    const c62Edge = completed.reduce((sum, row) => sum + row.c62.netReturn, 0) / review;
+    const atrEdge = completed.reduce((sum, row) => sum + row.atrTime.netReturn, 0) / review;
+    const expert = atrEdge > c62Edge ? 'atrTime' : 'c62';
+    if (Math.max(c62Edge, atrEdge) * 100 < minEdgePct) continue;
+    const outcome = candidate[expert];
+    selected.push({ symbol: candidate.symbol, signalAt: new Date(candidate.signalTime).toISOString(), expert, netReturn: outcome.netReturn });
+    blockedUntil[candidate.symbol] = outcome.settledAt + BAR_MS;
+  }
+  return { rawSignals: candidates.length, review, minEdgePct, ...summarize(selected) };
+}
+
 function summarize(trades) {
   let equity = 1;
   let peak = 1;
@@ -542,6 +608,30 @@ router.get('/backtest', async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('[c62-regime-research]', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+
+router.get('/adaptive-exit-backtest', async (req, res) => {
+  try {
+    const slices = {
+      earlier: ['2025-11-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z'],
+      bad: ['2026-03-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'],
+      winning: ['2026-07-10T00:00:00.000Z', '2026-10-10T00:00:00.000Z'],
+    };
+    const id = String(req.query.slice || 'winning').toLowerCase();
+    if (!slices[id]) throw new Error('slice must be earlier, bad, or winning');
+    const [startIso, endIso] = slices[id];
+    const start = new Date(startIso);
+    const end = new Date(endIso);
+    const { barsBySymbol } = await fetchWindow(start, end);
+    const thresholds = [0, 0.5, 1].map((minEdgePct) =>
+      runAdaptiveExitSelector({ start, end, barsBySymbol, review: 4, minEdgePct })
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json({ generatedAt: new Date().toISOString(), researchOnly: true, placesOrders: false, slice: id, start: startIso, end: endIso, thresholds });
+  } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
