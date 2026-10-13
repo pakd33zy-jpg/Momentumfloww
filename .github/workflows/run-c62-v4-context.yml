@@ -1,0 +1,19 @@
+name: Run C62 V4 Context
+on:
+  push:
+    branches:
+      - research/c62-v4-context-20261013
+    paths:
+      - '.github/workflows/run-c62-v4-context.yml'
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Recent window
+        run: |
+          curl -fsS --retry 2 --retry-delay 10 --max-time 900             "https://momentumfloww.onrender.com/api/research/c62-regime/backtest?window=recent"             | jq -c '{window,start,end,v4DailyUniverseCount,baseline:.variants.baseline,v4_ready_only:.variants.v4_ready_only,v4_cash_only:.variants.v4_cash_only}'
+      - name: Older window
+        run: |
+          curl -fsS --retry 2 --retry-delay 10 --max-time 900             "https://momentumfloww.onrender.com/api/research/c62-regime/backtest?window=older"             | jq -c '{window,start,end,v4DailyUniverseCount,baseline:.variants.baseline,v4_ready_only:.variants.v4_ready_only,v4_cash_only:.variants.v4_cash_only}'
