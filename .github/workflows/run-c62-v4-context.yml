@@ -1,4 +1,4 @@
-name: Run C62 V4 Context
+name: Run C62 V4 Context Optimized
 on:
   push:
     branches:
