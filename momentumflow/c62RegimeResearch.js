@@ -422,31 +422,29 @@ async function fetchWindow(start, end) {
   const collected = Object.fromEntries(symbols.map((symbol) => [symbol, []]));
 
   let cursor = new Date(warmup15m);
+  const chunkMs = 14 * DAY_MS;
   while (cursor < end) {
-    const nextMonth = new Date(Date.UTC(
-      cursor.getUTCFullYear(),
-      cursor.getUTCMonth() + 1,
-      1,
-      0, 0, 0, 0,
-    ));
-    const chunkEnd = nextMonth < end ? nextMonth : end;
+    const chunkEnd = new Date(Math.min(end.getTime(), cursor.getTime() + chunkMs));
+
+    // Four symbols x 14 days x 96 fifteen-minute bars/day is ~5,376 rows,
+    // safely below Alpaca's 10,000-row page limit. Fetch together so one
+    // symbol cannot consume pagination pages needed by the others.
+    const data = await cryptoBarsWithRetry(symbols, {
+      timeframe: '15Min',
+      start: cursor,
+      end: chunkEnd,
+      limit: 10000,
+      sort: 'asc',
+      maxPages: 2,
+    });
 
     for (const symbol of symbols) {
-      const data = await cryptoBarsWithRetry([symbol], {
-        timeframe: '15Min',
-        start: cursor,
-        end: chunkEnd,
-        limit: 10000,
-        sort: 'asc',
-        maxPages: 4,
-      });
       const rows = data[symbol] || data[symbol.replace('/', '')] || [];
       collected[symbol].push(...rows);
-      await sleep(250);
     }
 
     cursor = new Date(chunkEnd);
-    await sleep(500);
+    await sleep(350);
   }
 
   for (const symbol of symbols) {
