@@ -423,18 +423,20 @@ async function fetchWindow(start, end) {
     ));
     const chunkEnd = nextMonth < end ? nextMonth : end;
 
-    const data = await cryptoBarsWithRetry(symbols, {
-      timeframe: '15Min',
-      start: cursor,
-      end: chunkEnd,
-      limit: 10000,
-      sort: 'asc',
-      maxPages: 4,
-    });
-
     for (const symbol of symbols) {
+      // Alpaca's multi-symbol pagination can let BTC consume the shared page
+      // budget and silently starve later symbols. Fetch each symbol separately.
+      const data = await cryptoBarsWithRetry(symbol, {
+        timeframe: '15Min',
+        start: cursor,
+        end: chunkEnd,
+        limit: 10000,
+        sort: 'asc',
+        maxPages: 4,
+      });
       const rows = data[symbol] || data[symbol.replace('/', '')] || [];
       collected[symbol].push(...rows);
+      await sleep(250);
     }
 
     cursor = new Date(chunkEnd);
