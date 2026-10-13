@@ -37,7 +37,7 @@ def fetch_candles(asset, cache_dir):
     if path.exists():
         source = json.loads(path.read_text())
         if source.get("start") == DATA_START and source.get("end") == DATA_END:
-            return source["rows"], hashlib.sha256(path.read_bytes()).hexdigest(), True
+            return source["rows"], hashlib.sha256(path.read_bytes()).hexdigest(), True, len(source.get("filled_gaps", []))
     begin, end = ts(DATA_START), ts(DATA_END)
     found = {}
     for left in range(begin, end, 250 * ONE_HOUR):
@@ -70,12 +70,28 @@ def fetch_candles(asset, cache_dir):
     rows = [found[k] for k in sorted(found)]
     expected = (end - begin) // ONE_HOUR
     missing = expected - len(rows)
-    # Refuse to backtest incomplete datasets rather than silently shift signal timing.
-    if missing != 0 or any(rows[i][0] - rows[i-1][0] != ONE_HOUR for i in range(1, len(rows))):
+    # Coinbase sometimes omits an hour. For <=0.1% absent candles only, synthesize
+    # flat OHLC at the *previous* known close, zero volume. Never look ahead.
+    # Preserve a count and exact times; >0.1% missing data fails closed.
+    if missing < 0 or missing > max(1, math.floor(expected * 0.001)):
         raise ValueError(f"Missing {missing} hourly bars for {asset} (expected={expected}, got={len(rows)}).")
-    path.write_text(json.dumps({"start": DATA_START, "end": DATA_END, "asset": asset, "rows": rows},
+    if rows[0][0] != begin:
+        raise ValueError(f"Missing first candle, cannot causal-fill {asset}")
+    gaps = []
+    complete = []
+    previous = None
+    for hour in range(begin, end, ONE_HOUR):
+        current = found.get(hour)
+        if current is None:
+            if previous is None: raise ValueError("Missing initial candle")
+            gaps.append(hour)
+            current = [hour, previous[4], previous[4], previous[4], previous[4], 0.0]
+        complete.append(current)
+        previous = current
+    rows = complete
+    path.write_text(json.dumps({"start": DATA_START, "end": DATA_END, "asset": asset, "filled_gaps": gaps, "rows": rows},
                                separators=(",", ":")))
-    return rows, hashlib.sha256(path.read_bytes()).hexdigest(), False
+    return rows, hashlib.sha256(path.read_bytes()).hexdigest(), False, len(gaps)
 
 def ema(values, period):
     result = [None] * len(values)
@@ -188,12 +204,12 @@ def main():
     args=parser.parse_args()
     all_results={}
     for symbol in (args.symbol,) if args.symbol else ASSETS:
-        rows,digest,from_cache=fetch_candles(symbol,args.cache_dir)
+        rows,digest,from_cache,filled_gaps=fetch_candles(symbol,args.cache_dir)
         state=indicators(rows)
         windows={}
         for name,start,end in WINDOWS:
             windows[name]={v:backtest(rows,state,ts(start),ts(end),v) for v in VARIANTS}
-        all_results[symbol]={"candles":len(rows),"dataset_sha256":digest,
+        all_results[symbol]={"candles":len(rows),"synthetic_missing_hours":filled_gaps,"dataset_sha256":digest,
                              "cached":from_cache,"windows":windows}
     print(json.dumps({"research_only":True,"source":"Coinbase Exchange public hourly candles",
         "period":[DATA_START,DATA_END],"cost_per_side":SIDE_COST,
