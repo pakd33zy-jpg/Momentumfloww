@@ -780,6 +780,8 @@ router.get('/crypto-regime-breakout-backtest', async (req, res) => {
       generatedAt: new Date().toISOString(), researchOnly: true, timeframe: '4Hour',
       start: start.toISOString(), end: end.toISOString(), days, symbols,
       roundTripCostPct: 0.50,
+      btcDailyBars: btcDaily.length,
+      dataCounts: Object.fromEntries(Object.entries(barsBySymbol).map(([symbol, rows]) => [symbol, rows.length])),
       regimes: { mild: 'prior completed BTC daily close above SMA150 and 30d momentum above 0', strong: 'same with 30d momentum above 5%' },
       results,
     });
