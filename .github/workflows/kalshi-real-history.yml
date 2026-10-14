@@ -1,0 +1,35 @@
+name: Kalshi REAL history BTC15m snapshot
+on:
+  push:
+    branches:
+      - research/kalshi-15m-paper-20261014
+    paths:
+      - 'research/kalshiHistoric15m.mjs'
+      - 'research/kalshiHistoric15m.test.mjs'
+      - '.github/workflows/kalshi-real-history.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node --test research/kalshiHistoric15m.test.mjs
+      - name: Fetch public Kalshi history and calculate quote-based results
+        run: node research/kalshiHistoric15m.mjs
+      - name: Commit evidence snapshot (never credentials)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/results/KALSHI_BTC15M_REAL_HISTORY.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record real Kalshi archived market backtest snapshot [skip ci]"
+            git push
+          fi
