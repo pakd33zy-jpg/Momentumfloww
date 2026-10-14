@@ -1,0 +1,21 @@
+name: Kalshi Real Market Data Probe
+on:
+  push:
+    branches:
+      - research/kalshi-15m-paper-20261014
+    paths:
+      - 'momentumflow/kalshiMarketProbe.mjs'
+      - '.github/workflows/kalshi-market-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check public settled BTC markets and candles
+        run: node momentumflow/kalshiMarketProbe.mjs
