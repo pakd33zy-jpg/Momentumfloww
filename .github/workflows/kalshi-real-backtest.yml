@@ -12,6 +12,12 @@ permissions:
   contents: read
 jobs:
   historical:
+    strategy:
+      fail-fast: false
+      matrix:
+        range: [recent, prior]
+    env:
+      KALSHI_RANGE: ${{ matrix.range }}
     runs-on: ubuntu-latest
     timeout-minutes: 9
     steps:
