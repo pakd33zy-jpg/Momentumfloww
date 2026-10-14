@@ -3,6 +3,7 @@ import { store } from './store.js';
 import { persistConfig } from './persistentCredentialStore.js';
 import { createSession, createTrade, recomputeSessionStats } from './models.js';
 import { evaluateLiveGate } from './safetyEngine.js';
+import { safeCryptoSellQuantity } from './cryptoSellGuard.js';
 import {
   getAccount,
   getPositions,
@@ -450,6 +451,12 @@ async function enter(mode) {
     return false;
   }
 
+  // Alpaca does not permit short crypto positions. Fail closed before POST.
+  if (best.assetClass === 'crypto' && best.direction === 'SHORT') {
+    state.lastDecision = `${mode.toUpperCase()} ${best.symbol} skipped - Alpaca crypto cannot be shorted`;
+    return false;
+  }
+
   const account = await getAccount(mode);
   const equity = Number(account.equity || account.portfolio_value || account.cash || 0);
   const cash = Number(account.cash || 0);
@@ -586,20 +593,20 @@ async function closeTrade(mode, trade, price, reason) {
   if (!(qty > 0)) throw new Error(`No close quantity for ${trade.market}.`);
   const side = trade.direction === 'SHORT' ? 'buy' : 'sell';
 
-  // Alpaca crypto fills can leave a slightly smaller sellable balance than the
-  // quantity recorded at entry. Always clamp a crypto exit to what the broker
-  // actually holds so a tiny balance difference cannot permanently block the
-  // close and prevent the session from recording the completed trade.
+  // Alpaca crypto cannot be shorted. A persisted quantity may exceed broker
+  // holdings after a partial/manual exit or prior open sell order. Never sell
+  // unavailable crypto; keep the trade open for later reconciliation.
   if (trade.asset_class === 'crypto' && side === 'sell') {
-    const brokerPositions = await getPositions(mode);
-    const brokerPosition = brokerPositions.find(
-      (position) =>
-        normalizeSymbol(position.symbol) === normalizeSymbol(trade.market),
-    );
-    const availableQty = Math.abs(
-      Number(brokerPosition?.qty_available ?? brokerPosition?.qty ?? 0),
-    );
-    if (availableQty > 0 && availableQty < qty) qty = availableQty;
+    const guard = safeCryptoSellQuantity({
+      symbol: trade.market,
+      trackedQty: qty,
+      brokerPositions: await getPositions(mode),
+    });
+    if (!guard.allowed) {
+      state.lastDecision = `${mode.toUpperCase()} ${trade.market} crypto exit held: ${guard.reason}; broker reconciliation required`;
+      return null;
+    }
+    qty = guard.qty;
   }
   const order = await placeOrder({
     mode,
