@@ -42,7 +42,7 @@ test('fixed-fraction capital cap; wins and losses both appear in backtest', () =
   assert.ok(r.pnl < 0);
 });
 test('does not claim profitability when there are no eligible trades', () => {
-  const r = paperBacktest([{ ...common, yesAsk: 0.90, noAsk: 0.20 }]);
+  const r = paperBacktest([{ ...common, yesAsk: 0.75, noAsk: 0.35 }]);
   assert.equal(r.tradesExecuted, 0);
   assert.equal(r.winRatePct, null);
 });
