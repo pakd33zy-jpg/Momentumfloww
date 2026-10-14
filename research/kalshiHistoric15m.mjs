@@ -56,16 +56,16 @@ export function historicalCandleDecision(market, candles, settings = SETTINGS) {
   const entry = rows.find(c => c.end_period_ts === entryTs);
   if (signalRows.length < 3 || !entry) return { skip: 'missing-timestamped-candles' };
   const mid = c => {
-    const b = num(c?.yes_bid?.close_dollars);
-    const a = num(c?.yes_ask?.close_dollars);
+    const b = num(c?.yes_bid?.close_dollars ?? c?.yes_bid?.close);
+    const a = num(c?.yes_ask?.close_dollars ?? c?.yes_ask?.close);
     return positiveProb(b) && positiveProb(a) && b <= a ? (a+b)/2 : NaN;
   };
   const first = mid(signalRows[0]), last = mid(signalRows.at(-1));
   if (!Number.isFinite(first) || !Number.isFinite(last)) return { skip: 'missing-two-sided-signal-quotes' };
   const move = last - first;
   if (Math.abs(move) < settings.signalCents) return { skip: 'no-signal' };
-  const buyYes = num(entry?.yes_ask?.close_dollars);
-  const yesBid = num(entry?.yes_bid?.close_dollars);
+  const buyYes = num(entry?.yes_ask?.close_dollars ?? entry?.yes_ask?.close);
+  const yesBid = num(entry?.yes_bid?.close_dollars ?? entry?.yes_bid?.close);
   if (!positiveProb(buyYes) || !positiveProb(yesBid) || buyYes < yesBid) {
     return { skip: 'missing-executable-side-quote' };
   }
