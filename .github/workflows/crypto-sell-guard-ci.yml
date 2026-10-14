@@ -1,0 +1,25 @@
+name: Crypto sell-to-close safety checks
+on:
+  push:
+    branches:
+      - fix/alpaca-crypto-exit-qty-20261014
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: momentumflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Check bot syntax
+        run: node --check liveBotV35.js
+      - name: Run sell guard and lifecycle regressions
+        run: node --test cryptoSellGuard.test.mjs liveBotV51Lifecycle.test.js
