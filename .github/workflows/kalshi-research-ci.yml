@@ -1,0 +1,21 @@
+name: Kalshi read-only paper research tests
+on:
+  push:
+    branches:
+      - research/kalshi-15m-paper-20261014
+    paths:
+      - 'momentumflow/kalshiDemoReadOnly*'
+      - 'momentumflow/kalshiEdgePaper*'
+      - '.github/workflows/kalshi-research-ci.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node --test momentumflow/kalshiDemoReadOnly.test.mjs momentumflow/kalshiEdgePaper.test.mjs
