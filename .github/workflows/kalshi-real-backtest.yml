@@ -1,0 +1,25 @@
+name: Kalshi Real BTC15M Backtest
+on:
+  push:
+    branches:
+      - research/kalshi-15m-paper-20261014
+    paths:
+      - 'momentumflow/kalshi15mBacktestCore*'
+      - 'momentumflow/kalshi15mRealBacktest.mjs'
+      - '.github/workflows/kalshi-real-backtest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  historical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check pure backtest calculations
+        run: node --test momentumflow/kalshi15mBacktestCore.test.mjs
+      - name: Score real settled Kalshi BTC 15 minute markets
+        run: node momentumflow/kalshi15mRealBacktest.mjs
