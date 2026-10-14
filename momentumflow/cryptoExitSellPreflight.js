@@ -27,7 +27,7 @@ export function cryptoExitSellPreflight({ market, requestedQty, positions = [] }
   const sellQty = Math.min(requested, held, available);
   // Format to at most 9 decimals, always rounding DOWN so a sell never
   // exceeds the broker's available balance.
-  const truncated = Math.floor(sellQty * 1e9 + 1e-7) / 1e9;
+  const truncated = Math.floor(sellQty * 1e9) / 1e9;
   if (!(truncated > 0)) {
     return { allowed: false, reason: 'below-supported-crypto-precision' };
   }
