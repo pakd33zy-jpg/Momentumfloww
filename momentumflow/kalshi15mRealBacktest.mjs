@@ -3,6 +3,8 @@ import { scoreHistorical, KALSHI_BASELINE_CONFIG } from './kalshi15mBacktestCore
 const BASE='https://external-api.kalshi.com/trade-api/v2';
 const SERIES='KXBTC15M';
 const MARKET_LIMIT=160;
+const dataRange=process.env.KALSHI_RANGE==='prior'?'prior':'recent';
+const priorCutoff=Math.floor(Date.parse('2026-10-13T06:15:00Z')/1000)-1;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function get(path) {
  let error;
@@ -17,7 +19,7 @@ async function get(path) {
  }
  throw new Error('Kalshi data GET failed ('+String(error?.message||error)+')');
 }
-const marketsResponse=await get('/markets?status=settled&series_ticker='+SERIES+'&limit='+MARKET_LIMIT);
+const marketsResponse=await get('/markets?status=settled&series_ticker='+SERIES+'&limit='+MARKET_LIMIT+(dataRange==='prior'?'&max_settled_ts='+priorCutoff:''));
 const markets=(marketsResponse.markets||[])
  .filter(m=>m.result==='yes'||m.result==='no')
  .filter(m=>Number.isFinite(Date.parse(m.open_time))&&Number.isFinite(Date.parse(m.close_time)))
@@ -52,7 +54,7 @@ const clean=results.filter(Boolean);
 const midpoint=Math.floor(clean.length/2);
 const older=clean.slice(0,midpoint),newer=clean.slice(midpoint);
 console.log('MARKET_SOURCE',JSON.stringify({
- series:SERIES,marketsRequested:MARKET_LIMIT,marketCount:clean.length,
+ series:SERIES,dataRange,marketsRequested:MARKET_LIMIT,marketCount:clean.length,
  candleFetchFailures:errors,marketsWithAnyCandles:clean.filter(x=>x.candles.length).length,
  firstMarketClose:clean[0]?.market.close_time,lastMarketClose:clean.at(-1)?.market.close_time,
  risk:KALSHI_BASELINE_CONFIG,realData:true,noOrders:true,
@@ -67,5 +69,7 @@ for(const mode of ['momentum','reversal']){
  console.log('RESULT_JSON',JSON.stringify({mode,half:'older',...summary(olderR)}));
  console.log('RESULT_JSON',JSON.stringify({mode,half:'newer-untouched',...summary(newerR)}));
  console.log('RESULT_JSON',JSON.stringify({mode,half:'all',...summary(whole)}));
+ const stress=scoreHistorical(clean,mode,{...KALSHI_BASELINE_CONFIG,slippageDollars:0.03});
+ console.log('STRESS_JSON',JSON.stringify({mode,half:'all',slippageDollarsPerContract:0.03,...summary(stress)}));
 }
 console.log('CAUTION: These are retrospective, quote-based hypothetical fills, not actual orders or guaranteed executable prices.');
