@@ -24,12 +24,21 @@ jobs:
       - run: node --test research/kalshiHistoric15m.test.mjs
       - name: Fetch public Kalshi history and calculate quote-based results
         run: node research/kalshiHistoric15m.mjs
-      - name: Commit evidence snapshot (never credentials)
+      - name: Summarize real historical results without trading
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add research/results/KALSHI_BTC15M_REAL_HISTORY.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Record real Kalshi archived market backtest snapshot [skip ci]"
-            git push
-          fi
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const r=JSON.parse(fs.readFileSync("research/results/KALSHI_BTC15M_REAL_HISTORY.json","utf8"));
+            for (const [name,folds] of Object.entries(r.results || {})) {
+              for (const [fold,s] of Object.entries(folds)) {
+                const {tradeLog,...summary}=s;
+                console.log("REAL_HISTORY_METRICS",JSON.stringify({name,fold,...summary}));
+              }
+            }
+            console.log("REAL_HISTORY_DATA", JSON.stringify({status:r.status,marketsListed:r.marketsListed,marketsSampled:r.marketsSampled,eligibleSignals:r.eligibleSignals,firstMarket:r.firstMarket,lastMarket:r.lastMarket,skipped:r.skippedReasons,errors:r.apiErrors}));
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-btc15m-real-history
+          path: research/results/KALSHI_BTC15M_REAL_HISTORY.json
+          retention-days: 14
