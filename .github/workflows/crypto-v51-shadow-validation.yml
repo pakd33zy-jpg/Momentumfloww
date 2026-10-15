@@ -2,7 +2,7 @@ name: Crypto V51 Shadow Validation
 
 on:
   push:
-    branches: [main, fix/v51-validation-workflow-20261014]
+    branches: [main]
     paths:
       - 'momentumflow/cryptoForwardLearningV51.js'
       - 'momentumflow/cryptoForwardLearningV51.test.js'
