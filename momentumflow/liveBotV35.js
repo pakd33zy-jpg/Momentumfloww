@@ -758,7 +758,12 @@ async function manageOpenTrades(mode) {
 
 function strategyPerformance() {
   const groups = new Map();
-  for (const t of store.getAll('trades').filter((x) => x.result !== null && isManagedExecutionStrategy(x.strategy_name))) {
+  for (const t of store.getAll('trades').filter((x) =>
+    x.result !== null &&
+    x.result !== 'void' &&
+    x.voided !== true &&
+    isManagedExecutionStrategy(x.strategy_name)
+  )) {
     const key = t.strategy_name;
     if (!groups.has(key)) groups.set(key, { strategy: key, trades: 0, wins: 0, losses: 0, pnl: 0, grossWin: 0, grossLoss: 0 });
     const g = groups.get(key);
