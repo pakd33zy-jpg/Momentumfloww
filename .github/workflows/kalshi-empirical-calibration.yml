@@ -1,0 +1,33 @@
+name: Kalshi Archived Empirical Probability Validation
+on:
+  push:
+    branches:
+      - research/kalshi-empirical-edge-20261014
+    paths:
+      - 'momentumflow/kalshiEmpiricalCalibration.js'
+      - 'momentumflow/kalshiEmpiricalCalibration.test.mjs'
+      - 'momentumflow/kalshiEmpiricalRealRun.mjs'
+      - '.github/workflows/kalshi-empirical-calibration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  independent-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test time-split calibration and risk rules
+        run: node --test momentumflow/kalshi15mBacktestCore.test.mjs momentumflow/kalshiEmpiricalCalibration.test.mjs
+      - name: Evaluate real archived outcomes and historical prices
+        run: node momentumflow/kalshiEmpiricalRealRun.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kalshi-empirical-420-trade-evidence
+          path: research/results/KALSHI_EMPIRICAL_PROB_420.json
+          retention-days: 14
+          if-no-files-found: warn
