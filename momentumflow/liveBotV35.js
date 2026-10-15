@@ -68,9 +68,8 @@ const DEFAULTS = {
   equityDetailLimit: 80,
   maxOpenPositions: 8,
   maxEquityPositions: 8,
-  // Existing positions continue to receive exit management, but no replacement
-  // positions may open until the protective-exit study is validated.
-  pauseNewEntries: true,
+  // Paper-only crypto entries are enabled; live mode remains forcibly disabled at boot.
+  pauseNewEntries: false,
   stockFeed: 'iex',
   entryWaitMs: 15000,
   exitWaitMs: 15000,
@@ -211,20 +210,6 @@ function topActivity(snapshot) {
 }
 
 async function scanCrypto(mode, positions) {
-  // Freeze new entries from the MACD valley/cross crypto engine while the
-  // historical C60 momentum core is being recovered and fingerprint-verified.
-  // Existing PAPER positions are still managed by manageOpenTrades().
-  return {
-    candidates: [],
-    nearMisses: [{
-      symbol: 'CRYPTO',
-      assetClass: 'crypto',
-      reason: 'New MACD crypto entries paused for historical C60 recovery',
-      score: 0,
-    }],
-    detailed: 0,
-  };
-
   const sc = strategyCfg();
   if (mode !== 'paper') return { candidates: [], nearMisses: [{ symbol: 'CRYPTO', assetClass: 'crypto', reason: 'MACD crypto engine is paper-only', score: 0 }], detailed: 0 };
   const assets = state.universe.crypto || [];
