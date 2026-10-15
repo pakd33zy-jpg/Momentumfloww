@@ -1,0 +1,22 @@
+name: Kalshi Weather Public Data Feasibility
+on:
+  push:
+    branches:
+      - research/kalshi-weather-discovery-20261014
+    paths:
+      - 'research/kalshiWeatherMarketProbe.mjs'
+      - '.github/workflows/kalshi-weather-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  weather:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check research/kalshiWeatherMarketProbe.mjs
+      - run: node research/kalshiWeatherMarketProbe.mjs
