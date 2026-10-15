@@ -1,0 +1,35 @@
+name: Validate paper crypto unpause
+# Checks syntax and core strategy tests before deployment.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'momentumflow/liveBotV35.js'
+      - 'momentumflow/server.js'
+      - 'momentumflow/cryptoMacdPeakStrategy.js'
+      - '.github/workflows/validate-paper-crypto-unpause.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: momentumflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Syntax checks
+        run: |
+          node --check liveBotV35.js
+          node --check server.js
+          node --check cryptoMacdPeakStrategy.js
+      - name: Crypto strategy tests
+        run: node --test cryptoMacdPeakStrategy.test.js

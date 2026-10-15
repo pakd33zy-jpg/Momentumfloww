@@ -48,6 +48,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     ...bot,
     maxOpenPositions: 8,
     maxEquityPositions: 8,
+    pauseNewEntries: false,
     v51CryptoRuntimeMigrated: true,
     macdPeakCryptoRuntimeMigrated: true,
   });
@@ -58,6 +59,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     cryptoV35Enabled: false,
     cryptoV51Enabled: false,
     cryptoMacdPeakEnabled: true,
+    equityV35Enabled: false,
     equityV35Enabled: strategy.equityV35Enabled !== false,
     cryptoV51MaxConcurrentPositions: 8,
     cryptoMacdPeakMaxConcurrentPositions: 8,
@@ -71,7 +73,7 @@ function migrateActiveRuntimeConfigOnBoot() {
     });
   }
 
-  console.log('[boot] Legacy MACD crypto positions remain managed; new MACD entries are paused; C62 crypto runs shadow-only.');
+  console.log('[boot] Paper-only MACD crypto entries enabled; legacy equity entries disabled; C62 crypto remains shadow-only.');
 }
 
 const credentialPersistence = await initPersistentCredentials();
