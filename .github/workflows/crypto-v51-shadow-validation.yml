@@ -2,7 +2,7 @@ name: Crypto V51 Shadow Validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/v51-validation-workflow-20261014]
     paths:
       - 'momentumflow/cryptoForwardLearningV51.js'
       - 'momentumflow/cryptoForwardLearningV51.test.js'
@@ -25,10 +25,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: momentumflow/package-lock.json
-      - run: npm ci
+          node-version: 22
+      # The backend has no lockfile; npm ci and npm caching fail before tests start.
+      - run: npm install --no-audit --no-fund
       - run: node --test cryptoForwardLearningV51.test.js liveBotV51Lifecycle.test.js
       - name: Import smoke test
         run: node -e "Promise.all([import('./cryptoV51ShadowMonitor.js'),import('./cryptoV51ShadowRouter.js')]).then(()=>console.log('V51 imports OK'))"
