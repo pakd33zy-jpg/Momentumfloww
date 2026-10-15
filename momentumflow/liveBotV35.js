@@ -438,7 +438,7 @@ function equityBudget(account, best) {
 async function enter(mode) {
   syncOpenTradeIds();
   if (cfg().pauseNewEntries !== false) {
-    state.lastDecision = `${mode.toUpperCase()} new entries paused; managing existing positions only`;
+    state.lastDecision = `${mode.toUpperCase()} new entries paused by safety hold; ${state.openTradeIds.length} tracked position(s) to manage`;
     return false;
   }
   if (state.openTradeIds.length >= maxOpenPositions()) {
