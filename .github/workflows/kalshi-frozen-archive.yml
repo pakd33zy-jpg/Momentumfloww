@@ -1,0 +1,31 @@
+name: Kalshi Frozen Rules Archived Validation
+on:
+  push:
+    branches:
+      - research/kalshi-frozen-archive-validation-20261014
+    paths:
+      - 'momentumflow/kalshi15mArchivedFreezeRun.mjs'
+      - '.github/workflows/kalshi-frozen-archive.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  archive-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate unchanged scoring engine
+        run: node --test momentumflow/kalshi15mBacktestCore.test.mjs
+      - name: Use real archived Kalshi candles and final outcomes
+        run: node momentumflow/kalshi15mArchivedFreezeRun.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kalshi-frozen-archive-results
+          path: research/results/KALSHI_FROZEN_ARCHIVE_4C.json
+          retention-days: 14
+          if-no-files-found: warn
