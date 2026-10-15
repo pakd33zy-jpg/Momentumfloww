@@ -718,6 +718,35 @@ async function manageOne(mode, trade) {
 
 async function manageOpenTrades(mode) {
   syncOpenTradeIds();
+  const brokerPositions = await getPositions(mode);
+  const brokerSymbols = new Set(
+    (Array.isArray(brokerPositions) ? brokerPositions : [])
+      .filter((position) => Math.abs(Number(position.qty || 0)) > 0)
+      .map((position) => normalizeSymbol(position.symbol))
+  );
+
+  // Alpaca is the execution source of truth. Trades can disappear from the
+  // broker after a paper-account reset or a manual close; keeping those rows
+  // open makes the dashboard report phantom positions and repeatedly submit
+  // invalid exit orders. Void them instead of inventing a P&L result.
+  for (const id of [...state.openTradeIds]) {
+    const trade = store.getOne('trades', id);
+    if (!trade || brokerSymbols.has(normalizeSymbol(trade.market))) continue;
+    saveTradePatch(id, {
+      result: 'void',
+      pnl: 0,
+      gross_pnl: 0,
+      exit_price: trade.entry_price,
+      exit_qty: 0,
+      exit_order_id: null,
+      voided: true,
+      exit_reason: 'BROKER_POSITION_MISSING',
+      account_reset_reconciled: true,
+      closed_at: new Date().toISOString(),
+    });
+  }
+  syncOpenTradeIds();
+
   for (const id of [...state.openTradeIds]) {
     const trade = store.getOne('trades', id);
     if (!trade || trade.result !== null) continue;
