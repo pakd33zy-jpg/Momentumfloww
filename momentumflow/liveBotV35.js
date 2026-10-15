@@ -1,4 +1,5 @@
 import express from 'express';
+import { planBrokerExit } from './brokerExitInventoryGuard.js';
 import { store } from './store.js';
 import { persistConfig } from './persistentCredentialStore.js';
 import { createSession, createTrade, recomputeSessionStats } from './models.js';
@@ -589,25 +590,30 @@ async function enter(mode) {
 }
 
 async function closeTrade(mode, trade, price, reason) {
-  let qty = Math.abs(Number(trade.filled_qty ?? trade.qty ?? 0));
-  if (!(qty > 0)) throw new Error(`No close quantity for ${trade.market}.`);
-  const side = trade.direction === 'SHORT' ? 'buy' : 'sell';
+  const recordedQty = Math.abs(Number(trade.filled_qty ?? trade.qty ?? 0));
+  if (!(recordedQty > 0)) throw new Error(`No close quantity for ${trade.market}.`);
 
-  // Alpaca crypto cannot be shorted. A persisted quantity may exceed broker
-  // holdings after a partial/manual exit or prior open sell order. Never sell
-  // unavailable crypto; keep the trade open for later reconciliation.
-  if (trade.asset_class === 'crypto' && side === 'sell') {
-    const guard = safeCryptoSellQuantity({
-      symbol: trade.market,
-      trackedQty: qty,
-      brokerPositions: await getPositions(mode),
+  // Every sell or buy-to-cover must be backed by broker inventory.
+  // The old code would fall back to the full recorded crypto quantity when
+  // Alpaca said none was sellable, repeatedly sending an unintended short.
+  const brokerPositions = await getPositions(mode);
+  const plannedExit = planBrokerExit({
+    symbol: trade.market,
+    direction: trade.direction,
+    recordedQty,
+    positions: brokerPositions,
+  });
+  if (!plannedExit.allowed) {
+    saveTradePatch(trade.id, {
+      broker_reconciliation_required: true,
+      broker_reconciliation_reason: plannedExit.reason,
+      broker_reconciliation_checked_at: new Date().toISOString(),
     });
-    if (!guard.allowed) {
-      state.lastDecision = `${mode.toUpperCase()} ${trade.market} crypto exit held: ${guard.reason}; broker reconciliation required`;
-      return null;
-    }
-    qty = guard.qty;
+    state.lastDecision = `${mode.toUpperCase()} ${trade.market}: broker reconciliation needed (${plannedExit.reason}), exit order not submitted`;
+    return null;
   }
+  const qty = plannedExit.qty;
+  const side = plannedExit.side;
   const order = await placeOrder({
     mode,
     symbol: trade.market,
