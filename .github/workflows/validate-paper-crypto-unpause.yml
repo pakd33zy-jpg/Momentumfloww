@@ -1,4 +1,5 @@
 name: Validate paper crypto unpause
+# Checks syntax and core strategy tests before deployment.
 
 on:
   pull_request:
