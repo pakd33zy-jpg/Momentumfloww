@@ -86,6 +86,7 @@ if (credentialPersistence.ready) {
     loadPersistentConfig('liveBotConfig', {}),
     loadPersistentConfig('sessions', []),
     loadPersistentConfig('trades', []),
+    loadPersistentConfig('kalshiPaperState', {}),
     loadPersistentConfig('breakout5520ShadowState', {}),
     loadPersistentConfig('breakout5520Validation50ShadowState', {}),
     loadPersistentConfig('c62ShadowState', {}),
