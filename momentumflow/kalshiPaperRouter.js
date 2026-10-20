@@ -1,6 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { store } from './store.js';
+import { persistConfig, persistentCredentialStoreReady } from './persistentCredentialStore.js';
 
 const router = express.Router();
 const STATE_KEY = 'kalshiPaperState';
@@ -19,7 +20,14 @@ function state() {
     createdAt: new Date().toISOString(),
   });
 }
-function save(s) { store.setConfig(STATE_KEY, s); return s; }
+async function save(s) {
+  store.setConfig(STATE_KEY, s);
+  if (persistentCredentialStoreReady()) {
+    try { await persistConfig(STATE_KEY, s); }
+    catch (error) { console.error('[kalshi-paper] Persistent save failed:', error.message); }
+  }
+  return s;
+}
 function dollars(cents) { return Number(cents) / 100; }
 function feeEstimate(priceCents, count) {
   // Conservative estimate based on the commonly published 7% probability-based
@@ -147,12 +155,12 @@ router.post('/orders', async (req, res) => {
   s.positions.push(position);
   s.orders.push(order);
   s.updatedAt = now;
-  save(s);
+  await save(s);
   res.status(201).json({ mode: 'paper-only', order, position, cash: s.cash,
     note: 'Simulated fill at the user-specified price; not an exchange execution.' });
 });
 
-router.post('/positions/:id/settle', (req, res) => {
+router.post('/positions/:id/settle', async (req, res) => {
   const { result } = req.body || {};
   if (!['yes', 'no'].includes(result)) return res.status(400).json({ error: 'result must be yes or no' });
   const s = state();
@@ -168,7 +176,7 @@ router.post('/positions/:id/settle', (req, res) => {
   p.realizedPnl = pnl;
   p.settledAt = new Date().toISOString();
   s.updatedAt = p.settledAt;
-  save(s);
+  await save(s);
   res.json({ mode: 'paper-only', position: p, cash: s.cash, realizedPnl: s.realizedPnl });
 });
 
