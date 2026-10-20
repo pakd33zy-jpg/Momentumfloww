@@ -24,6 +24,7 @@ import cryptoV51ShadowRouter from './cryptoV51ShadowRouter.js';
 import c62ShadowRouter, { startC62Shadow } from './c62ShadowRouter.js';
 import cryptoCandidateResearchRouter from './cryptoCandidateResearch.js';
 import equityV71ShadowRouter, { startEquityV71Shadow } from './equityV71ShadowRouter.js';
+import kalshiPaperRouter from './kalshiPaperRouter.js';
 import { startFastScalpMonitor } from './fastScalpMonitor.js';
 import { startEquityFastScalpMonitor } from './equityFastScalpMonitor.js';
 import { startCryptoV51ShadowMonitor } from './cryptoV51ShadowMonitor.js';
@@ -85,6 +86,7 @@ if (credentialPersistence.ready) {
     loadPersistentConfig('liveBotConfig', {}),
     loadPersistentConfig('sessions', []),
     loadPersistentConfig('trades', []),
+    loadPersistentConfig('kalshiPaperState', {}),
     loadPersistentConfig('breakout5520ShadowState', {}),
     loadPersistentConfig('breakout5520Validation50ShadowState', {}),
     loadPersistentConfig('c62ShadowState', {}),
@@ -151,6 +153,7 @@ app.use('/api/crypto-v51-shadow', cryptoV51ShadowRouter);
 app.use('/api/research', cryptoCandidateResearchRouter);
 app.use('/api/c62-shadow', c62ShadowRouter);
 app.use('/api/equity-v71-shadow', equityV71ShadowRouter);
+app.use('/api/kalshi', kalshiPaperRouter);
 app.use((err, req, res, next) => { console.error('[error]', err); res.status(500).json({ error: 'Internal server error' }); });
 
 const PORT = process.env.PORT || 4000;

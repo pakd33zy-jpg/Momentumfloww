@@ -8,6 +8,7 @@ const TABS = [
   { to: '/chat', label: 'Chat', icon: '▷' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
   { to: '/funding', label: 'Funding', icon: '$' },
+  { to: '/kalshi', label: 'Kalshi', icon: 'K' },
 ];
 
 export default function AppLayout() {
