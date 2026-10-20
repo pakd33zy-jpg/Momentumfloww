@@ -9,6 +9,7 @@ import Settings from './pages/Settings.jsx';
 import V26 from './pages/V26.jsx';
 import SymbolDetail from './pages/SymbolDetail.jsx';
 import Funding from './pages/Funding.jsx';
+import Kalshi from './pages/Kalshi.jsx';
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/symbol/:symbol" element={<SymbolDetail />} />
           <Route path="/funding" element={<Funding />} />
+          <Route path="/kalshi" element={<Kalshi />} />
         </Route>
       </Routes>
     </>
