@@ -60,7 +60,6 @@ function migrateActiveRuntimeConfigOnBoot() {
     cryptoV51Enabled: false,
     cryptoMacdPeakEnabled: true,
     equityV35Enabled: false,
-    equityV35Enabled: strategy.equityV35Enabled !== false,
     cryptoV51MaxConcurrentPositions: 8,
     cryptoMacdPeakMaxConcurrentPositions: 8,
   });
