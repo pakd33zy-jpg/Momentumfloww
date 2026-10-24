@@ -47,7 +47,10 @@ export function getCredentials(mode) {
   // configured PAPER environment key pair as a temporary connection fallback.
   // Never use an old env pair while persistent storage is healthy: that prevents
   // silently switching accounts. Live mode remains gated separately at boot.
-  if (persistentCredentialStoreConfigured() && persistentCredentialStoreReady()) {
+  if (
+    persistentCredentialStoreConfigured() &&
+    (mode === 'live' || persistentCredentialStoreReady())
+  ) {
     return null;
   }
 
