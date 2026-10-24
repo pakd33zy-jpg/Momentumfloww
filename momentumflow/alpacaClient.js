@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { decrypt } from './crypto.js';
 import { store } from './store.js';
-import { persistentCredentialStoreConfigured } from './persistentCredentialStore.js';
+import { persistentCredentialStoreConfigured, persistentCredentialStoreReady } from './persistentCredentialStore.js';
 
 // ALPACA CLIENT v16
 
@@ -43,7 +43,11 @@ export function getCredentials(mode) {
   // legacy Render Alpaca environment pair. That pair is kept only as a
   // server-side encryption/persistence seed so a restart cannot silently switch
   // the bot to an older paper account.
-  if (persistentCredentialStoreConfigured()) {
+  // If the persistent database is suspended/unreachable, allow the explicitly
+  // configured PAPER environment key pair as a temporary connection fallback.
+  // Never use an old env pair while persistent storage is healthy: that prevents
+  // silently switching accounts. Live mode remains gated separately at boot.
+  if (persistentCredentialStoreConfigured() && persistentCredentialStoreReady()) {
     return null;
   }
 
