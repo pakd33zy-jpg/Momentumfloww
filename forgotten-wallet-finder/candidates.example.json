@@ -1,0 +1,18 @@
+{
+  "candidates": [
+    {
+      "chain": "bitcoin",
+      "address": "",
+      "sourceUrl": "https://example.org/recovery-case",
+      "evidence": "Replace with a publicly documented recovery case",
+      "evidenceDate": "2026-01-01"
+    },
+    {
+      "chain": "ethereum",
+      "address": "",
+      "sourceUrl": "https://example.org/recovery-case",
+      "evidence": "Replace with a publicly documented recovery case",
+      "evidenceDate": "2026-01-01"
+    }
+  ]
+}
