@@ -1,0 +1,23 @@
+name: Forgotten Wallet Finder
+on:
+  pull_request:
+    paths:
+      - "forgotten-wallet-finder/**"
+      - ".github/workflows/forgotten-wallet-finder.yml"
+  push:
+    branches: [main]
+    paths:
+      - "forgotten-wallet-finder/**"
+      - ".github/workflows/forgotten-wallet-finder.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: forgotten-wallet-finder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
