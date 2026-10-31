@@ -2,30 +2,32 @@
 
 A public-chain research tool for monitoring **documented, lawful recovery leads**. It does not crack keys, derive seed phrases, bypass access controls, or move funds.
 
-## Scope
-- Candidate-driven scanning: the initial MVP checks addresses supplied with a verifiable public source and recovery-evidence note. It does not crawl every address on a blockchain (that requires large indexed datasets and still cannot establish lost ownership).
-- Bitcoin: Blockstream public API for current balance and last confirmed/mempool activity.
-- EVM networks: Ethereum, Polygon, Base, Arbitrum, Optimism, Avalanche and BNB Smart Chain balance checks through user-supplied public JSON-RPC endpoints. Standard JSON-RPC does not provide complete address transaction history; an indexed explorer/data provider is needed before inactivity can be asserted.
+## What it currently does
+- Scans a supplied list of candidate addresses; it does **not** enumerate every address on either blockchain.
+- Bitcoin: Blockstream public API for current BTC balance and newest confirmed/unconfirmed transaction.
+- Ethereum: Blockscout indexed account and transaction APIs for ETH balance and newest transaction.
+- Enriches BTC/ETH balances with optional USD spot prices from CoinGecko; scans continue if price lookup is unavailable.
+- Filters by optional minimum estimated USD value and ranks results from highest to lowest estimated value.
 - Default inactivity threshold: 2 years.
 - Results are written to `scan-results.json`.
 
 ## Run
 ```sh
 cp candidates.example.json candidates.json
-# Add real, publicly documented recovery candidates and evidence URLs.
+# Add addresses with a verifiable public source and recovery-evidence note.
 npm test
 npm run scan
 ```
 
-Optional environment variables:
+Environment variables:
 - `MIN_INACTIVE_YEARS=2`
+- `MIN_VALUE_USD=0` (set a higher floor to focus on large balances)
 - `CANDIDATES_FILE=./candidates.json`
-- `ETHEREUM_RPC_URL`, `POLYGON_RPC_URL`, `BASE_RPC_URL`, `ARBITRUM_RPC_URL`, `OPTIMISM_RPC_URL`, `AVALANCHE_RPC_URL`, `BSC_RPC_URL`
 
-No RPC key is needed for the Bitcoin MVP. Public endpoints have rate limits and should not be hammered.
+No API keys are required for the Bitcoin or Ethereum public endpoints. Public services impose rate limits.
+
+## Discovery limitation
+A truly broad scan of all dormant wallets requires a full indexed blockchain dataset or a commercial/public analytics index. Public RPC endpoints cannot list all addresses. This MVP therefore supports candidate discovery/import as a separate stage and verifies the supplied candidates; it must not be described as a global scanner.
 
 ## Recovery-evidence policy
-A lead is included only when its source URL and evidence description are populated. A dormant address or large balance alone is not a recovery opportunity. Human review must establish the claimant's authority, ownership, applicable law, and documented recovery route before any recovery work. Do not contact presumed owners aggressively or attempt access to wallets you do not own or have written authority to recover.
-
-## Limitations
-This MVP monitors a supplied candidate list; it is not a global lost-wallet detector. EVM balances are not enough to determine last activity. Add a chain-specific indexed-history adapter (and tests) before treating an EVM address as dormant. Token balances and UTXO-level ownership analysis are not included in this first cut.
+A lead is included only when its source URL and evidence description are populated. A dormant address or large balance alone is not a recovery opportunity. Human review must establish the claimant's authority, ownership, applicable law, and documented recovery route before any recovery work. Do not attempt access to wallets you do not own or have written authority to recover.
