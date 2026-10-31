@@ -8,13 +8,16 @@ async function getJson(url) {
 }
 
 async function scanBitcoin(address) {
-  const [stats, tip] = await Promise.all([
+  const [stats, txs, tip] = await Promise.all([
     getJson(`https://blockstream.info/api/address/${encodeURIComponent(address)}`),
+    getJson(`https://blockstream.info/api/address/${encodeURIComponent(address)}/txs`),
     getJson("https://blockstream.info/api/blocks/tip/height")
   ]);
   const chainStats = stats.chain_stats || {};
   const funded = (chainStats.funded_txo_sum || 0) - (chainStats.spent_txo_sum || 0);
-  const lastSeen = Math.max(chainStats.last_seen_tx_time || 0, stats.mempool_stats?.last_seen_tx_time || 0);
+  // Blockstream returns newest transactions first. Unconfirmed activity is treated as current.
+  const newest = Array.isArray(txs) ? txs[0] : null;
+  const lastSeen = newest ? (newest.status?.confirmed ? newest.status.block_time : Math.floor(Date.now() / 1000)) : 0;
   return { balance: funded / 1e8, unit: "BTC", lastActivity: lastSeen ? new Date(lastSeen * 1000).toISOString() : null, confirmationsTip: tip };
 }
 
