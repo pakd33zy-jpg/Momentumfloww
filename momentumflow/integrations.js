@@ -37,13 +37,14 @@ router.get('/', (_req, res) => {
 router.put('/:provider', async (req, res) => {
   const { provider } = req.params;
   if (!PROVIDERS.includes(provider)) return res.status(404).json({ error: 'Unknown integration provider.' });
-  const body = req.body || {}; const next = {};
-  for (const field of SECRET_FIELDS[provider]) {
-    const value = typeof body[field] === 'string' ? body[field].trim() : '';
-    if (value) next[field] = { encrypted: encrypt(value), masked: maskSecret(value) };
-  }
-  if (!Object.keys(next).length && !String(body.label || '').trim()) return res.status(400).json({ error: 'Enter at least one credential field before saving.' });
+  const body = req.body || {};
   try {
+    const next = {};
+    for (const field of SECRET_FIELDS[provider]) {
+      const value = typeof body[field] === 'string' ? body[field].trim() : '';
+      if (value) next[field] = { encrypted: encrypt(value), masked: maskSecret(value) };
+    }
+    if (!Object.keys(next).length && !String(body.label || '').trim()) return res.status(400).json({ error: 'Enter at least one credential field before saving.' });
     const credentials = store.getConfig('credentials', {});
     credentials.integrations = credentials.integrations || {};
     const previous = credentials.integrations[provider] || {};
