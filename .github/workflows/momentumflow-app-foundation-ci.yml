@@ -1,0 +1,56 @@
+name: MomentumFlow app foundation CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'momentumflow/integrations.js'
+      - 'momentumflow/persistentCredentialStore.js'
+      - 'momentumflow/credentials.js'
+      - 'momentumflow/server.js'
+      - 'momentumflow/frontend/**'
+      - 'momentumflow/package.json'
+      - 'momentumflow/package-lock.json'
+      - '.github/workflows/momentumflow-app-foundation-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: momentumflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: momentumflow/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Syntax checks
+        run: |
+          node --check integrations.js
+          node --check persistentCredentialStore.js
+          node --check credentials.js
+          node --check server.js
+      - name: Backend tests
+        run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: momentumflow/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: momentumflow/frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Production build
+        run: npm run build
