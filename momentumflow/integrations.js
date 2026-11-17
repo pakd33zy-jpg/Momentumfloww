@@ -14,7 +14,7 @@ const SECRET_FIELDS = {
 };
 router.use((req, res, next) => {
   const expected = process.env.INTEGRATION_SETTINGS_TOKEN;
-  const supplied = String(req.get('authorization') || '').replace(/^Bearer\\s+/i, '');
+  const supplied = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');
   if (!expected) return res.status(503).json({ error: 'Integration settings are locked until INTEGRATION_SETTINGS_TOKEN is configured on Render.' });
   const a = Buffer.from(supplied); const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Integration settings access token is missing or invalid.' });
