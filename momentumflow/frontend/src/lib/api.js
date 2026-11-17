@@ -151,10 +151,6 @@ export const api = {
       method: 'DELETE',
     }),
 
-  getIntegrations: () => request('/integrations'),
-  saveIntegration: (provider, credentials) => request(`/integrations/${provider}`, { method: 'PUT', body: JSON.stringify(credentials) }),
-  deleteIntegration: (provider) => request(`/integrations/${provider}`, { method: 'DELETE' }),
-
   getIntegrations: (token) => request('/integrations', { headers: { Authorization: `Bearer ${token}` } }),
   saveIntegration: (provider, credentials, token) => request(`/integrations/${provider}`, { method: 'PUT', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(credentials) }),
   deleteIntegration: (provider, token) => request(`/integrations/${provider}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }),
