@@ -2,12 +2,13 @@ const BASE = '/api';
 const CONFIG_DRAFT_KEY = 'momentumflow_trading_config_draft';
 
 async function request(path, options = {}) {
+  const { headers: optionHeaders = {}, ...requestOptions } = options;
   const res = await fetch(`${BASE}${path}`, {
+    ...requestOptions,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...optionHeaders,
     },
-    ...options,
   });
 
   const data = await res.json().catch(() => ({}));
