@@ -1,64 +1,26 @@
-import crypto from 'crypto';
 import pg from 'pg';
 import { store } from './store.js';
 
 const { Pool } = pg;
-
-// The database URL is encrypted before being committed. The decryption key is
-// derived from a server-side seed already present in Render; plaintext
-// connection credentials never live in the repository.
-const ENCRYPTED_DATABASE_URL =
-  'N2MXZhowbXjTKJwP.3+2PjUFTT4W++qEPZDpXpA==.98hoC9hdLOLxBnd1m49qOanTlc4TjLpcc6Sd9gUOUhohGq3m+bWp3kZdvXwUd567JCKIe8rx/GyMXkIRdePDdMNzWA6UmMnrl+cOK3SfEziOGhBwnhwxp5wO6UNvquzjZug=';
-
 let pool = null;
 let initialized = false;
 let loadedSavedCredentials = false;
 let writeTested = false;
 
-function persistenceSeed() {
-  const seed =
-    process.env.CREDENTIAL_PERSISTENCE_SEED ||
-    process.env.ALPACA_PAPER_SECRET_KEY ||
-    process.env.ALPACA_SECRET_KEY ||
-    process.env.ALPACA_LIVE_SECRET_KEY;
-
-  if (!seed) {
-    throw new Error('No server-side persistence seed is configured.');
-  }
-  return String(seed);
-}
-
-function decryptDatabaseUrl() {
-  const key = crypto
-    .createHash('sha256')
-    .update(`momentumflow-persistence-db:v1:${persistenceSeed()}`, 'utf8')
-    .digest();
-
-  const [ivB64, tagB64, ciphertextB64] = ENCRYPTED_DATABASE_URL.split('.');
-  if (!ivB64 || !tagB64 || !ciphertextB64) {
-    throw new Error('Malformed encrypted database URL.');
-  }
-
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    key,
-    Buffer.from(ivB64, 'base64')
-  );
-  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
-  const plain = Buffer.concat([
-    decipher.update(Buffer.from(ciphertextB64, 'base64')),
-    decipher.final(),
-  ]);
-  return plain.toString('utf8');
-}
-
+// Use Render's DATABASE_URL environment variable. Never commit a database URL,
+// encrypted or otherwise, to source control. Existing database rows are left intact.
 function getPool() {
   if (!pool) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('DATABASE_URL is not configured on the Render service.');
+    }
     pool = new Pool({
-      connectionString: decryptDatabaseUrl(),
+      connectionString,
       max: 2,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
+      ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
     });
   }
   return pool;
@@ -74,9 +36,8 @@ async function ensureTable() {
   `);
 }
 
-export async function initPersistentCredentials({ retries = 20, delayMs = 2500 } = {}) {
+export async function initPersistentCredentials({ retries = 3, delayMs = 1500 } = {}) {
   let lastError = null;
-
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
       await ensureTable();
@@ -106,22 +67,18 @@ export async function initPersistentCredentials({ retries = 20, delayMs = 2500 }
         store.setConfig('credentials', saved);
         loadedSavedCredentials = true;
       } else {
+        // Do not overwrite or delete any existing database records.
         store.setConfig('credentials', {});
         loadedSavedCredentials = false;
       }
       initialized = true;
-      console.log(
-        `[credentials] Persistent credential store ready; saved credentials loaded=${loadedSavedCredentials}`
-      );
+      console.log(`[credentials] Persistent store ready; saved credentials loaded=${loadedSavedCredentials}`);
       return { ready: true, loaded: loadedSavedCredentials };
     } catch (error) {
       lastError = error;
-      if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
+      if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
-
   initialized = false;
   loadedSavedCredentials = false;
   writeTested = false;
@@ -129,33 +86,16 @@ export async function initPersistentCredentials({ retries = 20, delayMs = 2500 }
   return { ready: false, loaded: false, error: lastError?.message || 'Unknown persistence error' };
 }
 
-export function persistentCredentialStoreReady() {
-  return initialized;
-}
-
-export function persistentCredentialStoreConfigured() {
-  return Boolean(
-    process.env.CREDENTIAL_PERSISTENCE_SEED ||
-    process.env.ALPACA_PAPER_SECRET_KEY ||
-    process.env.ALPACA_SECRET_KEY ||
-    process.env.ALPACA_LIVE_SECRET_KEY
-  );
-}
-
-export function persistentCredentialWriteTested() {
-  return initialized && writeTested;
-}
-
-export function hasPersistedCredentials() {
-  return initialized && loadedSavedCredentials;
-}
+export function persistentCredentialStoreReady() { return initialized; }
+export function persistentCredentialStoreConfigured() { return Boolean(process.env.DATABASE_URL); }
+export function persistentCredentialWriteTested() { return initialized && writeTested; }
+export function hasPersistedCredentials() { return initialized && loadedSavedCredentials; }
 
 export async function loadPersistentConfig(configKey, fallback = {}) {
   if (!initialized) {
-    const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
+    const result = await initPersistentCredentials({ retries: 1, delayMs: 500 });
     if (!result.ready) return { found: false, value: fallback };
   }
-
   const result = await getPool().query(
     'SELECT config_value FROM momentumflow_secure_config WHERE config_key = $1',
     [String(configKey)]
@@ -168,10 +108,9 @@ export async function loadPersistentConfig(configKey, fallback = {}) {
 
 export async function persistConfig(configKey, value) {
   if (!initialized) {
-    const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
-    if (!result.ready) throw new Error('Persistent config store is unavailable.');
+    const result = await initPersistentCredentials({ retries: 1, delayMs: 500 });
+    if (!result.ready) throw new Error('Persistent config store is unavailable. Configure DATABASE_URL on Render.');
   }
-
   await getPool().query(
     `INSERT INTO momentumflow_secure_config (config_key, config_value, updated_at)
      VALUES ($1, $2::jsonb, NOW())
@@ -185,24 +124,21 @@ export async function persistConfig(configKey, value) {
 
 export async function persistCredentialsConfig(credentials) {
   if (!initialized) {
-    const result = await initPersistentCredentials({ retries: 3, delayMs: 1000 });
-    if (!result.ready) throw new Error('Persistent credential store is unavailable.');
+    const result = await initPersistentCredentials({ retries: 1, delayMs: 500 });
+    if (!result.ready) throw new Error('Persistent credential store is unavailable. Configure DATABASE_URL on Render.');
   }
-
   await getPool().query(
-    `
-      INSERT INTO momentumflow_secure_config (config_key, config_value, updated_at)
-      VALUES ($1, $2::jsonb, NOW())
-      ON CONFLICT (config_key)
-      DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = NOW()
-    `,
+    `INSERT INTO momentumflow_secure_config (config_key, config_value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (config_key)
+     DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = NOW()`,
     ['credentials', JSON.stringify(credentials || {})]
   );
-
   store.setConfig('credentials', credentials || {});
   loadedSavedCredentials = Boolean(
     credentials?.paper?.keyIdEnc ||
-    credentials?.live?.keyIdEnc
+    credentials?.live?.keyIdEnc ||
+    Object.values(credentials?.integrations || {}).some((entry) => entry && Object.keys(entry).length)
   );
   return true;
 }
