@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { encrypt, maskSecret } from './crypto.js';
 import { store } from './store.js';
 import { persistCredentialsConfig } from './persistentCredentialStore.js';
@@ -9,9 +10,14 @@ const SECRET_FIELDS = {
   crypto: ['apiKey', 'apiSecret', 'passphrase'],
   forex: ['accountId', 'apiKey', 'apiSecret', 'password'],
   ninjatrader: ['username', 'password', 'apiKey', 'apiSecret'],
-  polymarket: ['apiKey', 'apiSecret', 'passphrase', 'walletPrivateKey'],
+  polymarket: ['apiKey', 'apiSecret', 'passphrase'],
 };
 router.use((req, res, next) => {
+  const expected = process.env.INTEGRATION_SETTINGS_TOKEN;
+  const supplied = String(req.get('authorization') || '').replace(/^Bearer\\s+/i, '');
+  if (!expected) return res.status(503).json({ error: 'Integration settings are locked until INTEGRATION_SETTINGS_TOKEN is configured on Render.' });
+  const a = Buffer.from(supplied); const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Integration settings access token is missing or invalid.' });
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache'); res.set('Expires', '0'); next();
 });
