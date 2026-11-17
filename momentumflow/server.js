@@ -3,6 +3,7 @@ import express from 'express';
 import { verifyAlphaInsider } from './alphainsiderVerify.js';
 import cors from 'cors';
 import credentialsRouter from './credentials.js';
+import integrationsRouter from './integrations.js';
 import sessionsRouter from './sessions.js';
 import liveGateRouter from './liveGate.js';
 import marketRouter from './market.js';
@@ -129,6 +130,7 @@ if (credentialPersistence.ready && credentialPersistence.loaded) {
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 app.use('/api/credentials', credentialsRouter);
+app.use('/api/integrations', integrationsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api/live-gate', liveGateRouter);
 app.use('/api/market', marketRouter);
