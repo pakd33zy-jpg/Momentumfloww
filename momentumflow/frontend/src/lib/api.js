@@ -150,6 +150,10 @@ export const api = {
       method: 'DELETE',
     }),
 
+  getIntegrations: () => request('/integrations'),
+  saveIntegration: (provider, credentials) => request(`/integrations/${provider}`, { method: 'PUT', body: JSON.stringify(credentials) }),
+  deleteIntegration: (provider) => request(`/integrations/${provider}`, { method: 'DELETE' }),
+
   // Market data
   getMarketGrid: () =>
     request('/market/grid'),
