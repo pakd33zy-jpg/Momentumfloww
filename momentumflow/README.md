@@ -74,3 +74,19 @@ The old one-order endpoint `POST /api/sessions/live/trade` remains available beh
 ## Deployment note
 
 For Render/Railway/Fly, point the service root at **`momentumflow`**, run `npm install`, and start with `npm start`. Set a persistent `DATA_DIR` if you want sessions/credentials to survive redeployments. Set `CORS_ORIGIN` to the deployed frontend origin.
+
+
+## Multi-provider credential foundation (draft)
+
+The `/connections` screen adds encrypted credential storage fields for crypto exchanges, forex/gold brokers, NinjaTrader, and Polymarket. This is a credential vault/settings foundation only: it does not yet connect those providers, validate credentials, or place orders.
+
+### Required Render environment
+
+- `DATABASE_URL`: the PostgreSQL connection string supplied by the Render database. The backend now reads this server-side variable directly; database URLs must not be committed to Git.
+- `INTEGRATION_SETTINGS_TOKEN`: a long random access token required to open or modify the new multi-provider credential settings API. Enter the same token in the Connections screen. It is not a provider API key.
+
+Generate the settings token locally with a password manager or a cryptographically secure random generator. Do not paste it into ChatGPT or commit it. If either variable is missing, saving is blocked rather than falling back to ephemeral storage.
+
+Provider secrets are encrypted by the existing server-side credential encryption module and only masked status is returned to the browser. Never enter seed phrases or wallet private keys. For crypto, use trade-only API permissions and disable withdrawals. Polymarket transfer/withdrawal code is not part of this feature.
+
+**Deployment is intentionally gated:** verify the Render database environment, configure the two variables, add full app authentication/access control for all existing trading and Alpaca credential endpoints, and run the project tests before merging or deploying. The existing app currently has other API routes that do not share this new settings-token guard.
