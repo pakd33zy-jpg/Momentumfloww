@@ -10,10 +10,10 @@ export class PaperAdapterRegistry {
   constructor() { this.adapters = new Map(); }
   register(engineId, adapter) {
     if (!/^(crypto|forex|ninjatrader|polymarket)$/.test(engineId)) throw new Error('Unknown engine identifier.');
+    if (adapter?.mode !== 'paper') throw new Error('Only paper-mode adapters may be registered.');
     for (const method of REQUIRED_METHODS) {
       if (typeof adapter?.[method] !== 'function') throw new Error(`Adapter ${engineId} is missing ${method}().`);
     }
-    if (adapter.mode !== 'paper') throw new Error('Only paper-mode adapters may be registered.');
     this.adapters.set(engineId, adapter);
     return this.status(engineId);
   }
