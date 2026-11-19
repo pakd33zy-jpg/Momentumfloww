@@ -9,6 +9,7 @@ import Settings from './pages/Settings.jsx';
 import V26 from './pages/V26.jsx';
 import SymbolDetail from './pages/SymbolDetail.jsx';
 import Funding from './pages/Funding.jsx';
+import IntegrationCredentials from './pages/IntegrationCredentials.jsx';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/sessions" element={<Sessions />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/connections" element={<IntegrationCredentials />} />
           <Route path="/symbol/:symbol" element={<SymbolDetail />} />
           <Route path="/funding" element={<Funding />} />
         </Route>
